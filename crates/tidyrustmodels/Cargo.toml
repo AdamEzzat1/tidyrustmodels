@@ -16,3 +16,7 @@ tidyrustmodels-resample = { workspace = true }
 tidyrustmodels-metrics = { workspace = true }
 tidyrustmodels-workflows = { workspace = true }
 tidyrustmodels-tune = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+approx = { workspace = true }

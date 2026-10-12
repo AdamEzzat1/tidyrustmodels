@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "notes": "Single source of truth for the differential suite. R (reference/tidymodels-r/run_reference.R), Python (reference/fixtures/generate_splits.py) and Rust (crates/tidyrustmodels/tests/differential.rs) all read this file. Step vocabulary: impute_median_numeric, impute_mean_numeric, normalize_numeric, dummy_nominal. Splits: initial = 75/25 (stratified by outcome for classification), vfold5 = 5-fold (stratified by outcome for classification).",
+  "tasks": [
+    {
+      "id": "synth_reg",
+      "dataset": "synthetic_reg_small",
+      "type": "regression",
+      "outcome": "y",
+      "predictors": ["x1", "x2", "x3", "g"],
+      "steps": ["impute_median_numeric", "normalize_numeric", "dummy_nominal"],
+      "metrics": ["rmse", "rsq", "mae", "rsq_trad"]
+    },
+    {
+      "id": "synth_clf",
+      "dataset": "synthetic_clf_small",
+      "type": "classification",
+      "outcome": "y",
+      "predictors": ["x1", "x2", "g"],
+      "steps": ["normalize_numeric", "dummy_nominal"],
+      "metrics": ["accuracy", "mn_log_loss", "precision", "recall"]
+    },
+    {
+      "id": "iris_clf",
+      "dataset": "iris",
+      "type": "classification",
+      "outcome": "is_versicolor",
+      "predictors": ["Sepal.Length", "Sepal.Width", "Petal.Length", "Petal.Width"],
+      "steps": ["normalize_numeric"],
+      "metrics": ["accuracy", "mn_log_loss", "precision", "recall"]
+    },
+    {
+      "id": "penguins_reg",
+      "dataset": "penguins",
+      "type": "regression",
+      "outcome": "body_mass_g",
+      "predictors": ["species", "island", "bill_length_mm", "bill_depth_mm", "flipper_length_mm"],
+      "steps": ["impute_median_numeric", "normalize_numeric", "dummy_nominal"],
+      "metrics": ["rmse", "rsq", "mae"]
+    },
+    {
+      "id": "penguins_clf",
+      "dataset": "penguins_sex",
+      "type": "classification",
+      "outcome": "sex",
+      "predictors": ["species", "bill_length_mm", "bill_depth_mm", "flipper_length_mm", "body_mass_g"],
+      "steps": ["impute_median_numeric", "normalize_numeric", "dummy_nominal"],
+      "metrics": ["accuracy", "mn_log_loss", "precision", "recall"]
+    },
+    {
+      "id": "ames_reg",
+      "dataset": "ames",
+      "type": "regression",
+      "outcome": "Sale_Price",
+      "predictors": ["Gr_Liv_Area", "Year_Built", "Total_Bsmt_SF", "Bldg_Type", "Neighborhood"],
+      "steps": ["normalize_numeric", "dummy_nominal"],
+      "metrics": ["rmse", "rsq", "mae"]
+    }
+  ]
+}

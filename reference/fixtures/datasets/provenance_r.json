@@ -1,0 +1,23 @@
+{
+  "exported_on": "2026-10-12",
+  "r_version": "R version 4.4.0 (2024-04-24 ucrt)",
+  "modeldata_version": "1.5.1",
+  "datasets": {
+    "iris": {
+      "source": "R datasets::iris (Fisher/Anderson), public domain",
+      "rows": 150
+    },
+    "penguins": {
+      "source": "modeldata::penguins (Palmer penguins, CC0), rows with non-missing body_mass_g",
+      "rows": 342
+    },
+    "penguins_sex": {
+      "source": "modeldata::penguins (Palmer penguins, CC0), rows with non-missing sex",
+      "rows": 333
+    },
+    "ames": {
+      "source": "modeldata::ames (De Cock 2011, Ames Housing), 5 predictors + Sale_Price",
+      "rows": 2930
+    }
+  }
+}

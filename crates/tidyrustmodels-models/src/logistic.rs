@@ -1,6 +1,7 @@
 //! `logistic_reg`: binary logistic regression by maximum likelihood, optionally with an
 //! L2 penalty on the slopes.
 
+use crate::alias::{drop_aliased, expand};
 use crate::backends::{self, Engine};
 use crate::diag::{logistic_gradient_norm, probabilities_saturated};
 use crate::fitted::FittedLogistic;
@@ -155,7 +156,10 @@ impl ModelSpec for LogisticRegSpec {
             max_iterations: self.max_iterations,
             gradient_tolerance: self.gradient_tolerance,
         };
-        let mut out = backends::fit_logistic(self.engine, x, codes, opts)?;
+        let (xr, keep, aliased) = drop_aliased(x, self.intercept)?;
+        let mut out = backends::fit_logistic(self.engine, &xr, codes, opts)?;
+        out.coefs = expand(&out.coefs, &keep, x.ncols());
+        out.diagnostics.aliased = aliased;
         let gnorm = logistic_gradient_norm(x, codes, out.intercept, &out.coefs, self.penalty);
         out.diagnostics.final_gradient_norm = Some(gnorm);
         // Scale-aware convergence verdict: gradient entries are sums over n rows.

@@ -1,0 +1,42 @@
+{
+  "versions": {
+    "r": "R version 4.4.0 (2024-04-24 ucrt)",
+    "platform": "x86_64-w64-mingw32",
+    "blas": "",
+    "lapack": "",
+    "packages": {
+      "tidymodels": "1.5.0",
+      "parsnip": "1.5.0",
+      "recipes": "1.3.2",
+      "rsample": "1.3.2",
+      "yardstick": "1.4.0",
+      "tune": "2.1.0",
+      "workflows": "1.3.0",
+      "dials": "1.4.3"
+    },
+    "generated_on": "2026-10-12 09:19:48"
+  },
+  "regression": {
+    "truth": [1, 2.5, 3, 4.25, 5, 6.75],
+    "estimate": [1.2, 2, 3.5, 4, 5.5, 6],
+    "rmse": 0.485626742811116,
+    "mae": 0.45,
+    "rsq": 0.932865168539325,
+    "rsq_trad": 0.930975609756097
+  },
+  "classification": {
+    "levels": ["a", "b"],
+    "truth": ["a", "a", "b", "b", "a", "b"],
+    "estimate": ["a", "b", "b", "b", "a", "a"],
+    "prob_event": [0.9, 0.4, 0.2, 0.1, 0.6, 0.55],
+    "accuracy": 0.666666666666667,
+    "precision": 0.666666666666667,
+    "recall": 0.666666666666667,
+    "mn_log_loss": 0.443248105747963
+  },
+  "undefined": {
+    "rsq_constant_truth": null,
+    "precision_no_predicted_events": null,
+    "log_loss_clamped": 18.3684002848386
+  }
+}

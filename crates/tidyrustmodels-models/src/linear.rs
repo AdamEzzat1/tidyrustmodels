@@ -1,5 +1,6 @@
 //! `linear_reg`: ordinary least squares.
 
+use crate::alias::{drop_aliased, expand};
 use crate::backends::{self, Engine};
 use crate::fitted::FittedLinear;
 use serde::{Deserialize, Serialize};
@@ -66,10 +67,12 @@ impl ModelSpec for LinearRegSpec {
             .as_numeric()
             .ok_or_else(|| Error::Unsupported("linear_reg requires a numeric outcome".into()))?;
         validate_shapes(x, y.len(), self.intercept)?;
-        let out = backends::fit_linear(self.engine, x, y, self.intercept)?;
+        let (xr, keep, aliased) = drop_aliased(x, self.intercept)?;
+        let mut out = backends::fit_linear(self.engine, &xr, y, self.intercept)?;
+        out.diagnostics.aliased = aliased;
         Ok(Box::new(FittedLinear::new(
             out.intercept,
-            out.coefs,
+            expand(&out.coefs, &keep, x.ncols()),
             x.names().to_vec(),
             self.backend(),
             out.diagnostics,

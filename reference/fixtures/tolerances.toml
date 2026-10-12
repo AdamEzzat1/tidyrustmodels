@@ -1,0 +1,48 @@
+# Numerical tolerances for the differential suite, per (level, quantity, task).
+# Every entry carries a justification. Loosening a value requires editing this file in a
+# reviewed change; tests fail rather than relax tolerances silently.
+#
+# `rel` = relative tolerance |a - b| <= rel * max(|a|, |b|); `abs` = absolute tolerance.
+# A comparison passes if EITHER bound holds. Discrete outputs are compared exactly.
+
+[defaults]
+# Level 1: fitted preprocessing statistics and baked values. Both systems compute the
+# same closed-form means/sds/medians in f64; differences come from summation order and
+# jsonlite's 15-significant-digit output.
+prep_stats_rel = 1e-12
+prep_stats_abs = 1e-12
+baked_rel = 1e-11
+baked_abs = 1e-11
+
+# Level 2: metric implementations on identical inputs (closed forms).
+metrics_fixed_rel = 1e-12
+metrics_fixed_abs = 1e-12
+
+# Level 3: OLS coefficients. R uses LINPACK/LAPACK QR (dqrls); linfa uses an SVD-based
+# least squares; smartcore SVD. Agreement is bounded by cond(X'X) * eps. Per-task
+# overrides below cite the measured condition number from the fixture (`xtx_condition`).
+ols_coef_rel = 1e-8
+ols_pred_rel = 1e-8
+ols_pred_abs = 1e-8
+
+# Level 3: logistic coefficients. R: IRLS to relative deviance change 1e-8. Rust: L-BFGS
+# to gradient tolerance 1e-8 * n (scale-aware), followed by a framework gradient check.
+# First run (2026-10-12, VERIFICATION.md Phase 4): max relative difference 1.6e-8
+# (smartcore, penguins_clf), 1.3e-8 (linfa, iris_clf); probabilities max abs 8.3e-9.
+# Bound tightened from the provisional 1e-6 to 1e-7 (6x margin over the measured maximum).
+logistic_coef_rel = 1e-7
+logistic_prob_abs = 1e-7
+
+# Level 4: per-fold metrics inherit the level-3 bound of the task; summary mean/std_err
+# are plain arithmetic over per-fold values.
+resample_metric_rel = 1e-7
+resample_metric_abs = 1e-7
+summary_rel = 1e-7
+summary_abs = 1e-7
+
+[tasks.ames_reg]
+# Wide dummy design (Neighborhood has 28 levels) with Sale_Price in the 1e5 range; the
+# fixture records xtx_condition. Bound set after the first measured run; see
+# VERIFICATION.md Phase 4 record for the measured value.
+ols_coef_rel = 1e-7
+ols_pred_rel = 1e-9

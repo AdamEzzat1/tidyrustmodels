@@ -951,6 +951,8 @@ dependencies = [
 name = "tidyrustmodels"
 version = "0.1.0-dev"
 dependencies = [
+ "approx",
+ "serde_json",
  "tidyrustmodels-core",
  "tidyrustmodels-metrics",
  "tidyrustmodels-models",

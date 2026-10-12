@@ -188,6 +188,26 @@ impl DesignMatrix {
         })
     }
 
+    /// Keep only the given columns (by index), in the given order.
+    pub fn select_columns(&self, cols: &[usize]) -> Result<DesignMatrix> {
+        if let Some(bad) = cols.iter().find(|&&c| c >= self.ncols) {
+            return Err(Error::InvalidArgument(format!(
+                "column index {bad} out of range for {} columns",
+                self.ncols
+            )));
+        }
+        let mut data = Vec::with_capacity(self.nrows * cols.len());
+        for &c in cols {
+            data.extend_from_slice(self.column(c));
+        }
+        Ok(DesignMatrix {
+            data,
+            nrows: self.nrows,
+            ncols: cols.len(),
+            names: cols.iter().map(|&c| self.names[c].clone()).collect(),
+        })
+    }
+
     /// Check that another matrix has the same feature names in the same order.
     pub fn check_same_features(&self, other: &DesignMatrix) -> Result<()> {
         if self.names != other.names {

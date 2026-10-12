@@ -1,0 +1,26 @@
+{
+ "ames": {
+  "rows": 2930,
+  "sha256": "5d84c1eb1eed45c00be575109579427b0a3540fa3e3b69e51312a0e7efeb76a2"
+ },
+ "iris": {
+  "rows": 150,
+  "sha256": "8a8cda18fb801b03e2bb8c7c3797312bae75078626089f2dcb5c0841fc072d55"
+ },
+ "penguins": {
+  "rows": 342,
+  "sha256": "e7377863538e5801939663a729b0c386df6b7d9ac91fa2391dfea7fb5d4fd3d8"
+ },
+ "penguins_sex": {
+  "rows": 333,
+  "sha256": "1886d5170a7f1bf94f59d1a80f5e7e4125cf86f8cfbd15c2f4640c9905e1bfd9"
+ },
+ "synthetic_clf_small": {
+  "rows": 60,
+  "sha256": "a8e408987cf6e4a2edcf965372332af6698395fbcabee69f3801ec795737048b"
+ },
+ "synthetic_reg_small": {
+  "rows": 40,
+  "sha256": "278d7d37ea68cb4af7019fa902d5ca61b5488bcace0b011ced3bc8d32ab9b1ac"
+ }
+}

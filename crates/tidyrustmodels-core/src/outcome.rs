@@ -153,6 +153,9 @@ pub struct FitDiagnostics {
     pub final_gradient_norm: Option<f64>,
     /// Warnings in the spirit of R's `glm` (e.g. fitted probabilities numerically 0 or 1).
     pub warnings: Vec<String>,
+    /// Columns dropped before fitting because they were constant (aliased with the
+    /// intercept) or identically zero. Their coefficient is reported as 0; R reports `NA`.
+    pub aliased: Vec<String>,
     /// Free-form note from the adapter (e.g. termination reason).
     pub note: Option<String>,
 }

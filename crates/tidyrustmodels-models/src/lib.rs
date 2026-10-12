@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, rust_2018_idioms)]
 
+pub mod alias;
 pub mod backends;
 pub mod diag;
 pub mod fitted;

@@ -22,6 +22,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, rust_2018_idioms)]
 
+pub mod io;
+
 pub use tidyrustmodels_core as core;
 pub use tidyrustmodels_metrics as metrics;
 pub use tidyrustmodels_models as models;

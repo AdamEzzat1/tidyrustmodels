@@ -3,11 +3,12 @@
 use crate::names::dummy_name;
 use crate::selector::Selector;
 use serde::{Deserialize, Serialize};
-use tidyrustmodels_core::{Column, ColumnKind, Error, Field, FittedStep, Result, Schema, Step, Table};
+use tidyrustmodels_core::{Column, ColumnKind, Error, Field, FittedStep, Result, Role, Schema, Step, Table};
 
 /// Indicator encoding. With `one_hot = false` (the recipes default) the first level is
 /// the reference and gets no column (treatment contrasts); with `one_hot = true` every
-/// level gets a column.
+/// level gets a column. As in recipes, the indicator columns are appended after the
+/// remaining columns.
 ///
 /// Missing categorical values propagate as missing indicator values (recipes yields
 /// `NA`). An unseen level at bake time is an error (recipes warns and yields `NA`);
@@ -69,20 +70,22 @@ impl Step for StepDummy {
             let out_names: Vec<String> = kept.iter().map(|l| dummy_name(name, l)).collect();
             encodings.push((name.clone(), levels.to_vec(), out_names));
         }
-        // Output schema: replace each encoded column (in place) by its indicator columns.
-        let mut fields = Vec::with_capacity(schema.fields.len());
-        for f in &schema.fields {
-            match encodings.iter().find(|(n, _, _)| n == &f.name) {
-                Some((_, _, outs)) => {
-                    for o in outs {
-                        fields.push(Field {
-                            name: o.clone(),
-                            kind: ColumnKind::Numeric,
-                            role: f.role,
-                        });
-                    }
-                }
-                None => fields.push(f.clone()),
+        // Output schema: recipes removes the encoded columns and appends the indicator
+        // columns after the remaining columns, in encoding order.
+        let mut fields: Vec<Field> = schema
+            .fields
+            .iter()
+            .filter(|f| !encodings.iter().any(|(n, _, _)| n == &f.name))
+            .cloned()
+            .collect();
+        for (name, _, outs) in &encodings {
+            let role = schema.field(name).map(|f| f.role).unwrap_or(Role::Predictor);
+            for o in outs {
+                fields.push(Field {
+                    name: o.clone(),
+                    kind: ColumnKind::Numeric,
+                    role,
+                });
             }
         }
         for f in &fields {
@@ -114,44 +117,47 @@ impl FittedStep for FittedDummy {
     fn bake(&self, data: &Table) -> Result<Table> {
         let mut out = Table::with_nrows(data.nrows());
         for (name, col) in data.iter() {
-            match self.encodings.iter().find(|(n, _, _)| n == name) {
-                None => out.insert(name, col.clone())?,
-                Some((_, levels, out_names)) => {
-                    let (codes, bake_levels) = col.as_categorical().ok_or_else(|| {
-                        Error::SchemaMismatch(format!("column `{name}` must be categorical at bake time"))
-                    })?;
-                    // Map bake-time codes to training-level indices by label.
-                    let remap: Vec<Option<usize>> = bake_levels
-                        .iter()
-                        .map(|l| levels.iter().position(|t| t == l))
-                        .collect();
-                    let valid = col.validity();
-                    let offset = if self.one_hot { 0 } else { 1 };
-                    let mut cols: Vec<Vec<f64>> = vec![vec![0.0; codes.len()]; out_names.len()];
-                    for (i, code) in codes.iter().enumerate() {
-                        if valid.is_some_and(|v| !v[i]) {
-                            continue;
-                        }
-                        let train_idx = remap[*code as usize].ok_or_else(|| {
-                            Error::InvalidValue(format!(
-                                "column `{name}` has level `{}` at row {i} that was not seen in training",
-                                bake_levels[*code as usize]
-                            ))
-                        })?;
-                        if train_idx >= offset {
-                            cols[train_idx - offset][i] = 1.0;
-                        }
-                    }
-                    for (o, values) in out_names.iter().zip(cols) {
-                        out.insert(
-                            o.clone(),
-                            Column::Numeric {
-                                values,
-                                valid: valid.map(|v| v.to_vec()),
-                            },
-                        )?;
-                    }
+            if !self.encodings.iter().any(|(n, _, _)| n == name) {
+                out.insert(name, col.clone())?;
+            }
+        }
+        for (name, levels, out_names) in &self.encodings {
+            let col = data
+                .column(name)
+                .ok_or_else(|| Error::SchemaMismatch(format!("column `{name}` missing at bake time")))?;
+            let (codes, bake_levels) = col.as_categorical().ok_or_else(|| {
+                Error::SchemaMismatch(format!("column `{name}` must be categorical at bake time"))
+            })?;
+            // Map bake-time codes to training-level indices by label.
+            let remap: Vec<Option<usize>> = bake_levels
+                .iter()
+                .map(|l| levels.iter().position(|t| t == l))
+                .collect();
+            let valid = col.validity();
+            let offset = if self.one_hot { 0 } else { 1 };
+            let mut cols: Vec<Vec<f64>> = vec![vec![0.0; codes.len()]; out_names.len()];
+            for (i, code) in codes.iter().enumerate() {
+                if valid.is_some_and(|v| !v[i]) {
+                    continue;
                 }
+                let train_idx = remap[*code as usize].ok_or_else(|| {
+                    Error::InvalidValue(format!(
+                        "column `{name}` has level `{}` at row {i} that was not seen in training",
+                        bake_levels[*code as usize]
+                    ))
+                })?;
+                if train_idx >= offset {
+                    cols[train_idx - offset][i] = 1.0;
+                }
+            }
+            for (o, values) in out_names.iter().zip(cols) {
+                out.insert(
+                    o.clone(),
+                    Column::Numeric {
+                        values,
+                        valid: valid.map(|v| v.to_vec()),
+                    },
+                )?;
             }
         }
         Ok(out)
@@ -169,7 +175,6 @@ impl FittedStep for FittedDummy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tidyrustmodels_core::Role;
 
     fn table() -> (Table, Schema) {
         let t = Table::new(vec![
