@@ -1,6 +1,6 @@
 # Benchmarks
 
-Status: one full run recorded (`2026-10-12-win11-i7-11390H`, see Results). The
+Status: two runs recorded (`2026-10-12-win11-i7-11390H` and `…-b`, see Results). The
 methodology below is the target protocol; the Results section lists every point where
 the recorded run fell short of it. No number in this file was produced by anything other
 than `benchmarks/run_benchmarks.py` on the recorded machine.
@@ -91,9 +91,11 @@ Environment (from `env.json` and the R/Rust drivers' version output):
   the same desktop session during the run.
 - Rust peak memory is **not captured** for processes that exit in under ~150 ms (the
   1 ms sampler never observed them; 81 of 180 Rust rows). Where captured, sampled RSS
-  is a lower bound; the OS peak working set (`peak_wset_mb`) is exact for the root
-  process. Follow-up: read `PeakWorkingSetSize` from the retained process handle after
-  exit (benchmarks/README.md).
+  is a lower bound. Fixed in the harness and re-measured for the small tasks in run B.
+- `fit_s` was **not like-for-like** in this run: R's timed `fit(wf)` includes recipe prep
+  and bake, Rust's `ModelSpec::fit` does not. The tables below therefore put R `fit_s`
+  against Rust `prep_s + bake_s + fit_s` (sums of medians, so no IQR). Run B below adds
+  an explicit `wf_fit_s` phase to every driver and a model-only `fit_s` to R.
 - The benchmark does **not** assert numerical parity. Each system draws its own folds
   from its own RNG, so the per-run CV means differ by up to ~5e-2 relative on the small
   tasks. Parity is established separately with shared fold ids (VERIFICATION.md, Phase 4).
@@ -108,24 +110,25 @@ Medians over 5 cold trials; IQR in brackets; times in milliseconds unless marked
 "Rust" is the `linfa` engine; the `smartcore` engine is given separately because its SVD
 solver is markedly slower.
 
-| task | rows × cols | R `lm` fit | Rust fit (linfa) | Rust fit (smartcore) | R 5-fold CV | Rust CV (linfa) | Rust CV (smartcore) | R wall | Rust wall (linfa) | R peak RSS | Rust peak RSS |
+| task | rows × cols | R workflow fit (prep+bake+`lm`) | Rust prep+bake+fit (linfa) | Rust prep+bake+fit (smartcore) | R 5-fold CV | Rust CV (linfa) | Rust CV (smartcore) | R wall | Rust wall (linfa) | R peak RSS | Rust peak RSS |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| penguins_reg | 342 × 7 | 53.3 [7] | 0.066 [0.005] | 0.24 [0.04] | 1060 [310] | 0.72 [0.11] | 1.44 [0.57] | 5.71 s | 0.101 s | 378 MB | not captured |
-| synth_1000_reg | 1000 × 14 | 59.2 [6] | 0.21 [0.02] | 1.61 [0.19] | 859 [190] | 2.32 [0.17] | 10.2 [1.2] | 5.55 s | 0.062 s | 381 MB | not captured |
-| ames_reg | 2930 × 34 | 102 [33] | 2.06 [0.05] | 33.3 [7.4] | 1090 [280] | 23.3 [3.1] | 192 [15] | 6.75 s | 0.189 s | 405 MB | 8 MB |
-| synth_10000_reg | 10000 × 14 | 78.3 [7] | 1.72 [0.35] | 14.2 [2.2] | 906 [83] | 34.8 [2.5] | 96.1 [21] | 6.05 s | 0.197 s | 407 MB | 10 MB |
-| synth_100000_reg | 100000 × 14 | 469 [35] | 19.6 [2.0] | 127 [9] | 3180 [160] | 327 [20] | 946 [100] | 15.3 s | 3.07 s | 603 MB | 74 MB |
+| penguins_reg | 342 × 7 | 53.3 [7] | 0.22 | 0.42 | 1060 [310] | 0.72 [0.11] | 1.44 [0.57] | 5.71 s | 0.101 s | 378 MB | not captured |
+| synth_1000_reg | 1000 × 14 | 59.2 [6] | 0.55 | 1.98 | 859 [190] | 2.32 [0.17] | 10.2 [1.2] | 5.55 s | 0.062 s | 381 MB | not captured |
+| ames_reg | 2930 × 34 | 102 [33] | 4.2 | 35.9 | 1090 [280] | 23.3 [3.1] | 192 [15] | 6.75 s | 0.189 s | 405 MB | 8 MB |
+| synth_10000_reg | 10000 × 14 | 78.3 [7] | 6.3 | 18.7 | 906 [83] | 34.8 [2.5] | 96.1 [21] | 6.05 s | 0.197 s | 407 MB | 10 MB |
+| synth_100000_reg | 100000 × 14 | 469 [35] | 55.8 | 163 | 3180 [160] | 327 [20] | 946 [100] | 15.3 s | 3.07 s | 603 MB | 74 MB |
 
-Speedups implied by the medians (R / Rust-linfa): fit 24× (100k rows) to ~800×
+Speedups implied by the medians (R / Rust-linfa): workflow fit 8× (100k rows) to ~240×
 (342 rows); CV 10× (100k rows) to ~1500× (342 rows); end-to-end wall 5× (100k rows)
 to 57× (342 rows). The end-to-end ratio is bounded below by R's `library(tidymodels)`
 load, median 2.38 s across all R trials, which is a fixed cost no workload amortises
 within a single process.
 
-Reading: at small n the R numbers are orchestration cost (R `lm` on 342 rows takes
-53 ms, of which the linear algebra is microseconds); the Rust numbers are the actual
-solve. At 100k rows the gap narrows to 24× on fit, which is still mostly R's
-`model.matrix`/tibble handling plus reference LAPACK versus a pure-Rust normal-equations
+Reading: at small n the R numbers are orchestration cost (R's workflow fit on 342 rows
+takes 53 ms, of which the linear algebra is microseconds); the Rust numbers are prep,
+bake and the actual solve. At 100k rows the gap narrows to 8× on the workflow fit
+(24× on the model-only solve: 469 ms vs 19.6 ms), which is mostly R's
+`model.matrix`/tibble handling plus reference LAPACK versus a pure-Rust least-squares
 path. smartcore's SVD is 6–16× slower than linfa's least squares at n ≥ 2930 and is
 not the default for that reason.
 
@@ -135,16 +138,16 @@ Different optimisers; the tuning row compares R `glmnet` (coordinate descent, ri
 standardised penalty) against L-BFGS with an unscaled L2 term over a 5-point grid.
 Do not read these as equivalent-algorithm results.
 
-| task | rows × cols | R `glm` fit | Rust fit (linfa) | Rust fit (smartcore) | R CV | Rust CV (linfa) | R tune (glmnet) | Rust tune (linfa) | R wall | Rust wall (linfa) |
+| task | rows × cols | R workflow fit (prep+bake+`glm`) | Rust prep+bake+fit (linfa) | Rust prep+bake+fit (smartcore) | R CV | Rust CV (linfa) | R tune (glmnet) | Rust tune (linfa) | R wall | Rust wall (linfa) |
 |---|---|---|---|---|---|---|---|---|---|---|
-| iris_clf | 150 × 4 | 47.9 [6] | 0.42 [0.18] | 0.47 [0.08] | 969 [140] | 2.48 [1.1] | 2100 [290] | 5.71 [2.2] | 7.11 s | 0.102 s |
-| penguins_clf | 333 × 6 | 51.6 [11] | 0.78 [0.20] | 1.52 [0.03] | 1340 [180] | 3.99 [0.7] | 2940 [240] | 19.4 [2.8] | 9.40 s | 0.104 s |
-| synth_10000_clf | 10000 × 14 | 133 [6] | 37.8 [1.2] | 54.5 [10] | 1430 [200] | 216 [19] | 2750 [130] | 925 [69] | 10.8 s | 1.68 s |
-| synth_100000_clf | 100000 × 14 | 1070 [31] | 810 [150] | 681 [160] | 4690 [680] | 3240 [440] | 15100 [570] | **21900 [40]** | 35.0 s | **37.7 s** |
+| iris_clf | 150 × 4 | 47.9 [6] | 0.48 | 0.52 | 969 [140] | 2.48 [1.1] | 2100 [290] | 5.71 [2.2] | 7.11 s | 0.102 s |
+| penguins_clf | 333 × 6 | 51.6 [11] | 0.93 | 1.66 | 1340 [180] | 3.99 [0.7] | 2940 [240] | 19.4 [2.8] | 9.40 s | 0.104 s |
+| synth_10000_clf | 10000 × 14 | 133 [6] | 41.2 | 58.9 | 1430 [200] | 216 [19] | 2750 [130] | 925 [69] | 10.8 s | 1.68 s |
+| synth_100000_clf | 100000 × 14 | 1070 [31] | 857 | 724 | 4690 [680] | 3240 [440] | 15100 [570] | **21900 [40]** | 35.0 s | **37.7 s** |
 
 Reading: the L-BFGS advantage shrinks with n because IRLS converges in 5–8 Newton
 steps regardless of n while L-BFGS needs tens of gradient evaluations. At 100k rows the
-fit is only 1.3× faster than `glm`, **tuning is 0.69× (slower than glmnet)**, and the
+workflow fit is only 1.25× faster than R's, **tuning is 0.69× (slower than glmnet)**, and the
 single-thread end-to-end wall is **slower than R** (37.7 s vs 35.0 s). This is the
 measured case for an IRLS solver in Phase 7 (ROADMAP.md); it is not a framework
 overhead problem (prep+bake is 46 ms vs R's 640 ms on the same task).
@@ -185,17 +188,17 @@ and smaller tasks are not captured (see deviations).
 
 #### Warm (steady-state) fit, same process, 10 iterations
 
-| task | R `lm`/`glm` warm fit | Rust warm fit (linfa) | cold-vs-warm note |
+| task | R warm workflow fit (prep+bake+model) | Rust warm model-only fit (linfa) | note |
 |---|---|---|---|
 | penguins_reg | 88.9 ms | 0.024 ms | R warm is *slower* than cold (53 ms); not investigated, within R's GC noise |
 | ames_reg | 79.7 ms | 2.18 ms | |
 | synth_100000_reg | 295 ms | 20.6 ms | R warm 1.6× faster than cold |
-| synth_100000_clf | 587 ms | 770 ms | **R `glm` warm is faster than L-BFGS** at 100k rows |
+| synth_100000_clf | 587 ms | 770 ms | **R `glm` warm is faster than L-BFGS** at 100k rows, and the Rust cell excludes prep+bake (~35 ms), so the true gap is wider |
 
-### What this run does and does not show
+### What run A does and does not show
 
-- Shown: for OLS workflows the framework is 24–800× faster per fit and 5–57× faster
-  end-to-end than R tidymodels on this machine, with 8–50× less memory, and the
+- Shown: for OLS workflows the framework is 8–240× faster per workflow fit and 5–57×
+  faster end-to-end than R tidymodels on this machine, with 8–50× less memory, and the
   numbers are reproducible from `results.csv`.
 - Shown: for logistic workflows at 100k rows the L-BFGS backends are not faster than
   R's IRLS in steady state and are slower than glmnet for tuning. The "Rust is faster"
@@ -206,3 +209,99 @@ and smaller tasks are not captured (see deviations).
 
 Raw data: `benchmarks/results/2026-10-12-win11-i7-11390H/{results.csv, env.json,
 report.md}`; the generated `report.md` has every phase for every configuration.
+
+### Run `2026-10-12-win11-i7-11390H-b`: exact peak memory, like-for-like fit, and the Python wrapper
+
+Same machine, same day, git `40cb3cc` plus the driver changes in this commit. Purpose:
+(1) capture peak memory exactly for the short-lived Rust processes that run A missed;
+(2) add a `wf_fit` phase (prep + bake + model fit from the raw training table) to every
+driver so the fit comparison is like for like, and a model-only `fit` to R; (3) measure
+the **Python wrapper** (`benchmarks/python/bench_task.py`: CPython 3.11.3, pandas CSV
+parsing, `from_pandas`, PyO3 calls) as a third system. 6 tasks × {1, 4 threads} ×
+{R, Rust linfa, Rust smartcore, Python linfa, Python smartcore} × 5 cold trials = 300 of
+300 trials ok. The 100k-row tasks were **not** repeated here; nothing below speaks to them.
+Protocol gaps from run A (5 trials, 5 folds, 5-point grid, laptop) are unchanged.
+
+Correctness check inside this run: the Python and Rust drivers use the same seeds, and
+their CV summaries are bitwise identical in all 24 (task, threads, engine) groups across
+every trial. R's differ because it draws its own folds.
+
+Peak memory is now `peak_wset_mb`: the OS-reported `PeakWorkingSetSize` of the largest
+process in the tree, read after exit from a retained handle (benchmarks/README.md).
+
+#### Cold start: process wall time and library load, 1 thread (medians, 5 trials)
+
+| task | R wall | of which `library(tidymodels)` | Python wall | of which `import` (numpy, pandas, tidyrustmodels) | Rust binary wall |
+|---|---|---|---|---|---|
+| penguins_reg | 7.11 s | 3.15 s | 0.839 s | 0.644 s | 0.064 s |
+| penguins_clf | 7.70 s | 2.81 s | 0.798 s | 0.578 s | 0.057 s |
+| iris_clf | 7.46 s | 2.82 s | 0.862 s | 0.656 s | 0.109 s |
+| synth_1000_reg | 6.68 s | 2.96 s | 0.838 s | 0.645 s | 0.072 s |
+| ames_reg | 6.75 s | 2.73 s | 0.728 s | 0.509 s | 0.142 s |
+| synth_10000_clf | 11.6 s | 2.88 s | 2.95 s | 0.723 s | 2.78 s |
+
+Python's cold start is 4–10× faster than R's end to end; three quarters of it is the
+import. The Rust binary is another 10× below Python on the small tasks and equal to it
+on synth_10000_clf, where the L-BFGS fits dominate.
+
+#### Workflow fit, CV and tuning, 1 thread, linfa engine (ms, medians)
+
+| task | R `wf_fit` | Python `wf_fit` | Rust `wf_fit` | R CV | Python CV | Rust CV | R tune (glmnet) | Python tune | Rust tune |
+|---|---|---|---|---|---|---|---|---|---|
+| penguins_reg | 60.2 | 0.165 | 0.111 | 907 | 0.56 | 0.66 | — | — | — |
+| penguins_clf | 58.9 | 0.75 | 0.54 | 993 | 4.5 | 3.6 | 1650 | 24.0 | 20.5 |
+| iris_clf | 36.9 | 0.36 | 0.34 | 787 | 1.9 | 2.6 | 1390 | 8.7 | 9.5 |
+| synth_1000_reg | 80.7 | 0.44 | 0.42 | 927 | 1.6 | 2.7 | — | — | — |
+| ames_reg | 80.1 | 2.6 | 2.7 | 1030 | 13.4 | 17.5 | — | — | — |
+| synth_10000_clf | 128 | 46.4 | 50.4 | 1410 | 270 | 265 | 2790 | 1100 | 1180 |
+
+Python wrapper vs Rust binary: the wrapper adds ~50 µs to a 342-row workflow fit
+(0.165 vs 0.111 ms) and nothing measurable at 10k rows. On three tasks the Python CV
+phase was 1.2–1.7× *faster* than the Rust binary's (both are built with the same
+`lto = "fat"`, `codegen-units = 1` profile); the cause was not investigated and the two
+should be read as equal within this run's noise. `predict` through Python costs
+15–30 µs per call versus 2–4 µs native (NumPy array creation), irrelevant at these sizes.
+
+Python wrapper vs R: every phase on every task is faster through the wrapper, by 2.8×
+(synth_10000_clf workflow fit) to ~1600× (penguins_reg CV), with cold start 4–10× faster.
+
+#### Model-only fit (R `fit_xy` on the baked design vs Rust `ModelSpec::fit`), 1 thread
+
+| task | R `lm`/`glm` | Rust linfa | Rust smartcore | ratio (R / linfa) |
+|---|---|---|---|---|
+| penguins_reg | 9.2 ms | 0.064 ms | 0.22 ms | 144× |
+| synth_1000_reg | 10.0 ms | 0.21 ms | 1.5 ms | 47× |
+| ames_reg | 28.1 ms | 1.8 ms | 25.8 ms | 16× |
+| iris_clf | 23.1 ms | 0.47 ms | 0.60 ms | 49× |
+| penguins_clf | 11.8 ms | 0.58 ms | 1.4 ms | 20× |
+| synth_10000_clf | 60.4 ms | 45.0 ms | 74.5 ms | 1.3× |
+
+At 10k rows the model-only logistic fit is already within 1.3× of `glm`, consistent
+with run A's inversion at 100k rows.
+
+#### Exact peak memory (largest process in the tree), medians
+
+| task | R, 1 thr | Python, 1 thr | Rust, 1 thr | R, 4 thr (largest worker) | R, 4 thr (tree sum, sampled) | Python, 4 thr | Rust, 4 thr |
+|---|---|---|---|---|---|---|---|
+| penguins_reg | 361 MB | 63 MB | 5.2 MB | 363 MB | 1.66 GB | 63 MB | 5.6 MB |
+| penguins_clf | 364 MB | 63 MB | 5.3 MB | 366 MB | 1.69 GB | 64 MB | 6.3 MB |
+| iris_clf | 361 MB | 63 MB | 5.1 MB | 366 MB | 1.69 GB | 63 MB | 5.5 MB |
+| synth_1000_reg | 365 MB | 63 MB | 5.7 MB | 368 MB | 1.67 GB | 64 MB | 6.9 MB |
+| ames_reg | 391 MB | 66 MB | 9.0 MB | 395 MB | 1.69 GB | 76 MB | 17 MB |
+| synth_10000_clf | 410 MB | 69 MB | 12.6 MB | 425 MB | 1.80 GB | 82 MB | 23 MB |
+
+R's floor is the attached tidymodels namespaces (~360 MB); Python's is CPython + numpy +
+pandas (~62 MB); the Rust binary's is ~5 MB. Ratios at 1 thread: R / Python 5.5–6×,
+R / Rust 33–70×.
+
+#### What run B adds to the record
+
+- The Python wrapper is faster than R tidymodels on every measured phase and task,
+  including cold start, and uses about one sixth of the memory. Not measured: the
+  wrapper at 100k rows, where run A showed the Rust binary itself is not faster than R
+  for logistic regression; the wrapper cannot be faster there either.
+- The Rust-vs-Python gap is a fixed ~0.6 s import plus tens of microseconds per call.
+- The run A memory gaps for the small tasks are closed; no cell in this run is
+  "not captured".
+
+Raw data: `benchmarks/results/2026-10-12-win11-i7-11390H-b/{results.csv, env.json, report.md}`.

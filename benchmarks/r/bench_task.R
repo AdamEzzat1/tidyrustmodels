@@ -73,8 +73,11 @@ wf <- workflow() %>% add_recipe(rec) %>% add_model(model)
 prep_s <- elapsed(prepped <- prep(rec, training = train))
 bake_s <- elapsed({ baked_train <- bake(prepped, new_data = NULL); baked_test <- bake(prepped, new_data = test) })
 
-# ---- fit + predict (through parsnip, as a user would) ----
-fit_s <- elapsed(fit_obj <- fit(wf, data = train))
+# ---- fit: model only on the baked design (fit_s, like Rust ModelSpec::fit) and the
+# ---- workflow fit from the raw training table (wf_fit_s = prep + bake + fit) ----
+x_cols <- setdiff(names(baked_train), outcome)
+fit_s <- elapsed(model_fit <- fit_xy(model, x = baked_train[, x_cols, drop = FALSE], y = baked_train[[outcome]]))
+wf_fit_s <- elapsed(fit_obj <- fit(wf, data = train))
 predict_s <- elapsed(pred <- predict(fit_obj, test))
 
 # ---- cross-validation ----
@@ -105,10 +108,11 @@ if (type == "classification") {
 if (threads > 1) plan(sequential)
 
 # ---- warm repetitions ----
-w_prep <- c(); w_fit <- c(); w_predict <- c()
+w_prep <- c(); w_fit <- c(); w_wffit <- c(); w_predict <- c()
 for (i in seq_len(warm)) {
-  w_prep <- c(w_prep, elapsed({ p <- prep(rec, training = train); bake(p, new_data = NULL) }))
-  w_fit <- c(w_fit, elapsed(ff <- fit(wf, data = train)))
+  w_prep <- c(w_prep, elapsed({ p <- prep(rec, training = train); bt <- bake(p, new_data = NULL) }))
+  w_fit <- c(w_fit, elapsed(fit_xy(model, x = bt[, x_cols, drop = FALSE], y = bt[[outcome]])))
+  w_wffit <- c(w_wffit, elapsed(ff <- fit(wf, data = train)))
   w_predict <- c(w_predict, elapsed(predict(ff, test)))
 }
 med <- function(x) if (length(x)) median(x) else NA
@@ -116,10 +120,10 @@ med <- function(x) if (length(x)) median(x) else NA
 out <- list(
   system = "r", engine = if (type == "regression") "lm" else "glm", threads = threads,
   n_rows = n, n_train = nrow(train), n_features = ncol(baked_train) - 1L,
-  phases = list(load_s = load_s, prep_s = prep_s, bake_s = bake_s, fit_s = fit_s, predict_s = predict_s,
+  phases = list(load_s = load_s, prep_s = prep_s, bake_s = bake_s, fit_s = fit_s, wf_fit_s = wf_fit_s, predict_s = predict_s,
                 cv_s = cv_s, tune_s = tune_s, library_load_s = t_libs),
   cv_summary = cv_summary, tune_candidates = tune_candidates,
-  warm = list(iters = warm, prep_bake_s_median = med(w_prep), fit_s_median = med(w_fit), predict_s_median = med(w_predict)),
+  warm = list(iters = warm, prep_bake_s_median = med(w_prep), fit_s_median = med(w_fit), wf_fit_s_median = med(w_wffit), predict_s_median = med(w_predict)),
   versions = list(r = R.version.string, blas = extSoftVersion()[["BLAS"]], lapack = La_library(),
                   tidymodels = as.character(packageVersion("tidymodels")), parsnip = as.character(packageVersion("parsnip")),
                   recipes = as.character(packageVersion("recipes")), tune = as.character(packageVersion("tune")),

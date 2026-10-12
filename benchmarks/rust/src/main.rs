@@ -116,8 +116,14 @@ fn run() -> Result<()> {
     let predict_s = secs(t0);
     std::hint::black_box(&pred);
 
-    // ---- cross-validation ----
+    // ---- workflow fit from the raw training table (prep + bake + fit), like R's fit(wf) ----
     let wf = Workflow::from_boxed(recipe.clone(), spec.clone_box());
+    let t0 = Instant::now();
+    let wf_fitted = wf.fit(&train)?;
+    let wf_fit_s = secs(t0);
+    std::hint::black_box(&wf_fitted);
+
+    // ---- cross-validation ----
     let set = MetricSet::from_names(&metrics)?;
     let folds = vfold_cv(n, v, strata.as_deref(), Seed(seed + 1))?;
     let t0 = Instant::now();
@@ -140,8 +146,12 @@ fn run() -> Result<()> {
     };
 
     // ---- warm repetitions (steady state, same process) ----
-    let (mut w_prep, mut w_fit, mut w_predict) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut w_prep, mut w_fit, mut w_wffit, mut w_predict) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for _ in 0..warm {
+        let t0 = Instant::now();
+        let wff = wf.fit(&train)?;
+        w_wffit.push(secs(t0));
+        std::hint::black_box(&wff);
         let t0 = Instant::now();
         let p = recipe.prep(&train)?;
         let (xt, yt) = p.bake_matrix(&train)?;
@@ -164,7 +174,7 @@ fn run() -> Result<()> {
         "n_train": train.nrows(),
         "n_features": x_train.ncols(),
         "phases": {
-            "load_s": load_s, "prep_s": prep_s, "bake_s": bake_s, "fit_s": fit_s,
+            "load_s": load_s, "prep_s": prep_s, "bake_s": bake_s, "fit_s": fit_s, "wf_fit_s": wf_fit_s,
             "predict_s": predict_s, "cv_s": cv_s, "tune_s": tune_s,
         },
         "cv_summary": cv_summary,
@@ -173,6 +183,7 @@ fn run() -> Result<()> {
             "iters": warm,
             "prep_bake_s_median": median(&mut w_prep),
             "fit_s_median": median(&mut w_fit),
+            "wf_fit_s_median": median(&mut w_wffit),
             "predict_s_median": median(&mut w_predict),
         },
         "versions": { "tidyrustmodels": env!("CARGO_PKG_VERSION"), "profile": "release, lto=fat, codegen-units=1" },
