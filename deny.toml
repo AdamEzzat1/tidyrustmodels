@@ -1,0 +1,22 @@
+# cargo-deny configuration (CI "licenses" job).
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+]
+confidence-threshold = 0.9
+
+[advisories]
+ignore = []
+
+[bans]
+multiple-versions = "allow"   # linfa (ndarray 0.16) and smartcore (ndarray 0.17) coexist by design (ADR-0002)

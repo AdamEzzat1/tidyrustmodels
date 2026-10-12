@@ -1,0 +1,21 @@
+[package]
+name = "trm-bench"
+description = "Benchmark driver for tidyrustmodels (one process = one cold trial)"
+version = "0.1.0-dev"
+edition = "2021"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Own workspace root so the benchmark binary gets its own release profile and never
+# affects `cargo test --workspace`.
+[workspace]
+
+[dependencies]
+tidyrustmodels = { path = "../../crates/tidyrustmodels" }
+serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+debug = false

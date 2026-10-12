@@ -8,12 +8,11 @@ __pycache__/
 /python/tidyrustmodels/*.so
 /bindings/python/build/
 /bindings/python/dist/
-/benchmarks/results/*.json
-/benchmarks/results/*.csv
 /reference/fixtures/generated/.cache/
 *.Rhistory
 .RData
 /benchmarks/data/
-/benchmarks/results/
 /benchmarks/rust/target/
 /bindings/python/target/
+/benchmarks/results/*.log
+/python/tidyrustmodels/*.pdb

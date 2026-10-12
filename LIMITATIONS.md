@@ -30,19 +30,37 @@
 - linfa-logistic does not expose L-BFGS termination status; convergence is verified by
   the framework's own gradient check.
 
+## Findings from benchmarking (run `2026-10-12-win11-i7-11390H`, BENCHMARKS.md)
+
+- OLS workflows: 24–800× faster per fit and 5–57× faster end-to-end than R tidymodels
+  on the recorded laptop, 8–50× less memory. Both sides used unoptimised single-threaded
+  linear algebra (R's bundled `Rblas.dll`; pure-Rust linfa/smartcore).
+- Logistic workflows at 1e5 rows: the L-BFGS backends are **not faster** than R's IRLS
+  `glm` in steady state (770 ms vs 587 ms warm fit), tuning is 0.69× the speed of
+  glmnet, and single-thread end-to-end wall is slower than R (37.7 s vs 35.0 s). This is
+  the measured need for an IRLS solver (ROADMAP.md Phase 7).
+- smartcore's SVD least squares is 6–16× slower than linfa's at n ≥ 2930; it remains
+  the second engine for cross-checking, not for speed.
+- Rust 4-thread scaling on 4 cores: 2.1–2.5× for tuning, 1.4–2.1× for CV at n ≥ 2930,
+  a slowdown on 333-row tasks. R's `multisession` 4-worker configuration was slower than
+  sequential on every task because worker start-up (8–13 s) dominates.
+- The 1 ms RSS sampler did not observe Rust processes that exit in under ~150 ms (81 of
+  180 rows); those cells are "not captured", not zero.
+
 ## Risk register
 
 | id | risk | likelihood | impact | status / mitigation |
 |----|------|-----------|--------|------------|
 | R1 | Logistic coefficients differ from R beyond tolerance (L-BFGS vs IRLS) | was high | medium | **measured**: ≤1.6e-8 relative on all tasks; bound set to 1e-7. Residual: larger n or ill-conditioned problems untested |
 | R2 | Ill-conditioned OLS amplifies solver differences | medium | medium | **measured** on Ames (cond 6.5e3 after normalize): 2.6e-13 relative. Unnormalised wide designs untested |
-| R3 | Design-matrix copies into backend array types dominate fit time for large n | medium | low–medium | Measure in Phase 5 (D1); zero-copy only with evidence |
+| R3 | Design-matrix copies into backend array types dominate fit time for large n | was medium | low | **measured**: at 1e5×14, prep+bake 36 ms and load 170 ms vs fit 20 ms (OLS) / 810 ms (logistic); the copy is not the bottleneck. Zero-copy deferred |
 | R4 | linfa panics/erors on malformed or singular input; ecosystem last released 2025-12 | medium | medium | Validation and aliasing in the framework; smartcore as second engine |
 | R5 | smartcore API churn in patch versions (0.6.16 published 2026-10-12) | medium | low | Exact pin; adapter is ~80 lines |
 | R6 | pyo3 0.29 / numpy 0.29 API drift vs older examples online | medium | low | Build from registry README examples; CI builds bindings |
 | R7 | R 4.4.0 with packages built under 4.4.3 | low | low | Versions recorded in every fixture |
-| R8 | Benchmarks mistaken for equivalent-algorithm comparisons (IRLS vs L-BFGS) | high | high | Category column in every result row; reviewer checks wording |
+| R8 | Benchmarks mistaken for equivalent-algorithm comparisons (IRLS vs L-BFGS) | high | high | Category column in every result row; BENCHMARKS.md keeps the two categories in separate tables and states where Rust is slower |
 | R9 | Rayon oversubscription when backends are also threaded | low | medium | Scoped pool; backends are single-threaded |
-| R10 | Windows peak-RSS sampling misses short-lived peaks | medium | medium | Use `PeakWorkingSetSize`, which the OS tracks exactly |
+| R10 | Windows peak-RSS sampling misses short-lived peaks | **occurred** | medium | 81/180 Rust rows not captured in the first run. Fix pending: read `PeakWorkingSetSize` through the retained process handle after exit |
+| R13 | L-BFGS logistic solver loses to IRLS/glmnet at large n | **measured** | medium | 1e5 rows: 0.76× `glm` warm fit, 0.69× glmnet tune. Mitigation is a native IRLS solver (Phase 7), gated on a before/after benchmark |
 | R11 | tidymodels semantics misread | was medium | high | **mitigated**: every row in COMPATIBILITY.md marked "tested" is backed by a fixture comparison |
 | R12 | Fixtures drift from the committed datasets | low | medium | `checksums.json`; regeneration is a reviewed change |

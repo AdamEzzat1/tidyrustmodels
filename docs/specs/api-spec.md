@@ -128,13 +128,17 @@ exercised end-to-end) and `intercept` (boolean, encoded 0/1).
 ## Python (`tidyrustmodels`)
 
 ```python
-tbl = trm.Table.from_pandas(df)                 # or from_numpy(X, names=[...])
-rec = trm.Recipe(outcome="y").step_normalize(trm.all_numeric_predictors()).step_dummy(["species"])
+tbl = trm.from_pandas(df)                       # or trm.Table.from_numpy(X, names=[...]) / Table.from_dict({...})
+rec = trm.Recipe("y").step_normalize("all_numeric_predictors").step_dummy(["species"])
 wf  = trm.Workflow(rec, trm.LinearReg(engine="linfa"))
-fit = wf.fit(tbl); fit.predict(tbl) -> np.ndarray
-folds = trm.vfold_cv(tbl, v=5, strata="y", seed=42)
-res = wf.fit_resamples(tbl, folds, metrics=["rmse", "rsq"], threads=4)
+fit = wf.fit(tbl); fit.predict(tbl) -> np.ndarray   # classification: list[str]; fit.predict_proba(tbl) -> np.ndarray
+folds = trm.vfold_cv(tbl.nrows, 5, seed=42, strata=list(df["y"]))
+res = wf.fit_resamples(tbl, folds, ["rmse", "rsq"], threads=4)
 ```
+
+Implemented deviation (review F7): `from_pandas` is a module-level function because
+PyO3 classes are final and a Python subclass cannot be returned from native
+constructors; selectors are strings or lists of column names.
 
 Exceptions: `TidyRustModelsError` (base) → `SchemaError`, `InvalidValueError`,
 `UnsupportedError`, `BackendError`.

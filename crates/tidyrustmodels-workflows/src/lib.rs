@@ -81,20 +81,38 @@ impl Workflow {
         }
         let jobs: Vec<usize> = (0..folds.len()).collect();
         let per_fold = parallel_map(jobs, par, |k| {
+            let id = &folds.ids[k];
             let split = &folds.splits[k];
             let train = data.select_rows(&split.train)?;
             let test = data.select_rows(&split.test)?;
-            let fitted = self.fit(&train)?;
-            let (x_test, y_test) = fitted.recipe.bake_matrix(&test)?;
+            let fitted = self.fit(&train).map_err(|e| in_fold(e, id))?;
+            let (x_test, y_test) = fitted.recipe.bake_matrix(&test).map_err(|e| in_fold(e, id))?;
             let y_test =
                 y_test.ok_or_else(|| Error::SchemaMismatch("assessment rows lack the outcome".into()))?;
-            let pred = fitted.model.predict(&x_test)?;
+            let pred = fitted.model.predict(&x_test).map_err(|e| in_fold(e, id))?;
             Ok(FoldMetrics {
-                id: folds.ids[k].clone(),
+                id: id.clone(),
                 metrics: metrics.evaluate(&y_test, &pred)?,
             })
         })?;
         Ok(ResampleResults::from_folds(per_fold))
+    }
+}
+
+/// Prefix an error raised inside a resampling fold with the fold id, so a failure in
+/// one of many folds is attributable (review finding F1).
+pub fn in_fold(e: Error, id: &str) -> Error {
+    match e {
+        Error::SchemaMismatch(m) => Error::SchemaMismatch(format!("{id}: {m}")),
+        Error::InvalidValue(m) => Error::InvalidValue(format!("{id}: {m}")),
+        Error::InvalidArgument(m) => Error::InvalidArgument(format!("{id}: {m}")),
+        Error::Unsupported(m) => Error::Unsupported(format!("{id}: {m}")),
+        Error::Backend { engine, message } => Error::Backend {
+            engine,
+            message: format!("{id}: {message}"),
+        },
+        Error::Serialization(m) => Error::Serialization(format!("{id}: {m}")),
+        other => other,
     }
 }
 

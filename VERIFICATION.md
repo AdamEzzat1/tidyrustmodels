@@ -112,7 +112,32 @@ Triage of all out-of-tolerance differences: none occurred.
 
 ## Python parity (Phase 3)
 
-Not yet executed; see ROADMAP.md.
+Executed 2026-10-12 on the host in DEPENDENCIES.md (Python 3.11.3, numpy 2.2.6,
+pandas 2.3.2, pytest 7.2.2, extension built with `maturin develop --release`,
+pyo3 0.29.3, abi3-py311). Command sequence:
+
+```
+cargo test -p tidyrustmodels --test differential   # writes target/rust_outputs/{task}_{engine}.json
+pytest python/tests                                 # 21 passed
+```
+
+| test | cases | result | what it pins |
+|---|---|---|---|
+| `test_python_matches_rust_bitwise` | 6 tasks x 2 engines = 12 | pass | coefficients, predictions, probabilities, per-fold metrics are `np.array_equal` (bitwise) to the Rust outputs written by the differential test |
+| `test_python_matches_r_within_tolerance` | 6 | pass | the Python path meets the same per-quantity tolerances (`reference/fixtures/tolerances.toml`) against the pinned R fixtures |
+| `test_errors_map_to_exception_hierarchy` | 1 | pass | every `Error` variant maps to its `TidyRustModelsError` subclass |
+| `test_numpy_and_dict_inputs_agree` | 1 | pass | `Table.from_numpy` and `Table.from_dict` fit identically |
+| `test_round_trip_and_tuning` | 1 | pass | JSON text round trip is bitwise identical (ADR-0008); `tune_grid` picks the same candidate as Rust |
+
+Finding during this phase: the first run showed 14 of 80 probabilities differing by one
+ulp after a JSON round trip. Root cause was serde_json's default non-roundtrip float
+parsing, not the bindings; fixed by enabling `float_roundtrip` everywhere (ADR-0008) and
+tightening the Rust round-trip tests from `Value`-level to text-level bitwise equality.
+
+Not covered yet: Python on Linux/macOS (the CI job in `.github/workflows/ci.yml` is
+defined but has not run on those platforms); free-threaded builds; pandas object
+columns holding non-string values (`from_pandas` stringifies them with `str()`, which
+is documented but untested).
 
 ## Test inventory
 
@@ -121,7 +146,8 @@ Not yet executed; see ROADMAP.md.
 | unit | each crate `src/**/tests` | yes | no |
 | property | `crates/tidyrustmodels-recipes/tests/prop_steps.rs` | yes | no |
 | analytic baselines | `crates/tidyrustmodels-models/tests/baselines.rs` | yes | no |
+| collinearity behaviour | `crates/tidyrustmodels-models/tests/collinear.rs` | yes | no |
 | differential vs pinned R fixtures | `crates/tidyrustmodels/tests/differential.rs` | yes | no (fixtures committed) |
 | fixture regeneration | `reference/tidymodels-r/` | scheduled job only | yes |
-| Python parity | `python/tests/` | planned | no |
+| Python parity | `python/tests/` | yes (python job) | no |
 | benchmarks | `benchmarks/` | manual / dedicated machine | yes |

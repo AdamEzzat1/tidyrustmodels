@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Includes the differential suite against the committed R fixtures (no R needed).
+      - run: cargo test --workspace
+      - run: cargo test --workspace --release --test differential
+      - run: cargo doc --workspace --no-deps
+      - name: Build without the linfa backend
+        run: cargo check -p tidyrustmodels-models --no-default-features --features smartcore
+      - name: Build without the smartcore backend
+        run: cargo check -p tidyrustmodels-models --no-default-features --features linfa
+
+  python:
+    name: Python bindings (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: rust
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bindings/python
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m venv .venv
+      - run: ${{ runner.os == 'Windows' && '.venv\Scripts\python.exe' || '.venv/bin/python' }} -m pip install maturin numpy pandas pytest
+      - name: Produce Rust outputs for the bitwise parity test
+        run: cargo test -p tidyrustmodels --test differential
+      - name: Build and install the extension
+        shell: bash
+        run: |
+          export VIRTUAL_ENV="$PWD/.venv"
+          if [ "$RUNNER_OS" = "Windows" ]; then PY=.venv/Scripts/python.exe; else PY=.venv/bin/python; fi
+          $PY -m maturin develop --release
+          $PY -m pytest python/tests -q
+
+  licenses:
+    name: Dependency licenses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses advisories
+
+  # The R reference harness and the benchmark suite are NOT run here: fixtures are
+  # committed, and performance measurements belong on a dedicated machine with a
+  # recorded environment (BENCHMARKS.md). A scheduled job can regenerate fixtures.

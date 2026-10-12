@@ -12,7 +12,7 @@ before upgrading; do not trust this table for other versions.
 | RAM           | 31.8 GB                                                  |
 | OS            | Windows 11 Pro 10.0.26200                                |
 | Rust          | rustc 1.97.1, cargo 1.97.1, stable-x86_64-pc-windows-msvc |
-| Python        | 3.11.3, numpy 2.2.6, pandas 2.3.2, pyarrow 17.0.0, maturin 1.10.2 |
+| Python        | 3.11.3; project venv `.venv` with numpy 2.2.6, pandas 2.3.2, pytest 7.2.2, maturin 1.10.x, psutil 7.2.2 (benchmark RSS sampling) |
 | R             | 4.4.0 (ucrt); tidymodels packages built under 4.4.3 (warning only) |
 | R packages    | tidymodels 1.5.0, parsnip 1.5.0, recipes 1.3.2, rsample 1.3.2, yardstick 1.4.0, tune 2.1.0, dials 1.4.3, workflows 1.3.0, glmnet 4.1-10, arrow 23.0.1.2, jsonlite 2.0.0, bench 1.1.4 |
 
