@@ -11,8 +11,9 @@ unless VERIFICATION.md or BENCHMARKS.md records the measurement.
 
 What is verified today (VERIFICATION.md):
 
-- Preprocessing, OLS, metrics and resampling match R tidymodels 1.5.0 to floating-point
-  round-off on six reference tasks; logistic regression matches to ~1e-8 relative
+- Preprocessing, OLS, metrics (including yardstick's ROC/PR, F, kappa, MCC and Brier
+  families with their multiclass estimators) and resampling match R tidymodels 1.5.0 to
+  floating-point round-off on eight reference tasks; logistic regression matches to ~1e-8 relative
   (same objective, different optimizer).
 - All three engines (`linfa`, `smartcore`, `native`) reproduce exact analytic baselines
   that are independent of R. The default `native` engine ports R's own `lm.fit` and

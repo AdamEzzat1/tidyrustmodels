@@ -63,7 +63,10 @@ add_steps <- function(rec, steps) {
 }
 
 metric_fns <- list(rmse = rmse, rsq = rsq, mae = mae, rsq_trad = rsq_trad,
-                   accuracy = accuracy, mn_log_loss = mn_log_loss, precision = precision, recall = recall)
+                   accuracy = accuracy, mn_log_loss = mn_log_loss, precision = precision, recall = recall,
+                   roc_auc = roc_auc, pr_auc = pr_auc, average_precision = average_precision,
+                   f_meas = f_meas, sens = sens, spec = spec, bal_accuracy = bal_accuracy,
+                   j_index = j_index, kap = kap, mcc = mcc, brier_class = brier_class)
 
 columns_as_list <- function(df) {
   lapply(as.list(df), function(col) if (is.factor(col)) as.character(col) else col)
@@ -180,5 +183,78 @@ fixed <- list(
     log_loss_clamped = mn_log_loss_vec(factor(c("a", "b"), levels = lv), c(0, 0.5))
   )
 )
+# ---- Level 2 (Phase 8b): class and probability metrics on fixed arrays ----
+# Curves are stored without their infinite end-point thresholds (jsonlite cannot write Inf).
+cls_metrics_binary <- function(truth, est, prob) {
+  lv <- levels(truth)
+  d <- data.frame(t = truth, e = est, p = prob)
+  rc <- roc_curve(d, t, p); pc <- pr_curve(d, t, p)
+  suppressWarnings(list(
+    levels = lv, truth = as.character(truth), estimate = as.character(est), prob_event = prob,
+    sens = sens_vec(truth, est), spec = spec_vec(truth, est), precision = precision_vec(truth, est),
+    recall = recall_vec(truth, est), f_meas = f_meas_vec(truth, est), f_meas_beta2 = f_meas_vec(truth, est, beta = 2),
+    bal_accuracy = bal_accuracy_vec(truth, est), j_index = j_index_vec(truth, est),
+    kap = kap_vec(truth, est), mcc = mcc_vec(truth, est), accuracy = accuracy_vec(truth, est),
+    roc_auc = roc_auc_vec(truth, prob), pr_auc = pr_auc_vec(truth, prob),
+    average_precision = average_precision_vec(truth, prob),
+    brier_class = brier_class_vec(truth, prob), mn_log_loss = mn_log_loss_vec(truth, prob),
+    conf_mat = unclass(conf_mat(d, t, e)$table),
+    roc_curve = list(threshold = rc$.threshold[is.finite(rc$.threshold)], specificity = rc$specificity, sensitivity = rc$sensitivity),
+    pr_curve = list(threshold = pc$.threshold[is.finite(pc$.threshold)], recall = pc$recall, precision = pc$precision)
+  ))
+}
+cls_metrics_multi <- function(truth, est, probs) {
+  ests <- c("macro", "macro_weighted", "micro")
+  per <- function(f) setNames(lapply(ests, function(e) f(truth, est, estimator = e)), ests)
+  pm <- as.matrix(probs)
+  d <- data.frame(t = truth, e = est)
+  suppressWarnings(list(
+    levels = levels(truth), truth = as.character(truth), estimate = as.character(est), probs = unname(pm),
+    sens = per(sens_vec), spec = per(spec_vec), precision = per(precision_vec), recall = per(recall_vec),
+    f_meas = per(f_meas_vec), bal_accuracy = per(bal_accuracy_vec), j_index = per(j_index_vec),
+    kap = kap_vec(truth, est), kap_linear = kap_vec(truth, est, weighting = "linear"),
+    kap_quadratic = kap_vec(truth, est, weighting = "quadratic"),
+    mcc = mcc_vec(truth, est), accuracy = accuracy_vec(truth, est),
+    roc_auc = list(hand_till = roc_auc_vec(truth, pm), macro = roc_auc_vec(truth, pm, estimator = "macro"),
+                   macro_weighted = roc_auc_vec(truth, pm, estimator = "macro_weighted")),
+    pr_auc = list(macro = pr_auc_vec(truth, pm), macro_weighted = pr_auc_vec(truth, pm, estimator = "macro_weighted")),
+    average_precision = list(macro = average_precision_vec(truth, pm),
+                             macro_weighted = average_precision_vec(truth, pm, estimator = "macro_weighted")),
+    brier_class = brier_class_vec(truth, pm), mn_log_loss = mn_log_loss_vec(truth, pm),
+    conf_mat = unclass(conf_mat(d, t, e)$table)
+  ))
+}
+fixed$binary_full <- cls_metrics_binary(truth_cls, est_cls, prob_a)
+# ties in the probabilities straddling both classes, and a tie group at the threshold
+tt <- factor(c("a", "a", "b", "a", "b", "b", "a", "b", "a", "b"), levels = lv)
+tp <- c(0.9, 0.7, 0.7, 0.5, 0.5, 0.5, 0.3, 0.3, 0.1, 0.8)
+te <- factor(ifelse(tp >= 0.5, "a", "b"), levels = lv)
+fixed$binary_ties <- cls_metrics_binary(tt, te, tp)
+# three classes; `z` is never predicted (undefined precision for it) and the probability
+# columns contain ties
+lv3 <- c("x", "y", "z")
+mt <- factor(c("x", "x", "x", "x", "y", "y", "y", "y", "z", "z", "z", "z"), levels = lv3)
+me <- factor(c("x", "x", "y", "x", "y", "y", "x", "y", "y", "x", "y", "x"), levels = lv3)
+mp <- data.frame(
+  x = c(0.7, 0.6, 0.2, 0.5, 0.2, 0.1, 0.5, 0.3, 0.2, 0.5, 0.1, 0.4),
+  y = c(0.2, 0.3, 0.6, 0.3, 0.6, 0.8, 0.3, 0.5, 0.5, 0.2, 0.6, 0.3),
+  z = c(0.1, 0.1, 0.2, 0.2, 0.2, 0.1, 0.2, 0.2, 0.3, 0.3, 0.3, 0.3))
+stopifnot(all(abs(rowSums(mp) - 1) < 1e-12))
+fixed$multiclass <- cls_metrics_multi(mt, me, mp)
+# level `z` absent from truth: Hand-Till drops it; macro recall is NA for it, so
+# bal_accuracy (no na.rm) is NA while j_index (na.rm) is not
+mt2 <- factor(c("x", "x", "y", "y", "x", "y"), levels = lv3)
+me2 <- factor(c("x", "y", "y", "x", "x", "z"), levels = lv3)
+mp2 <- data.frame(x = c(0.6, 0.4, 0.3, 0.5, 0.7, 0.2), y = c(0.3, 0.4, 0.5, 0.4, 0.2, 0.3), z = c(0.1, 0.2, 0.2, 0.1, 0.1, 0.5))
+fixed$multiclass_absent_level <- cls_metrics_multi(mt2, me2, mp2)
+fixed$undefined <- c(fixed$undefined, suppressWarnings(list(
+  mcc_binary_degenerate = mcc_vec(factor(c("a", "b"), levels = lv), factor(c("a", "a"), levels = lv)),
+  mcc_multiclass_degenerate = mcc_vec(factor(c("x", "y", "z"), levels = lv3), factor(c("x", "x", "x"), levels = lv3)),
+  kap_no_chance_disagreement = kap_vec(factor(c("a", "a"), levels = lv), factor(c("a", "a"), levels = lv)),
+  roc_auc_no_events = roc_auc_vec(factor(c("b", "b"), levels = lv), c(0.2, 0.3)),
+  pr_auc_no_events = pr_auc_vec(factor(c("b", "b"), levels = lv), c(0.2, 0.3)),
+  sens_no_events = sens_vec(factor(c("b", "b"), levels = lv), factor(c("a", "b"), levels = lv)),
+  f_meas_both_zero = f_meas_vec(factor(c("a", "b"), levels = lv), factor(c("b", "a"), levels = lv))
+)))
 write_json(fixed, file.path(out_dir, "metrics_fixed.json"), auto_unbox = TRUE, digits = NA, na = "null", null = "null", pretty = TRUE)
 cat("wrote metrics_fixed.json\n")

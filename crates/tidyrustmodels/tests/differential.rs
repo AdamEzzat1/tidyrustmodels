@@ -835,6 +835,249 @@ fn differential_against_r_fixtures() {
         b,
     );
 
+    // ---- Level 2 (Phase 8b): class and probability metrics on fixed arrays ----
+    fn opt_cmp(
+        report: &mut Report,
+        section: &str,
+        name: &str,
+        ours: Option<f64>,
+        theirs: Option<f64>,
+        b: (f64, f64),
+    ) {
+        match (ours, theirs) {
+            (Some(a), Some(t)) => report.compare(section, "-", "L2", name, &[a], &[t], b),
+            (a, t) => report.exact(section, "-", "L2", &format!("{name} (NA)"), &a, &t),
+        }
+    }
+    let table_of = |cm: &ym::ConfusionMatrix| -> Vec<Vec<f64>> {
+        let k = cm.n_levels();
+        (0..k).map(|r| (0..k).map(|c| cm.count(r, c)).collect()).collect()
+    };
+    let json_table = |v: &Value| -> Vec<Vec<f64>> { items(v).into_iter().map(f64s).collect() };
+    for section in ["binary_full", "binary_ties"] {
+        let fs = &fx[section];
+        let levels = strs(&fs["levels"]);
+        let code = |v: &Value| -> Vec<u32> {
+            strs(v)
+                .iter()
+                .map(|s| levels.iter().position(|l| l == s).unwrap() as u32)
+                .collect()
+        };
+        let (t, e, p) = (code(&fs["truth"]), code(&fs["estimate"]), f64s(&fs["prob_event"]));
+        let cm = ym::ConfusionMatrix::from_codes(&t, &e, &levels).unwrap();
+        let bin = ym::Estimator::Binary;
+        report.exact(
+            section,
+            "-",
+            "L2",
+            "conf_mat",
+            &table_of(&cm),
+            &json_table(&fs["conf_mat"]),
+        );
+        let pairs: Vec<(&str, Option<f64>)> = vec![
+            ("sens", cm.sens(bin).unwrap()),
+            ("spec", cm.spec(bin).unwrap()),
+            ("precision", cm.precision(bin).unwrap()),
+            ("recall", cm.recall(bin).unwrap()),
+            ("f_meas", cm.f_meas(bin, 1.0).unwrap()),
+            ("f_meas_beta2", cm.f_meas(bin, 2.0).unwrap()),
+            ("bal_accuracy", cm.bal_accuracy(bin).unwrap()),
+            ("j_index", cm.j_index(bin).unwrap()),
+            ("kap", cm.kap(ym::KapWeighting::None)),
+            ("mcc", cm.mcc()),
+            ("accuracy", cm.accuracy()),
+            ("roc_auc", ym::roc_auc(&t, &p, 0).unwrap()),
+            ("pr_auc", ym::pr_auc(&t, &p, 0).unwrap()),
+            ("average_precision", ym::average_precision(&t, &p, 0).unwrap()),
+            ("brier_class", ym::brier_class(&t, &p, 0).unwrap()),
+            ("mn_log_loss", ym::mn_log_loss(&t, &p, 0).unwrap()),
+        ];
+        for (name, ours) in pairs {
+            opt_cmp(&mut report, section, name, ours, fs[name].as_f64(), b);
+        }
+        let rc = ym::roc_curve(&t, &p, 0).unwrap();
+        let finite: Vec<f64> = rc.threshold.iter().copied().filter(|x| x.is_finite()).collect();
+        report.compare(
+            section,
+            "-",
+            "L2",
+            "roc_curve threshold",
+            &finite,
+            &f64s(&fs["roc_curve"]["threshold"]),
+            b,
+        );
+        report.compare(
+            section,
+            "-",
+            "L2",
+            "roc_curve specificity",
+            &rc.specificity,
+            &f64s(&fs["roc_curve"]["specificity"]),
+            b,
+        );
+        report.compare(
+            section,
+            "-",
+            "L2",
+            "roc_curve sensitivity",
+            &rc.sensitivity,
+            &f64s(&fs["roc_curve"]["sensitivity"]),
+            b,
+        );
+        let pc = ym::pr_curve(&t, &p, 0).unwrap();
+        let finite: Vec<f64> = pc.threshold.iter().copied().filter(|x| x.is_finite()).collect();
+        report.compare(
+            section,
+            "-",
+            "L2",
+            "pr_curve threshold",
+            &finite,
+            &f64s(&fs["pr_curve"]["threshold"]),
+            b,
+        );
+        report.compare(
+            section,
+            "-",
+            "L2",
+            "pr_curve recall",
+            &pc.recall,
+            &f64s(&fs["pr_curve"]["recall"]),
+            b,
+        );
+        report.compare(
+            section,
+            "-",
+            "L2",
+            "pr_curve precision",
+            &pc.precision,
+            &f64s(&fs["pr_curve"]["precision"]),
+            b,
+        );
+    }
+    for section in ["multiclass", "multiclass_absent_level"] {
+        let fs = &fx[section];
+        let levels = strs(&fs["levels"]);
+        let k = levels.len();
+        let code = |v: &Value| -> Vec<u32> {
+            strs(v)
+                .iter()
+                .map(|s| levels.iter().position(|l| l == s).unwrap() as u32)
+                .collect()
+        };
+        let (t, e) = (code(&fs["truth"]), code(&fs["estimate"]));
+        let rows = json_table(&fs["probs"]);
+        let flat: Vec<f64> = rows.iter().flatten().copied().collect();
+        let probs = DesignMatrix::from_row_major(&flat, rows.len(), k, levels.clone()).unwrap();
+        let cm = ym::ConfusionMatrix::from_codes(&t, &e, &levels).unwrap();
+        report.exact(
+            section,
+            "-",
+            "L2",
+            "conf_mat",
+            &table_of(&cm),
+            &json_table(&fs["conf_mat"]),
+        );
+        for (en, est) in [
+            ("macro", ym::Estimator::Macro),
+            ("macro_weighted", ym::Estimator::MacroWeighted),
+            ("micro", ym::Estimator::Micro),
+        ] {
+            let pairs: Vec<(&str, Option<f64>)> = vec![
+                ("sens", cm.sens(est).unwrap()),
+                ("spec", cm.spec(est).unwrap()),
+                ("precision", cm.precision(est).unwrap()),
+                ("recall", cm.recall(est).unwrap()),
+                ("f_meas", cm.f_meas(est, 1.0).unwrap()),
+                ("bal_accuracy", cm.bal_accuracy(est).unwrap()),
+                ("j_index", cm.j_index(est).unwrap()),
+            ];
+            for (name, ours) in pairs {
+                opt_cmp(
+                    &mut report,
+                    section,
+                    &format!("{name} {en}"),
+                    ours,
+                    fs[name][en].as_f64(),
+                    b,
+                );
+            }
+            if est != ym::Estimator::Micro {
+                opt_cmp(
+                    &mut report,
+                    section,
+                    &format!("roc_auc {en}"),
+                    ym::roc_auc_multiclass(&t, &probs, est).unwrap(),
+                    fs["roc_auc"][en].as_f64(),
+                    b,
+                );
+                opt_cmp(
+                    &mut report,
+                    section,
+                    &format!("pr_auc {en}"),
+                    ym::pr_auc_multiclass(&t, &probs, est).unwrap(),
+                    fs["pr_auc"][en].as_f64(),
+                    b,
+                );
+                opt_cmp(
+                    &mut report,
+                    section,
+                    &format!("average_precision {en}"),
+                    ym::average_precision_multiclass(&t, &probs, est).unwrap(),
+                    fs["average_precision"][en].as_f64(),
+                    b,
+                );
+            }
+        }
+        let pairs: Vec<(&str, Option<f64>)> = vec![
+            ("kap", cm.kap(ym::KapWeighting::None)),
+            ("kap_linear", cm.kap(ym::KapWeighting::Linear)),
+            ("kap_quadratic", cm.kap(ym::KapWeighting::Quadratic)),
+            ("mcc", cm.mcc()),
+            ("accuracy", cm.accuracy()),
+            ("brier_class", ym::brier_class_multiclass(&t, &probs).unwrap()),
+            ("mn_log_loss", ym::mn_log_loss_multiclass(&t, &probs).unwrap()),
+        ];
+        for (name, ours) in pairs {
+            opt_cmp(&mut report, section, name, ours, fs[name].as_f64(), b);
+        }
+        opt_cmp(
+            &mut report,
+            section,
+            "roc_auc hand_till",
+            ym::roc_auc_multiclass(&t, &probs, ym::Estimator::HandTill).unwrap(),
+            fs["roc_auc"]["hand_till"].as_f64(),
+            b,
+        );
+    }
+    {
+        let lv2: Vec<String> = vec!["a".into(), "b".into()];
+        let lv3: Vec<String> = vec!["x".into(), "y".into(), "z".into()];
+        let cmx = |t: &[u32], e: &[u32], lv: &[String]| ym::ConfusionMatrix::from_codes(t, e, lv).unwrap();
+        let u = &fx["undefined"];
+        let bin = ym::Estimator::Binary;
+        let pairs: Vec<(&str, Option<f64>)> = vec![
+            ("mcc_binary_degenerate", cmx(&[0, 1], &[0, 0], &lv2).mcc()),
+            (
+                "mcc_multiclass_degenerate",
+                cmx(&[0, 1, 2], &[0, 0, 0], &lv3).mcc(),
+            ),
+            (
+                "kap_no_chance_disagreement",
+                cmx(&[0, 0], &[0, 0], &lv2).kap(ym::KapWeighting::None),
+            ),
+            ("roc_auc_no_events", ym::roc_auc(&[1, 1], &[0.2, 0.3], 0).unwrap()),
+            ("pr_auc_no_events", ym::pr_auc(&[1, 1], &[0.2, 0.3], 0).unwrap()),
+            ("sens_no_events", cmx(&[1, 1], &[0, 1], &lv2).sens(bin).unwrap()),
+            (
+                "f_meas_both_zero",
+                cmx(&[0, 1], &[1, 0], &lv2).f_meas(bin, 1.0).unwrap(),
+            ),
+        ];
+        for (name, ours) in pairs {
+            opt_cmp(&mut report, "metrics_fixed", name, ours, u[name].as_f64(), b);
+        }
+    }
+
     report.write_and_assert();
 }
 

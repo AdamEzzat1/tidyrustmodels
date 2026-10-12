@@ -572,6 +572,94 @@ fn py_tune_grid<'py>(
     Ok(out)
 }
 
+/// yardstick metrics on class labels and, for probability metrics, a probability matrix
+/// with one column per level in `levels` order. `estimate` defaults to the arg-max of
+/// each probability row. Returns `{name: value}` with `None` where yardstick gives `NA`;
+/// estimators follow yardstick's defaults (binary / macro / hand_till for roc_auc).
+#[pyfunction]
+#[pyo3(signature = (truth, levels, metrics, estimate = None, probabilities = None))]
+fn py_class_metrics<'py>(
+    py: Python<'py>,
+    truth: Vec<String>,
+    levels: Vec<String>,
+    metrics: Vec<String>,
+    estimate: Option<Vec<String>>,
+    probabilities: Option<PyReadonlyArray2<'py, f64>>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let code = |labels: &[String]| -> PyResult<Vec<u32>> {
+        labels
+            .iter()
+            .map(|l| {
+                levels
+                    .iter()
+                    .position(|x| x == l)
+                    .map(|i| i as u32)
+                    .ok_or_else(|| InvalidValueError::new_err(format!("label `{l}` is not one of the levels")))
+            })
+            .collect()
+    };
+    let t = code(&truth)?;
+    let probs = match probabilities {
+        Some(a) => {
+            let shape = a.shape();
+            let view = a.as_array();
+            let mut flat = Vec::with_capacity(shape[0] * shape[1]);
+            for i in 0..shape[0] {
+                for j in 0..shape[1] {
+                    flat.push(view[[i, j]]);
+                }
+            }
+            Some(DesignMatrix::from_row_major(&flat, shape[0], shape[1], levels.clone()).py()?)
+        }
+        None => None,
+    };
+    let e = match (&estimate, &probs) {
+        (Some(e), _) => code(e)?,
+        (None, Some(p)) => (0..p.nrows())
+            .map(|i| {
+                let row = p.row(i);
+                let mut best = 0;
+                for (j, v) in row.iter().enumerate() {
+                    if *v > row[best] {
+                        best = j;
+                    }
+                }
+                best as u32
+            })
+            .collect(),
+        (None, None) => return Err(InvalidArgumentError::new_err("give `estimate` labels or `probabilities`")),
+    };
+    let set = MetricSet::from_names(&metrics).py()?;
+    let outcome = Outcome::Class { codes: t, levels: levels.clone() };
+    let pred = Prediction::Class { codes: e, levels, probabilities: probs };
+    let d = PyDict::new(py);
+    for v in set.evaluate(&outcome, &pred).py()? {
+        d.set_item(v.name, v.value)?;
+    }
+    Ok(d)
+}
+
+/// Confusion matrix as nested lists, rows = prediction, columns = truth (yardstick's
+/// `conf_mat()$table` orientation), in `levels` order.
+#[pyfunction]
+fn py_conf_mat(truth: Vec<String>, estimate: Vec<String>, levels: Vec<String>) -> PyResult<Vec<Vec<f64>>> {
+    let code = |labels: &[String]| -> PyResult<Vec<u32>> {
+        labels
+            .iter()
+            .map(|l| {
+                levels
+                    .iter()
+                    .position(|x| x == l)
+                    .map(|i| i as u32)
+                    .ok_or_else(|| InvalidValueError::new_err(format!("label `{l}` is not one of the levels")))
+            })
+            .collect()
+    };
+    let cm = ConfusionMatrix::from_codes(&code(&truth)?, &code(&estimate)?, &levels).py()?;
+    let k = cm.n_levels();
+    Ok((0..k).map(|r| (0..k).map(|c| cm.count(r, c)).collect()).collect())
+}
+
 /// `dials::grid_regular` over `(name, lower, upper, log10)` ranges.
 #[pyfunction]
 fn py_grid_regular<'py>(py: Python<'py>, ranges: Vec<(String, f64, f64, bool)>, levels: usize) -> PyResult<Bound<'py, PyList>> {
@@ -605,6 +693,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_initial_split, m)?)?;
     m.add_function(wrap_pyfunction!(py_tune_grid, m)?)?;
     m.add_function(wrap_pyfunction!(py_grid_regular, m)?)?;
+    m.add_function(wrap_pyfunction!(py_class_metrics, m)?)?;
+    m.add_function(wrap_pyfunction!(py_conf_mat, m)?)?;
     m.add("TidyRustModelsError", py.get_type::<TidyRustModelsError>())?;
     m.add("SchemaError", py.get_type::<SchemaError>())?;
     m.add("InvalidValueError", py.get_type::<InvalidValueError>())?;

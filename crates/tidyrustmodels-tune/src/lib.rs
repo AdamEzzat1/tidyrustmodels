@@ -280,7 +280,7 @@ mod tests {
         let parallel = tune_grid(&wf, &t, &folds, &grid, &metrics, Parallelism::threads(3)).unwrap();
         assert_eq!(serial, parallel);
         assert_eq!(serial.candidates.len(), 3);
-        let best = serial.show_best(Metric::MnLogLoss, 3);
+        let best = serial.show_best(Metric::BrierClass, 3);
         assert_eq!(best.len(), 3);
         assert!(best[0].1 <= best[1].1 && best[1].1 <= best[2].1);
         assert!(tune_grid(

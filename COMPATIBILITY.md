@@ -45,7 +45,18 @@ yardstick 1.4.0, tune 2.1.0.
 | `rsq_trad` | `rsq_trad` | 1 - SSE/SST | tested (L2) |
 | `accuracy` | `accuracy` | fraction equal | tested (L2) |
 | `precision`, `recall` | `precision`, `recall` | `event_level = "first"`; undefined → `NA` ↔ `None` | tested (L2 incl. NA case) |
-| `mn_log_loss` | `mn_log_loss` | `-mean(log p_truth)`, probabilities clamped to `[eps, 1-eps]`, eps = 2.2e-16 | tested (L2 incl. clamp case) |
+| `mn_log_loss` | `mn_log_loss` | `-mean(log p_truth)`, probabilities clamped to `[eps, 1-eps]`, eps = 2.2e-16; multiclass form on the probability matrix | tested (L2 incl. clamp case; multiclass L2 fixed arrays) |
+| `conf_mat()` | `ConfusionMatrix::from_codes` | rows = prediction, columns = truth, counts as `f64` | tested (L2, exact) |
+| `sens`/`sensitivity`, `spec`/`specificity`, `precision`, `recall` | `ConfusionMatrix::{sens, spec, precision, recall}` | `event_level = "first"`; estimators `binary`, `macro`, `macro_weighted`, `micro` with yardstick's `NA` rules (`weighted.mean(na.rm = TRUE)`, zero-weight levels dropped) | tested (L2 fixed arrays incl. ties, an unpredicted level and an absent level; L2/L4 on three tasks) |
+| `f_meas(beta)` | `ConfusionMatrix::f_meas(est, beta)` | `0` when precision and recall are both 0, `NA` when either is undefined | tested (L2 incl. beta = 2 and both-zero case) |
+| `bal_accuracy` | `ConfusionMatrix::bal_accuracy` | `(sens + spec)/2`; multiclass average **without** `na.rm` (one undefined level → `NA`), as yardstick | tested (L2 incl. absent-level case) |
+| `j_index` | `ConfusionMatrix::j_index` | `sens + spec - 1`; multiclass average with `na.rm` | tested (L2) |
+| `kap(weighting)` | `ConfusionMatrix::kap(KapWeighting)` | none / linear / quadratic; `NA` when chance disagreement is 0 (R: `NaN`) | tested (L2 incl. degenerate case) |
+| `mcc` | `ConfusionMatrix::mcc` | binary: `NA` when any marginal is 0; multiclass: Gorodkin form, `NA` when the denominator is 0 | tested (L2 incl. both degenerate cases) |
+| `roc_curve`, `roc_auc` | `roc_curve`, `roc_auc`, `roc_auc_multiclass` | `binary_threshold_curve` port (ties grouped at the last row), trapezoid; multiclass `hand_till` (default), `macro`, `macro_weighted`; no event or no control → `NA` | tested (L2 curves exact to 1e-15; L2/L4 on three tasks) |
+| `pr_curve`, `pr_auc`, `average_precision` | `pr_curve`, `pr_auc`, `average_precision` (+ `_multiclass`) | same curve; `pr_auc` trapezoid, `average_precision` step sum; no events → `None` (R: `NaN`) | tested (L2) |
+| `brier_class` | `brier_class`, `brier_class_multiclass` | `brier_ind` with unit case weights: `mean(rowSums((onehot - p)^2)) / 2` | tested (L2) |
+| `metric_set(accuracy, roc_auc, brier_class)` (tune's classification default) | `MetricSet::classification_defaults()` | same three metrics | by construction |
 | `.pred_<level>` probability columns | `Prediction::Class{probabilities}` ordered as `levels` | event = `levels[0]` | tested (L3) |
 | `predict(type = "class")` | `Prediction::Class{codes}` | larger probability wins; ties → first level | tested (L3, exact) |
 | `glm$converged`, `glm$iter`, `glm$deviance` | `FitDiagnostics { converged, iterations, deviance, final_gradient_norm }` | native: same meaning and same values; L-BFGS engines: convergence by gradient check, no iteration count | tested (`converged` exact on all engines) |
@@ -54,9 +65,12 @@ yardstick 1.4.0, tune 2.1.0.
 
 ## Unsupported in v0.1
 
-workflowsets, bootstraps, repeated CV, grouped resampling, case weights, multiclass,
-glmnet-equivalent penalization, tree models, `tailor` post-processing, `roc_auc`,
-`step_zv(group =)`, `step_corr(method = "spearman"/"kendall")`, case-weighted filters.
+workflowsets, bootstraps, repeated CV, grouped resampling, case weights, multiclass
+**models** (multiclass metrics are implemented and verified on fixed arrays),
+glmnet-equivalent penalization, tree models, `tailor` post-processing,
+`step_zv(group =)`, `step_corr(method = "spearman"/"kendall")`, case-weighted filters,
+`roc_curve(thresholds =)`, `gain_curve`/`lift_curve`, `classification_cost`,
+`roc_aunp`/`roc_aunu`, `detection_prevalence`, `npv`/`ppv`, `mn_log_loss(sum = TRUE)`.
 
 ## Engine-specific restrictions
 

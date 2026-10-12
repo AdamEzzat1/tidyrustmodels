@@ -178,3 +178,44 @@ def test_round_trip_and_tuning():
     res = trm.tune_grid(wf, t, folds, grid, ["accuracy", "mn_log_loss"], threads=2)
     assert len(res) == 3
     assert all(c["results"]["summary"][1]["metric"] == "mn_log_loss" for c in res)
+
+
+def _close(a, b, tol=1e-12):
+    if a is None or b is None:
+        return a is None and b is None
+    return abs(a - b) <= tol * max(1.0, abs(a), abs(b))
+
+
+def test_class_metrics_match_r_fixed_arrays():
+    """yardstick on fixed arrays (binary with ties, 3-class with an unpredicted and an
+    absent level) through the Python entry points."""
+    fx = json.loads((ROOT / "reference" / "fixtures" / "r" / "metrics_fixed.json").read_text())
+    binary = ["sens", "spec", "precision", "recall", "f_meas", "bal_accuracy", "j_index", "kap", "mcc",
+              "accuracy", "roc_auc", "pr_auc", "average_precision", "brier_class", "mn_log_loss"]
+    for section in ["binary_full", "binary_ties"]:
+        s = fx[section]
+        probs = np.column_stack([s["prob_event"], 1.0 - np.asarray(s["prob_event"])])
+        ours = trm.class_metrics(s["truth"], s["levels"], binary, estimate=s["estimate"], probabilities=probs)
+        for m in binary:
+            assert _close(ours[m], s[m]), (section, m, ours[m], s[m])
+        assert trm.conf_mat(s["truth"], s["estimate"], s["levels"]) == s["conf_mat"]
+    for section in ["multiclass", "multiclass_absent_level"]:
+        s = fx[section]
+        probs = np.asarray(s["probs"], dtype=float)
+        names = ["sens", "spec", "precision", "recall", "f_meas", "bal_accuracy", "j_index"]
+        ours = trm.class_metrics(s["truth"], s["levels"], names + ["kap", "mcc", "accuracy", "roc_auc", "pr_auc",
+                                 "average_precision", "brier_class", "mn_log_loss"], estimate=s["estimate"], probabilities=probs)
+        for m in names:  # yardstick default for > 2 levels is macro
+            assert _close(ours[m], s[m]["macro"]), (section, m)
+        assert _close(ours["roc_auc"], s["roc_auc"]["hand_till"])
+        assert _close(ours["pr_auc"], s["pr_auc"]["macro"])
+        assert _close(ours["average_precision"], s["average_precision"]["macro"])
+        for m in ["kap", "mcc", "accuracy", "brier_class", "mn_log_loss"]:
+            assert _close(ours[m], s[m]), (section, m)
+        assert trm.conf_mat(s["truth"], s["estimate"], s["levels"]) == s["conf_mat"]
+    # argmax default for `estimate`
+    s = fx["multiclass"]
+    auto = trm.class_metrics(s["truth"], s["levels"], ["accuracy"], probabilities=np.asarray(s["probs"]))
+    assert 0.0 <= auto["accuracy"] <= 1.0
+    with pytest.raises(trm.InvalidValueError):
+        trm.class_metrics(["q"], ["a", "b"], ["accuracy"], estimate=["a"])

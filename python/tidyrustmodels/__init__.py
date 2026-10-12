@@ -40,6 +40,8 @@ vfold_cv = _native.py_vfold_cv
 initial_split = _native.py_initial_split
 tune_grid = _native.py_tune_grid
 grid_regular = _native.py_grid_regular
+class_metrics = _native.py_class_metrics
+conf_mat = _native.py_conf_mat
 
 __all__ = [
     "Table",
@@ -53,6 +55,8 @@ __all__ = [
     "initial_split",
     "tune_grid",
     "grid_regular",
+    "class_metrics",
+    "conf_mat",
     "from_pandas",
     "TidyRustModelsError",
     "SchemaError",

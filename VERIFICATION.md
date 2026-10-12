@@ -190,6 +190,38 @@ Not covered: `step_corr` NA branches (no reference task has undefined correlatio
 unit-tested against a hand-checked matrix), `step_other` with ties at the threshold,
 and recipes' warnings (we record them in state or stay silent; see COMPATIBILITY.md).
 
+## Classification metrics (Phase 8b)
+
+Executed 2026-10-12. `sens`, `spec`, `precision`, `recall`, `f_meas`, `bal_accuracy`,
+`j_index`, `kap`, `mcc`, `accuracy`, `conf_mat`, `roc_curve`/`roc_auc`,
+`pr_curve`/`pr_auc`/`average_precision`, `brier_class` and multiclass `mn_log_loss`
+were transcribed from the yardstick 1.4.0 function bodies (`*_binary`, `*_multiclass`,
+`*_table_impl`, `binary_threshold_curve`, `auc`, `roc_auc_hand_till`, `one_vs_all_impl`,
+`brier_ind`, `get_weights`, `make_weighting_matrix`, read from the installed package).
+
+Evidence, all in `target/differential_report.md` (2117 comparisons, 0 failures):
+
+| where | what | comparisons | result |
+|---|---|---|---|
+| `metrics_fixed.json` `binary_full`, `binary_ties` | 16 metrics each plus the full ROC and PR curves; `binary_ties` has tied probabilities straddling both classes and a tie group at the 0.5 threshold | 2 × 22 | max 2.3e-15 rel; `conf_mat` and curves exact |
+| `metrics_fixed.json` `multiclass` (3 levels, one never predicted, ties in the probability columns) | 7 class metrics × {macro, macro_weighted, micro}, `roc_auc` × {hand_till, macro, macro_weighted}, `pr_auc`/`average_precision` × 2, `kap` × 3 weightings, `mcc`, `accuracy`, `brier_class`, `mn_log_loss`, `conf_mat` | 36 | max 2.3e-15 rel |
+| `metrics_fixed.json` `multiclass_absent_level` (a level absent from truth) | same set | 36 | values match; `bal_accuracy`/`roc_auc`/`pr_auc`/`average_precision` under `macro` are `NA` in both, and under `macro_weighted` both drop the zero-weight level |
+| `metrics_fixed.json` `undefined` | degenerate `mcc` (binary and multiclass), `kap` with no chance disagreement, `roc_auc`/`pr_auc`/`sens` with no events, `f_meas` with P = R = 0 | 7 | `NA` ↔ `None` exact; `f_meas` = 0 |
+| tasks `synth_clf`, `iris_clf`, `penguins_clf` | 15 metrics on the test set (L2) and per fold + summary (L4), all engines | 297 per engine | native ≤ 1.2e-14 rel; linfa ≤ 2.0e-8, smartcore ≤ 7.1e-9 (optimizer-bound, within the 1e-7 bound) |
+
+Findings while porting: (1) `stats::weighted.mean` computes `sum((x * w)[w != 0]) / sum(w)`,
+so an `NA` with zero weight is dropped even without `na.rm`; this is why `macro_weighted`
+survives an absent level while `macro` does not, and the port reproduces it. (2)
+`bal_accuracy_table_impl` averages without `na.rm` while `sens`/`spec`/`j_index`/`f_meas`
+use `na.rm = TRUE`; the fixture with an absent level distinguishes the two. (3)
+yardstick's `pr_auc` with no events is `NaN` (jsonlite writes `null`); it is `None` here.
+
+The Python entry points `class_metrics` and `conf_mat` are checked against the same
+fixture in `python/tests/test_parity.py` (36 tests pass).
+
+Not covered: case weights, `roc_curve(thresholds =)`, multiclass metrics on model
+predictions (no multiclass model yet; Phase 8c), and yardstick's warnings (silent here).
+
 ## Test inventory
 
 | suite | location | runs in CI | needs R |

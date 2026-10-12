@@ -14,7 +14,7 @@
       "workflows": "1.3.0",
       "dials": "1.4.3"
     },
-    "generated_on": "2026-10-12 13:56:46"
+    "generated_on": "2026-10-12 15:07:37"
   },
   "regression": {
     "truth": [1, 2.5, 3, 4.25, 5, 6.75],
@@ -37,6 +37,237 @@
   "undefined": {
     "rsq_constant_truth": null,
     "precision_no_predicted_events": null,
-    "log_loss_clamped": 18.3684002848386
+    "log_loss_clamped": 18.3684002848386,
+    "mcc_binary_degenerate": null,
+    "mcc_multiclass_degenerate": null,
+    "kap_no_chance_disagreement": null,
+    "roc_auc_no_events": null,
+    "pr_auc_no_events": null,
+    "sens_no_events": null,
+    "f_meas_both_zero": 0
+  },
+  "binary_full": {
+    "levels": ["a", "b"],
+    "truth": ["a", "a", "b", "b", "a", "b"],
+    "estimate": ["a", "b", "b", "b", "a", "a"],
+    "prob_event": [0.9, 0.4, 0.2, 0.1, 0.6, 0.55],
+    "sens": 0.666666666666667,
+    "spec": 0.666666666666667,
+    "precision": 0.666666666666667,
+    "recall": 0.666666666666667,
+    "f_meas": 0.666666666666667,
+    "f_meas_beta2": 0.666666666666667,
+    "bal_accuracy": 0.666666666666667,
+    "j_index": 0.333333333333333,
+    "kap": 0.333333333333333,
+    "mcc": 0.333333333333333,
+    "accuracy": 0.666666666666667,
+    "roc_auc": 0.888888888888889,
+    "pr_auc": 0.902777777777778,
+    "average_precision": 0.916666666666667,
+    "brier_class": 0.147083333333333,
+    "mn_log_loss": 0.443248105747963,
+    "conf_mat": [
+      [2, 1],
+      [1, 2]
+    ],
+    "roc_curve": {
+      "threshold": [0.1, 0.2, 0.4, 0.55, 0.6, 0.9],
+      "specificity": [0, 0, 0.333333333333333, 0.666666666666667, 0.666666666666667, 1, 1, 1],
+      "sensitivity": [1, 1, 1, 1, 0.666666666666667, 0.666666666666667, 0.333333333333333, 0]
+    },
+    "pr_curve": {
+      "threshold": [0.9, 0.6, 0.55, 0.4, 0.2, 0.1],
+      "recall": [0, 0.333333333333333, 0.666666666666667, 0.666666666666667, 1, 1, 1],
+      "precision": [1, 1, 1, 0.666666666666667, 0.75, 0.6, 0.5]
+    }
+  },
+  "binary_ties": {
+    "levels": ["a", "b"],
+    "truth": ["a", "a", "b", "a", "b", "b", "a", "b", "a", "b"],
+    "estimate": ["a", "a", "a", "a", "a", "a", "b", "b", "b", "a"],
+    "prob_event": [0.9, 0.7, 0.7, 0.5, 0.5, 0.5, 0.3, 0.3, 0.1, 0.8],
+    "sens": 0.6,
+    "spec": 0.2,
+    "precision": 0.428571428571429,
+    "recall": 0.6,
+    "f_meas": 0.5,
+    "f_meas_beta2": 0.555555555555556,
+    "bal_accuracy": 0.4,
+    "j_index": -0.2,
+    "kap": -0.2,
+    "mcc": -0.218217890235992,
+    "accuracy": 0.4,
+    "roc_auc": 0.44,
+    "pr_auc": 0.574603174603175,
+    "average_precision": 0.574603174603175,
+    "brier_class": 0.337,
+    "mn_log_loss": 0.921812055929515,
+    "conf_mat": [
+      [3, 4],
+      [2, 1]
+    ],
+    "roc_curve": {
+      "threshold": [0.1, 0.3, 0.5, 0.7, 0.8, 0.9],
+      "specificity": [0, 0, 0, 0.2, 0.6, 0.8, 1, 1],
+      "sensitivity": [1, 1, 0.8, 0.6, 0.4, 0.2, 0.2, 0]
+    },
+    "pr_curve": {
+      "threshold": [0.9, 0.8, 0.7, 0.5, 0.3, 0.1],
+      "recall": [0, 0.2, 0.2, 0.4, 0.6, 0.8, 1],
+      "precision": [1, 1, 0.5, 0.5, 0.428571428571429, 0.444444444444444, 0.5]
+    }
+  },
+  "multiclass": {
+    "levels": ["x", "y", "z"],
+    "truth": ["x", "x", "x", "x", "y", "y", "y", "y", "z", "z", "z", "z"],
+    "estimate": ["x", "x", "y", "x", "y", "y", "x", "y", "y", "x", "y", "x"],
+    "probs": [
+      [0.7, 0.2, 0.1],
+      [0.6, 0.3, 0.1],
+      [0.2, 0.6, 0.2],
+      [0.5, 0.3, 0.2],
+      [0.2, 0.6, 0.2],
+      [0.1, 0.8, 0.1],
+      [0.5, 0.3, 0.2],
+      [0.3, 0.5, 0.2],
+      [0.2, 0.5, 0.3],
+      [0.5, 0.2, 0.3],
+      [0.1, 0.6, 0.3],
+      [0.4, 0.3, 0.3]
+    ],
+    "sens": {
+      "macro": 0.5,
+      "macro_weighted": 0.5,
+      "micro": 0.5
+    },
+    "spec": {
+      "macro": 0.75,
+      "macro_weighted": 0.75,
+      "micro": 0.75
+    },
+    "precision": {
+      "macro": 0.5,
+      "macro_weighted": 0.5,
+      "micro": 0.5
+    },
+    "recall": {
+      "macro": 0.5,
+      "macro_weighted": 0.5,
+      "micro": 0.5
+    },
+    "f_meas": {
+      "macro": 0.6,
+      "macro_weighted": 0.6,
+      "micro": 0.5
+    },
+    "bal_accuracy": {
+      "macro": 0.625,
+      "macro_weighted": 0.625,
+      "micro": 0.625
+    },
+    "j_index": {
+      "macro": 0.25,
+      "macro_weighted": 0.25,
+      "micro": 0.25
+    },
+    "kap": 0.25,
+    "kap_linear": 0.2,
+    "kap_quadratic": 0.142857142857143,
+    "mcc": 0.288675134594813,
+    "accuracy": 0.5,
+    "roc_auc": {
+      "hand_till": 0.854166666666667,
+      "macro": 0.854166666666667,
+      "macro_weighted": 0.854166666666667
+    },
+    "pr_auc": {
+      "macro": 0.826190476190476,
+      "macro_weighted": 0.826190476190476
+    },
+    "average_precision": {
+      "macro": 0.783333333333333,
+      "macro_weighted": 0.783333333333333
+    },
+    "brier_class": 0.268333333333333,
+    "mn_log_loss": 0.88475550316405,
+    "conf_mat": [
+      [3, 1, 2],
+      [1, 3, 2],
+      [0, 0, 0]
+    ]
+  },
+  "multiclass_absent_level": {
+    "levels": ["x", "y", "z"],
+    "truth": ["x", "x", "y", "y", "x", "y"],
+    "estimate": ["x", "y", "y", "x", "x", "z"],
+    "probs": [
+      [0.6, 0.3, 0.1],
+      [0.4, 0.4, 0.2],
+      [0.3, 0.5, 0.2],
+      [0.5, 0.4, 0.1],
+      [0.7, 0.2, 0.1],
+      [0.2, 0.3, 0.5]
+    ],
+    "sens": {
+      "macro": 0.5,
+      "macro_weighted": 0.5,
+      "micro": 0.5
+    },
+    "spec": {
+      "macro": 0.722222222222222,
+      "macro_weighted": 0.666666666666667,
+      "micro": 0.75
+    },
+    "precision": {
+      "macro": 0.388888888888889,
+      "macro_weighted": 0.583333333333333,
+      "micro": 0.5
+    },
+    "recall": {
+      "macro": 0.5,
+      "macro_weighted": 0.5,
+      "micro": 0.5
+    },
+    "f_meas": {
+      "macro": 0.533333333333333,
+      "macro_weighted": 0.533333333333333,
+      "micro": 0.5
+    },
+    "bal_accuracy": {
+      "macro": null,
+      "macro_weighted": 0.583333333333333,
+      "micro": 0.625
+    },
+    "j_index": {
+      "macro": 0.166666666666667,
+      "macro_weighted": 0.166666666666667,
+      "micro": 0.25
+    },
+    "kap": 0.142857142857143,
+    "kap_linear": 0.25,
+    "kap_quadratic": 0.4,
+    "mcc": 0.150755672288882,
+    "accuracy": 0.5,
+    "roc_auc": {
+      "hand_till": 0.833333333333333,
+      "macro": null,
+      "macro_weighted": 0.833333333333333
+    },
+    "pr_auc": {
+      "macro": null,
+      "macro_weighted": 0.8625
+    },
+    "average_precision": {
+      "macro": null,
+      "macro_weighted": 0.836111111111111
+    },
+    "brier_class": 0.228333333333333,
+    "mn_log_loss": 0.766200336056486,
+    "conf_mat": [
+      [2, 1, 0],
+      [1, 1, 0],
+      [0, 1, 0]
+    ]
   }
 }

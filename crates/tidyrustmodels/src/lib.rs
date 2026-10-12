@@ -40,7 +40,9 @@ pub mod prelude {
         Capability, Coefficients, Column, ColumnKind, DesignMatrix, Error, FitDiagnostics, FittedModel,
         ModelSpec, Outcome, Parallelism, Prediction, Result, Role, Schema, Seed, Table,
     };
-    pub use tidyrustmodels_metrics::{Metric, MetricSet, MetricValue};
+    pub use tidyrustmodels_metrics::{
+        ConfusionMatrix, Estimator, KapWeighting, Metric, MetricSet, MetricValue,
+    };
     pub use tidyrustmodels_models::{Engine, LinearRegSpec, LogisticRegSpec};
     pub use tidyrustmodels_recipes::{
         Recipe, Selector, StepCorr, StepDummy, StepImputeMean, StepImputeMedian, StepNormalize, StepNovel,

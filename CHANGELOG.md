@@ -18,6 +18,13 @@ VERIFICATION.md; nothing is claimed beyond those records.
   numeric strata binning.
 - Metrics: rmse, mae, rsq (squared correlation, as yardstick), rsq_trad, accuracy, precision,
   recall, mn_log_loss (eps-clamped, as yardstick); `MetricSet`.
+- Classification metrics with yardstick 1.4.0 semantics: `ConfusionMatrix` (sens, spec,
+  precision, recall, f_meas, bal_accuracy, j_index, kap, mcc, accuracy; binary / macro /
+  macro_weighted / micro), `roc_curve`/`roc_auc` (Hand-Till for multiclass),
+  `pr_curve`/`pr_auc`/`average_precision`, `brier_class`, multiclass `mn_log_loss`; all
+  verified on fixed arrays with ties and degenerate cases and on three reference tasks
+  (VERIFICATION.md Phase 8b). `MetricSet::classification_defaults()` is now tune's
+  `accuracy, roc_auc, brier_class`. Python: `class_metrics`, `conf_mat`.
 - Workflows: `fit`, `predict`, `fit_resamples` with per-fold prep and serial-identical
   parallel execution; versioned JSON round trip.
 - Tuning: `grid_regular`, `grid_random`, `tune_grid`, `show_best`.
@@ -40,6 +47,6 @@ VERIFICATION.md; nothing is claimed beyond those records.
   BENCHMARKS.md for what they show, including where tidyrustmodels is slower than R.
 
 ### Known limitations
-See LIMITATIONS.md. Highlights: binary classification only; general collinearity not
-aliased; smartcore engine always fits an intercept and ignores optimizer settings;
+See LIMITATIONS.md. Highlights: binary classification models only (multiclass metrics exist);
+general collinearity aliased by the native engine only; smartcore engine always fits an intercept and ignores optimizer settings;
 unseen categorical levels at bake time are an error.

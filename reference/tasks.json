@@ -43,7 +43,18 @@
         "accuracy",
         "mn_log_loss",
         "precision",
-        "recall"
+        "recall",
+        "roc_auc",
+        "pr_auc",
+        "average_precision",
+        "f_meas",
+        "sens",
+        "spec",
+        "bal_accuracy",
+        "j_index",
+        "kap",
+        "mcc",
+        "brier_class"
       ]
     },
     {
@@ -64,7 +75,18 @@
         "accuracy",
         "mn_log_loss",
         "precision",
-        "recall"
+        "recall",
+        "roc_auc",
+        "pr_auc",
+        "average_precision",
+        "f_meas",
+        "sens",
+        "spec",
+        "bal_accuracy",
+        "j_index",
+        "kap",
+        "mcc",
+        "brier_class"
       ]
     },
     {
@@ -111,7 +133,18 @@
         "accuracy",
         "mn_log_loss",
         "precision",
-        "recall"
+        "recall",
+        "roc_auc",
+        "pr_auc",
+        "average_precision",
+        "f_meas",
+        "sens",
+        "spec",
+        "bal_accuracy",
+        "j_index",
+        "kap",
+        "mcc",
+        "brier_class"
       ]
     },
     {
