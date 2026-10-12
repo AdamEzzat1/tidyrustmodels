@@ -1,0 +1,28 @@
+[package]
+name = "tidyrustmodels-models"
+description = "Estimator specifications and backend adapters for tidyrustmodels"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+default = ["linfa", "smartcore"]
+linfa = ["dep:linfa", "dep:linfa-linear", "dep:linfa-logistic", "dep:ndarray16"]
+smartcore = ["dep:smartcore"]
+
+[dependencies]
+tidyrustmodels-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+linfa = { workspace = true, optional = true }
+linfa-linear = { workspace = true, optional = true }
+linfa-logistic = { workspace = true, optional = true }
+ndarray16 = { workspace = true, optional = true }
+smartcore = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+approx = { workspace = true }

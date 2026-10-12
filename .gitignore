@@ -1,0 +1,15 @@
+/target
+**/target
+Cargo.lock.bak
+*.pyc
+__pycache__/
+.venv/
+/python/tidyrustmodels/*.pyd
+/python/tidyrustmodels/*.so
+/bindings/python/build/
+/bindings/python/dist/
+/benchmarks/results/*.json
+/benchmarks/results/*.csv
+/reference/fixtures/generated/.cache/
+*.Rhistory
+.RData

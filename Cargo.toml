@@ -1,0 +1,54 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tidyrustmodels-core",
+    "crates/tidyrustmodels-recipes",
+    "crates/tidyrustmodels-models",
+    "crates/tidyrustmodels-resample",
+    "crates/tidyrustmodels-metrics",
+    "crates/tidyrustmodels-workflows",
+    "crates/tidyrustmodels-tune",
+    "crates/tidyrustmodels",
+]
+exclude = ["bindings/python", "benchmarks/rust"]
+
+[workspace.package]
+version = "0.1.0-dev"
+edition = "2021"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/adamezzat/tidyrustmodels"
+authors = ["tidyrustmodels contributors"]
+
+[workspace.dependencies]
+tidyrustmodels-core = { path = "crates/tidyrustmodels-core", version = "0.1.0-dev" }
+tidyrustmodels-recipes = { path = "crates/tidyrustmodels-recipes", version = "0.1.0-dev" }
+tidyrustmodels-models = { path = "crates/tidyrustmodels-models", version = "0.1.0-dev" }
+tidyrustmodels-resample = { path = "crates/tidyrustmodels-resample", version = "0.1.0-dev" }
+tidyrustmodels-metrics = { path = "crates/tidyrustmodels-metrics", version = "0.1.0-dev" }
+tidyrustmodels-workflows = { path = "crates/tidyrustmodels-workflows", version = "0.1.0-dev" }
+tidyrustmodels-tune = { path = "crates/tidyrustmodels-tune", version = "0.1.0-dev" }
+
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+rand = "0.10.3"
+rand_chacha = "0.10.0"
+rayon = "1.12.0"
+linfa = "0.8.1"
+linfa-linear = "0.8.1"
+linfa-logistic = "0.8.1"
+ndarray16 = { package = "ndarray", version = "0.16" }
+smartcore = { version = "0.6.16", default-features = false }
+proptest = "1.12.0"
+approx = "0.5.1"
+criterion = "0.8.2"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+debug = false
+
+[profile.bench]
+inherits = "release"
+debug = true

@@ -1,0 +1,20 @@
+[package]
+name = "tidyrustmodels-resample"
+description = "Reproducible train/test splits and cross-validation folds for tidyrustmodels"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+tidyrustmodels-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rand = { workspace = true }
+rand_chacha = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+approx = { workspace = true }
