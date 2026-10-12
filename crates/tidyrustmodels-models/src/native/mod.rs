@@ -10,6 +10,7 @@
 pub mod irls;
 pub mod multinom;
 pub mod qr;
+pub mod rpart;
 
 use crate::backends::{FitOutput, MultiFitOutput};
 use crate::multinom::MultinomOptions;

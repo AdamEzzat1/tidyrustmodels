@@ -317,7 +317,29 @@ impl PyMultinomReg {
     }
 }
 
+/// `parsnip::decision_tree()` with engine `rpart` (native port, ADR-0011):
+/// `cost_complexity` = `cp`, `tree_depth` = `maxdepth`, `min_n` = `minsplit`.
+#[pyclass(name = "DecisionTree", module = "tidyrustmodels._native", from_py_object)]
+#[derive(Clone)]
+struct PyDecisionTree {
+    inner: DecisionTreeSpec,
+}
+
+#[pymethods]
+impl PyDecisionTree {
+    #[new]
+    #[pyo3(signature = (cost_complexity = 0.01, tree_depth = 30, min_n = 20))]
+    fn new(cost_complexity: f64, tree_depth: usize, min_n: usize) -> PyResult<Self> {
+        Ok(PyDecisionTree {
+            inner: DecisionTreeSpec::new().cost_complexity(cost_complexity).tree_depth(tree_depth).min_n(min_n),
+        })
+    }
+}
+
 fn model_from_py(model: &Bound<'_, PyAny>) -> PyResult<Box<dyn ModelSpec>> {
+    if let Ok(m) = model.extract::<PyDecisionTree>() {
+        return Ok(Box::new(m.inner));
+    }
     if let Ok(m) = model.extract::<PyMultinomReg>() {
         return Ok(Box::new(m.inner));
     }
@@ -327,7 +349,7 @@ fn model_from_py(model: &Bound<'_, PyAny>) -> PyResult<Box<dyn ModelSpec>> {
     if let Ok(m) = model.extract::<PyLogisticReg>() {
         return Ok(Box::new(m.inner));
     }
-    Err(InvalidArgumentError::new_err("model must be a LinearReg, LogisticReg or MultinomReg"))
+    Err(InvalidArgumentError::new_err("model must be a LinearReg, LogisticReg, MultinomReg or DecisionTree"))
 }
 
 // ---------------------------------------------------------------- Resampling
@@ -736,6 +758,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLinearReg>()?;
     m.add_class::<PyLogisticReg>()?;
     m.add_class::<PyMultinomReg>()?;
+    m.add_class::<PyDecisionTree>()?;
     m.add_class::<PyFolds>()?;
     m.add_class::<PyWorkflow>()?;
     m.add_class::<PyFittedWorkflow>()?;

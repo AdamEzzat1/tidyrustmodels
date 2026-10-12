@@ -291,6 +291,20 @@ fn task_table(task: &Value) -> Table {
 }
 
 fn model_for(task: &Value, engine: Engine, y: &Outcome) -> Box<dyn ModelSpec> {
+    if task["model"] == "decision_tree" {
+        let a = &task["model_args"];
+        let mut s = DecisionTreeSpec::new().engine(engine);
+        if let Some(v) = a["cost_complexity"].as_f64() {
+            s = s.cost_complexity(v);
+        }
+        if let Some(v) = a["tree_depth"].as_u64() {
+            s = s.tree_depth(v as usize);
+        }
+        if let Some(v) = a["min_n"].as_u64() {
+            s = s.min_n(v as usize);
+        }
+        return Box::new(s);
+    }
     if task["type"] == "regression" {
         Box::new(LinearRegSpec::new().engine(engine))
     } else if y.as_class().map(|(_, l)| l.len()).unwrap_or(0) > 2 {
@@ -524,15 +538,26 @@ fn differential_against_r_fixtures() {
 
         // ---- Level 3 + 4 per engine ----
         let metrics = MetricSet::from_names(&strs(&task["metrics"])).unwrap();
-        for engine in [Engine::Linfa, Engine::Smartcore, Engine::Native] {
+        let is_tree = task["model"] == "decision_tree";
+        let engines: Vec<Engine> = if is_tree {
+            vec![Engine::Native]
+        } else {
+            vec![Engine::Linfa, Engine::Smartcore, Engine::Native]
+        };
+        for engine in engines {
             let eng = engine.as_str();
             let spec = model_for(task, engine, &y_train);
             let is_multi = spec.name() == "multinom_reg";
             let fitted = spec.fit(&x_train, &y_train).unwrap();
             let r_names = strs(&fx["fit"]["coefficient_names"]);
             let aliased = fitted.diagnostics().aliased;
+            if is_tree {
+                compare_tree(&mut report, &tol, id, eng, fitted.as_ref(), &fx["fit"]["tree"]);
+            }
             // One coefficient set for lm/glm; one per non-baseline level for multinom.
-            let sets: Vec<(Option<String>, Coefficients)> = if is_multi {
+            let sets: Vec<(Option<String>, Coefficients)> = if is_tree {
+                Vec::new()
+            } else if is_multi {
                 let cc = fitted.class_coefficients().unwrap();
                 report.exact(
                     id,
@@ -611,7 +636,16 @@ fn differential_against_r_fixtures() {
                     class_dump.insert(l.clone(), Value::Object(m));
                 }
             }
-            let coefs = &sets[0].1;
+            let coef_names: Option<Vec<String>> = sets.first().map(|(_, c)| {
+                std::iter::once("(Intercept)".to_string())
+                    .chain(c.terms.iter().map(|t| t.0.clone()))
+                    .collect()
+            });
+            let coef_values: Option<Vec<f64>> = sets.first().map(|(_, c)| {
+                std::iter::once(c.intercept.unwrap())
+                    .chain(c.terms.iter().map(|t| t.1))
+                    .collect()
+            });
             if is_multi {
                 // Both solvers minimise the same deviance; ours must not end above nnet's.
                 // Deviance recomputed by the harness from the fitted probabilities on the
@@ -665,13 +699,9 @@ fn differential_against_r_fixtures() {
             // Level 5 support: dump this engine's outputs for the Python parity test.
             let mut dump = serde_json::json!({
                 "task": id, "engine": eng,
-                "coefficient_names": std::iter::once("(Intercept)".to_string())
-                    .chain(coefs.terms.iter().map(|t| t.0.clone()))
-                    .collect::<Vec<_>>(),
+                "coefficient_names": coef_names,
                 "class_coefficients": if is_multi { Value::Object(class_dump.clone()) } else { Value::Null },
-                "coefficients": std::iter::once(coefs.intercept.unwrap())
-                    .chain(coefs.terms.iter().map(|t| t.1))
-                    .collect::<Vec<_>>(),
+                "coefficients": coef_values,
             });
             match &pred_test {
                 Prediction::Numeric(p) => dump["predicted_test"] = serde_json::json!(p),
@@ -700,7 +730,7 @@ fn differential_against_r_fixtures() {
                     "test predictions",
                     &ours,
                     &f64s(&fx["fit"]["predicted_test"]),
-                    tol.pair_eng(id, "ols_pred", eng),
+                    tol.pair_eng(id, if is_tree { "tree_pred" } else { "ols_pred" }, eng),
                 );
             } else {
                 let (codes, levels, probs) = match &pred_test {
@@ -732,7 +762,9 @@ fn differential_against_r_fixtures() {
                             0.0,
                             tol.get_eng(
                                 id,
-                                if is_multi {
+                                if is_tree {
+                                    "tree_prob_abs"
+                                } else if is_multi {
                                     "multinom_prob_abs"
                                 } else {
                                     "logistic_prob_abs"
@@ -751,15 +783,17 @@ fn differential_against_r_fixtures() {
                     &our_classes,
                     &strs(&fx["fit"]["class_test"]),
                 );
-                let d = fitted.diagnostics();
-                report.exact(
-                    id,
-                    eng,
-                    "L3",
-                    "converged",
-                    &d.converged,
-                    &Some(fx["fit"]["converged"].as_bool().unwrap()),
-                );
+                if !is_tree {
+                    let d = fitted.diagnostics();
+                    report.exact(
+                        id,
+                        eng,
+                        "L3",
+                        "converged",
+                        &d.converged,
+                        &Some(fx["fit"]["converged"].as_bool().unwrap()),
+                    );
+                }
             }
             // test-set metrics (level 2 on real predictions)
             let ours = metrics.evaluate(&y_test, &pred_test).unwrap();
@@ -782,6 +816,121 @@ fn differential_against_r_fixtures() {
             // ---- Level 4: resampling with shared folds ----
             let folds = Folds::from_assignments(&u32s(&split["vfold"]["fold_of_row"])).unwrap();
             let wf = Workflow::from_boxed(build_recipe(task), spec);
+            if is_tree {
+                let fold_of_row = u32s(&split["vfold"]["fold_of_row"]);
+                let v = split["vfold"]["v"].as_u64().unwrap() as u32;
+                for k in 0..v {
+                    let analysis: Vec<usize> = fold_of_row
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, f)| **f != k)
+                        .map(|(i, _)| i)
+                        .collect();
+                    let fw = wf.fit(&data.select_rows(&analysis).unwrap()).unwrap();
+                    let fxk = &fx["resample"]["fold_trees"][k as usize];
+                    let label = format!("Fold{:02}", k + 1);
+                    compare_tree_structure(&mut report, &tol, id, eng, &label, fw.model(), fxk);
+                    // assessment predictions: ours vs R's, and the metrics recomputed on
+                    // R's own predictions (isolates the metric port from the model)
+                    let assess: Vec<usize> = fold_of_row
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, f)| **f == k)
+                        .map(|(i, _)| i)
+                        .collect();
+                    let assess_data = data.select_rows(&assess).unwrap();
+                    let ours = fw.predict(&assess_data).unwrap();
+                    let truth =
+                        Outcome::from_column(assess_data.column(task["outcome"].as_str().unwrap()).unwrap())
+                            .unwrap();
+                    let r_pred = match &ours {
+                        Prediction::Numeric(p) => {
+                            let r = f64s(&fxk["assess_pred"]);
+                            report.compare(
+                                id,
+                                eng,
+                                "L4",
+                                &format!("{label} assessment predictions"),
+                                p,
+                                &r,
+                                tol.pair_eng(id, "tree_pred", eng),
+                            );
+                            Prediction::Numeric(r)
+                        }
+                        Prediction::Class {
+                            codes,
+                            levels,
+                            probabilities: Some(p),
+                        } => {
+                            let r_rows: Vec<Vec<f64>> =
+                                items(&fxk["assess_prob"]).into_iter().map(f64s).collect();
+                            let flat_ours = p.to_row_major();
+                            let flat_r: Vec<f64> = r_rows.iter().flatten().copied().collect();
+                            report.compare(
+                                id,
+                                eng,
+                                "L4",
+                                &format!("{label} assessment probabilities"),
+                                &flat_ours,
+                                &flat_r,
+                                (0.0, tol.get_eng(id, "tree_prob_abs", eng)),
+                            );
+                            let r_class: Vec<String> = strs(&fxk["assess_class"]);
+                            report.exact(
+                                id,
+                                eng,
+                                "L4",
+                                &format!("{label} assessment classes"),
+                                &codes
+                                    .iter()
+                                    .map(|c| levels[*c as usize].clone())
+                                    .collect::<Vec<_>>(),
+                                &r_class,
+                            );
+                            let r_codes: Vec<u32> = r_class
+                                .iter()
+                                .map(|s| levels.iter().position(|l| l == s).unwrap() as u32)
+                                .collect();
+                            Prediction::Class {
+                                codes: r_codes,
+                                levels: levels.clone(),
+                                probabilities: Some(
+                                    DesignMatrix::from_row_major(
+                                        &flat_r,
+                                        r_rows.len(),
+                                        levels.len(),
+                                        levels.clone(),
+                                    )
+                                    .unwrap(),
+                                ),
+                            }
+                        }
+                        _ => unreachable!(),
+                    };
+                    for m in metrics.evaluate(&truth, &r_pred).unwrap() {
+                        let theirs = fx["resample"]["per_fold"][&label][&m.name].as_f64();
+                        match (m.value, theirs) {
+                            (Some(a), Some(b)) => report.compare(
+                                id,
+                                eng,
+                                "L4",
+                                &format!("{label} {} on R's predictions", m.name),
+                                &[a],
+                                &[b],
+                                tol.pair_eng(id, "resample_metric", eng),
+                            ),
+                            (a, b) => report.exact(
+                                id,
+                                eng,
+                                "L4",
+                                &format!("{label} {} on R's predictions (NA)", m.name),
+                                &a,
+                                &b,
+                            ),
+                        }
+                    }
+                }
+            }
             let res = wf
                 .fit_resamples(&data, &folds, &metrics, Parallelism::threads(4))
                 .unwrap();
@@ -1199,6 +1348,242 @@ fn differential_against_r_fixtures() {
     }
 
     report.write_and_assert();
+}
+
+/// Compare an rpart-port tree with `fit$frame` / `fit$splits` from R, node by node in
+/// pre-order: structure and counts exactly, floating-point quantities to tolerance.
+fn compare_tree(
+    report: &mut Report,
+    tol: &Tolerances,
+    id: &str,
+    eng: &str,
+    fitted: &dyn FittedModel,
+    fx: &Value,
+) {
+    let state = fitted.state().unwrap();
+    let tree: tidyrustmodels::models::FittedDecisionTree = serde_json::from_value(state).unwrap();
+    let nodes = tree.tree.root.preorder();
+    let b = tol.pair_eng(id, "tree_frame", eng);
+    let r_nodes: Vec<u64> = items(&fx["node"]).iter().map(|v| v.as_u64().unwrap()).collect();
+    report.exact(
+        id,
+        eng,
+        "L3",
+        "tree node numbers",
+        &nodes.iter().map(|n| u64::from(n.number)).collect::<Vec<_>>(),
+        &r_nodes,
+    );
+    let r_vars = strs(&fx["var"]);
+    let our_vars: Vec<String> = nodes
+        .iter()
+        .map(|n| {
+            n.split
+                .as_ref()
+                .map(|s| tree.var_name(s.var).to_string())
+                .unwrap_or_else(|| "<leaf>".into())
+        })
+        .collect();
+    report.exact(id, eng, "L3", "tree split variables", &our_vars, &r_vars);
+    report.exact(
+        id,
+        eng,
+        "L3",
+        "tree node sizes",
+        &nodes.iter().map(|n| n.n as u64).collect::<Vec<_>>(),
+        &items(&fx["n"])
+            .iter()
+            .map(|v| v.as_u64().unwrap())
+            .collect::<Vec<_>>(),
+    );
+    report.compare(
+        id,
+        eng,
+        "L3",
+        "tree node weights",
+        &nodes.iter().map(|n| n.sum_wt).collect::<Vec<_>>(),
+        &f64s(&fx["wt"]),
+        b,
+    );
+    report.compare(
+        id,
+        eng,
+        "L3",
+        "tree node deviance",
+        &nodes.iter().map(|n| n.risk).collect::<Vec<_>>(),
+        &f64s(&fx["dev"]),
+        b,
+    );
+    report.compare(
+        id,
+        eng,
+        "L3",
+        "tree node complexity",
+        &nodes.iter().map(|n| n.complexity).collect::<Vec<_>>(),
+        &f64s(&fx["complexity"]),
+        b,
+    );
+    let yval: Vec<f64> = nodes
+        .iter()
+        .map(|n| match &n.value {
+            tidyrustmodels::models::native::rpart::NodeValue::Mean(m) => *m,
+            tidyrustmodels::models::native::rpart::NodeValue::Class { class, .. } => *class as f64,
+        })
+        .collect();
+    report.compare(id, eng, "L3", "tree node yval", &yval, &f64s(&fx["yval"]), b);
+    let splits: Vec<&tidyrustmodels::models::native::rpart::Split> =
+        nodes.iter().filter_map(|n| n.split.as_ref()).collect();
+    let r_points: Vec<f64> = f64s(&fx["split_point"])
+        .into_iter()
+        .filter(|v| !v.is_nan())
+        .collect();
+    report.compare(
+        id,
+        eng,
+        "L3",
+        "tree split points",
+        &splits.iter().map(|s| s.point).collect::<Vec<_>>(),
+        &r_points,
+        b,
+    );
+    let r_dirs: Vec<i64> = items(&fx["split_dir"])
+        .iter()
+        .filter_map(|v| v.as_i64())
+        .collect();
+    report.exact(
+        id,
+        eng,
+        "L3",
+        "tree split directions",
+        &splits.iter().map(|s| i64::from(s.direction)).collect::<Vec<_>>(),
+        &r_dirs,
+    );
+    let r_counts: Vec<u64> = items(&fx["split_count"])
+        .iter()
+        .filter_map(|v| v.as_u64())
+        .collect();
+    report.exact(
+        id,
+        eng,
+        "L3",
+        "tree split counts",
+        &splits.iter().map(|s| s.count as u64).collect::<Vec<_>>(),
+        &r_counts,
+    );
+    let r_improve: Vec<f64> = f64s(&fx["split_improve"])
+        .into_iter()
+        .filter(|v| !v.is_nan())
+        .collect();
+    report.compare(
+        id,
+        eng,
+        "L3",
+        "tree split improvements",
+        &splits.iter().map(|s| s.improve).collect::<Vec<_>>(),
+        &r_improve,
+        b,
+    );
+    if !fx["counts"].is_null() {
+        let r_counts: Vec<f64> = items(&fx["counts"]).into_iter().flat_map(f64s).collect();
+        let ours: Vec<f64> = nodes
+            .iter()
+            .flat_map(|n| match &n.value {
+                tidyrustmodels::models::native::rpart::NodeValue::Class { counts, .. } => counts.clone(),
+                _ => unreachable!(),
+            })
+            .collect();
+        report.compare(id, eng, "L3", "tree class counts", &ours, &r_counts, b);
+    }
+}
+
+/// Per-fold tree check (L4): structure exact, split points / improvements / deviances
+/// to the tree tolerance.
+fn compare_tree_structure(
+    report: &mut Report,
+    tol: &Tolerances,
+    id: &str,
+    eng: &str,
+    label: &str,
+    fitted: &dyn FittedModel,
+    fx: &Value,
+) {
+    let state = fitted.state().unwrap();
+    let tree: tidyrustmodels::models::FittedDecisionTree = serde_json::from_value(state).unwrap();
+    let nodes = tree.tree.root.preorder();
+    let b = tol.pair_eng(id, "tree_frame", eng);
+    let r_nodes: Vec<u64> = items(&fx["node"]).iter().map(|v| v.as_u64().unwrap()).collect();
+    report.exact(
+        id,
+        eng,
+        "L4",
+        &format!("{label} tree node numbers"),
+        &nodes.iter().map(|n| u64::from(n.number)).collect::<Vec<_>>(),
+        &r_nodes,
+    );
+    let our_vars: Vec<String> = nodes
+        .iter()
+        .map(|n| {
+            n.split
+                .as_ref()
+                .map(|s| tree.var_name(s.var).to_string())
+                .unwrap_or_else(|| "<leaf>".into())
+        })
+        .collect();
+    report.exact(
+        id,
+        eng,
+        "L4",
+        &format!("{label} tree split variables"),
+        &our_vars,
+        &strs(&fx["var"]),
+    );
+    report.exact(
+        id,
+        eng,
+        "L4",
+        &format!("{label} tree node sizes"),
+        &nodes.iter().map(|n| n.n as u64).collect::<Vec<_>>(),
+        &items(&fx["n"])
+            .iter()
+            .map(|v| v.as_u64().unwrap())
+            .collect::<Vec<_>>(),
+    );
+    report.compare(
+        id,
+        eng,
+        "L4",
+        &format!("{label} tree node deviance"),
+        &nodes.iter().map(|n| n.risk).collect::<Vec<_>>(),
+        &f64s(&fx["dev"]),
+        b,
+    );
+    let splits: Vec<&tidyrustmodels::models::native::rpart::Split> =
+        nodes.iter().filter_map(|n| n.split.as_ref()).collect();
+    let r_points: Vec<f64> = f64s(&fx["split_point"])
+        .into_iter()
+        .filter(|v| !v.is_nan())
+        .collect();
+    report.compare(
+        id,
+        eng,
+        "L4",
+        &format!("{label} tree split points"),
+        &splits.iter().map(|s| s.point).collect::<Vec<_>>(),
+        &r_points,
+        b,
+    );
+    let r_improve: Vec<f64> = f64s(&fx["split_improve"])
+        .into_iter()
+        .filter(|v| !v.is_nan())
+        .collect();
+    report.compare(
+        id,
+        eng,
+        "L4",
+        &format!("{label} tree split improvements"),
+        &splits.iter().map(|s| s.improve).collect::<Vec<_>>(),
+        &r_improve,
+        b,
+    );
 }
 
 fn rmse_vec(t: &[f64], e: &[f64]) -> f64 {

@@ -66,13 +66,16 @@ yardstick 1.4.0, tune 2.1.0.
 | `multinom` with rank-deficient design | aliased columns → coefficient 0 + `aliased` (ADR-0007) | nnet keeps unidentified parameters (no `NA`) | **difference** |
 | `multinom` with an outcome level absent from training | error | nnet fits (that level's probabilities collapse) | **difference** |
 | `tidy(multinom_fit)` std.error / p.value | not provided | | unsupported |
+| `decision_tree()` + `set_engine("rpart")` | `DecisionTreeSpec` (native port of rpart 4.1.23, ADR-0011) | `cost_complexity` → `cp`, `tree_depth` → `maxdepth`, `min_n` → `minsplit` (`minbucket = round(min_n/3)`); anova / gini with default priors; midpoint splits; rpart's quicksort tie order and altered-prior round-off reproduced | tested (L3 whole tree exact + round-off on 5 tasks, L4 25 fold trees and predictions, Phase 8d) |
+| `predict(type = "prob")` for rpart | `yprob` in R's arithmetic (`counts × prior/freq`, `rowSums`) | mathematically the node class share; R's rounding gives different last bits for equal shares in different nodes, which ROC/PR ties see; reproduced | tested (fold ROC/PR exact) |
+| rpart categorical splits, surrogates, `xval` cp table, non-default `parms` (priors, loss), `cost` | not supported | nominals must be dummy-encoded and predictors complete (as a recipe does); predictors with missing values are an error | **unsupported** |
 | Case weights | not supported | | unsupported |
 | `workflowsets` | not supported | | unsupported |
 
 ## Unsupported in v0.1
 
 workflowsets, bootstraps, repeated CV, grouped resampling, case weights,
-glmnet-equivalent penalization, tree models, `tailor` post-processing,
+glmnet-equivalent penalization, random forests and boosted trees, `tailor` post-processing,
 `step_zv(group =)`, `step_corr(method = "spearman"/"kendall")`, case-weighted filters,
 `roc_curve(thresholds =)`, `gain_curve`/`lift_curve`, `classification_cost`,
 `roc_aunp`/`roc_aunu`, `detection_prevalence`, `npv`/`ppv`, `mn_log_loss(sum = TRUE)`.

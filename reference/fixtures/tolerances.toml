@@ -45,6 +45,19 @@ multinom_coef_rel = 1e-6
 multinom_prob_abs = 1e-7
 multinom_deviance_rel = 1e-13
 
+# Level 3/4: decision trees (rpart port). The algorithm is deterministic and ported
+# operation for operation (including rpart's quicksort tie order and the altered-prior
+# round-off), so node structure, counts and directions are compared exactly and the
+# floating-point quantities (split points, deviances, means, class shares, cp,
+# predictions) to round-off. First run (2026-10-12, VERIFICATION.md Phase 8d): max
+# 1.3e-14 relative over 5 tasks, 25 fold trees and all predictions; bounds are ~8x the
+# measured maximum (tightened from the provisional 1e-10).
+tree_frame_rel = 1e-13
+tree_frame_abs = 1e-13
+tree_pred_rel = 1e-13
+tree_pred_abs = 1e-13
+tree_prob_abs = 1e-13
+
 # Level 4: per-fold metrics inherit the level-3 bound of the task; summary mean/std_err
 # are plain arithmetic over per-fold values.
 resample_metric_rel = 1e-7

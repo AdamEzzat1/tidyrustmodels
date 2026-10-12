@@ -16,9 +16,11 @@ pub mod linear;
 pub mod logistic;
 pub mod multinom;
 pub mod native;
+pub mod tree;
 
 pub use backends::Engine;
 pub use fitted::{fitted_model_from_state, FittedLinear, FittedLogistic, FittedMultinom};
 pub use linear::LinearRegSpec;
 pub use logistic::LogisticRegSpec;
 pub use multinom::MultinomRegSpec;
+pub use tree::{DecisionTreeSpec, FittedDecisionTree};

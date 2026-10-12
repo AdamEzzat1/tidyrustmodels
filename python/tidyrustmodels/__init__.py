@@ -20,6 +20,7 @@ import numpy as np
 from . import _native
 from ._native import (
     BackendError,
+    DecisionTree,
     FittedWorkflow,
     Folds,
     InvalidArgumentError,
@@ -50,6 +51,7 @@ __all__ = [
     "LinearReg",
     "LogisticReg",
     "MultinomReg",
+    "DecisionTree",
     "Workflow",
     "FittedWorkflow",
     "Folds",

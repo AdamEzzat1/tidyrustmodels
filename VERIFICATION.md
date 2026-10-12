@@ -256,6 +256,56 @@ separable; nnet reports convergence at coefficient magnitudes of 90–250 that d
 its stopping rule, so no finite reference exists. Not covered: `penalty > 0` against
 `decay`, case weights, absent outcome levels.
 
+## Decision trees (Phase 8d)
+
+Executed 2026-10-12. `DecisionTreeSpec` is a port of rpart 4.1.23's C sources
+(ADR-0011) verified against `parsnip::decision_tree() %>% set_engine("rpart")` on five
+new tasks, two of them with non-default `cost_complexity` / `tree_depth` / `min_n`:
+
+| task | outcome | tree (nodes) | what is compared |
+|---|---|---|---|
+| `synth_reg_tree` | numeric | 3 | `frame` (node numbers, split variable, n, wt, dev, yval, cp), primary `splits` (point, direction, count, improve), test predictions, metrics, 5 fold trees + assessment predictions |
+| `ames_reg_tree` (cp 0.001, depth 8, min_n 10) | numeric | 103 | same |
+| `synth_clf_tree` (min_n 8) | binary | 3 | same + class counts and probabilities |
+| `synth_multi_tree` (cp 0.005, min_n 5) | 3 classes | 47 | same |
+| `penguins_species_tree` | 3 classes | 5 | same |
+
+Result: structure, directions, sizes and counts **exact** on every full-data tree and on
+all 25 fold trees; split points, deviances, means, class shares, cp and `improve`
+within 1.3e-14 relative; assessment predictions and probabilities identical to
+round-off; every fold metric, including the tie-sensitive ROC/PR family, within the
+regular bounds (differential suite now 4126 comparisons, 0 failures).
+
+Findings on the way, each of which produced a measurable disagreement before it was
+fixed and none of which is visible from the final tree alone:
+
+1. **Predictor scale.** With `step_normalize` before the tree, assessment rows whose
+   raw value equals a split point (an integer exactly halfway between two training
+   values) were routed by the last bit of the baked value, which differs between R and
+   Rust; a near-tie between two variables flipped the same way. Tree tasks therefore
+   keep raw predictors (trees are invariant to monotone transforms); with raw values
+   the baked matrices are bitwise identical in both systems.
+2. **Sort order.** rpart's `mysort` is an unstable quicksort; the order of tied values
+   fixes the floating-point accumulation order of the split sums and hence which of two
+   exactly tied splits wins. The sort is ported literally.
+3. **Altered priors.** With default `parms`, `giniinit`'s `aprior` factors are 1 only up
+   to an ulp (the class proportions need not sum to exactly 1 in binary), and that ulp
+   decided an x2/x3 tie at one node of one fold. The factors are computed as in C.
+4. **Class probabilities.** rpart's R code forms `yprob` as `counts × (prior/freq)`
+   normalised by `rowSums`, which yields different doubles for the same share (1/6 as
+   0.16666666666666666 and 0.16666666666666669 in two nodes); yardstick's ROC/PR curves
+   see those as distinct thresholds. The port uses the same arithmetic. Relatedly, the
+   fixtures are now written with 17 significant digits: jsonlite's default 15 merged the
+   two doubles and changed `roc_auc` by 1e-3 on two folds.
+
+Independent baselines in `crates/tidyrustmodels-models/tests/tree.rs` and the
+`native::rpart` unit tests: closed-form splits and leaf means, Gini class shares, the
+rpart rule that a split must reduce the risk even at `cp = 0`, first-level tie-breaking,
+`minsplit` / `maxdepth` stops, parameter validation, exact state round trip.
+
+Not covered: categorical splits, surrogates, non-default priors/loss, case weights
+(Phase 8e), the cp table and `xval`.
+
 ## Test inventory
 
 | suite | location | runs in CI | needs R |
@@ -265,6 +315,7 @@ its stopping rule, so no finite reference exists. Not covered: `penalty > 0` aga
 | analytic baselines | `crates/tidyrustmodels-models/tests/baselines.rs` | yes | no |
 | collinearity behaviour | `crates/tidyrustmodels-models/tests/collinear.rs` | yes | no |
 | multinomial baselines | `crates/tidyrustmodels-models/tests/multinom.rs` | yes | no |
+| decision-tree baselines | `crates/tidyrustmodels-models/tests/tree.rs` | yes | no |
 | differential vs pinned R fixtures | `crates/tidyrustmodels/tests/differential.rs` | yes | no (fixtures committed) |
 | fixture regeneration | `reference/tidymodels-r/` | scheduled job only | yes |
 | Python parity | `python/tests/` | yes (python job) | no |

@@ -414,6 +414,9 @@ pub fn fitted_model_from_state(value: &serde_json::Value) -> Result<Box<dyn Fitt
         "linear_reg" => Box::new(serde_json::from_value::<FittedLinear>(value.clone()).map_err(de)?),
         "logistic_reg" => Box::new(serde_json::from_value::<FittedLogistic>(value.clone()).map_err(de)?),
         "multinom_reg" => Box::new(serde_json::from_value::<FittedMultinom>(value.clone()).map_err(de)?),
+        "decision_tree" => {
+            Box::new(serde_json::from_value::<crate::tree::FittedDecisionTree>(value.clone()).map_err(de)?)
+        }
         other => return Err(Error::Serialization(format!("unknown model `{other}`"))),
     })
 }

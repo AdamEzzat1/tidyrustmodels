@@ -30,6 +30,12 @@ VERIFICATION.md; nothing is claimed beyond those records.
   linfa/smartcore softmax converted to baseline form), `FittedModel::class_coefficients`,
   `Capability::MulticlassClassification`; two reference tasks against `nnet` (deviance
   agrees to 2.4e-15, coefficients to nnet's 3.5e-7 residual). Python: `MultinomReg`.
+- `DecisionTreeSpec` (`decision_tree`, engine rpart; ADR-0011): a native port of rpart
+  4.1.23's partitioning for continuous predictors (anova and gini, rpart's quicksort tie
+  order, altered-prior and `yprob` round-off reproduced). Five reference tasks: whole
+  trees exact against R, 25 fold trees exact, predictions and metrics to round-off.
+  Tasks can now name a `model` and `model_args`; fixtures carry 17 significant digits.
+  Python: `DecisionTree`.
 - Workflows: `fit`, `predict`, `fit_resamples` with per-fold prep and serial-identical
   parallel execution; versioned JSON round trip.
 - Tuning: `grid_regular`, `grid_random`, `tune_grid`, `show_best`.

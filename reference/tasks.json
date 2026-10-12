@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "notes": "Single source of truth for the differential suite. R (reference/tidymodels-r/run_reference.R), Python (reference/fixtures/generate_splits.py) and Rust (crates/tidyrustmodels/tests/differential.rs) all read this file. Step vocabulary: impute_median_numeric, impute_mean_numeric, normalize_numeric, dummy_nominal, zv, nzv, corr_numeric (threshold 0.9), other_nominal (threshold 0.05), novel_nominal, unknown_nominal (recipes defaults). Splits: initial = 75/25 (stratified by outcome for classification), vfold5 = 5-fold (stratified by outcome for classification). Classification tasks whose outcome has more than two levels are fitted with multinom_reg (R: nnet with maxit = 10000, reltol = 1e-15; Rust: MultinomRegSpec) and use yardstick's multiclass estimator defaults.",
+  "notes": "Single source of truth for the differential suite. R (reference/tidymodels-r/run_reference.R), Python (reference/fixtures/generate_splits.py) and Rust (crates/tidyrustmodels/tests/differential.rs) all read this file. Step vocabulary: impute_median_numeric, impute_mean_numeric, normalize_numeric, dummy_nominal, zv, nzv, corr_numeric (threshold 0.9), other_nominal (threshold 0.05), novel_nominal, unknown_nominal (recipes defaults). Splits: initial = 75/25 (stratified by outcome for classification), vfold5 = 5-fold (stratified by outcome for classification). Classification tasks whose outcome has more than two levels are fitted with multinom_reg (R: nnet with maxit = 10000, reltol = 1e-15; Rust: MultinomRegSpec) and use yardstick's multiclass estimator defaults. A task's optional `model` (`decision_tree`; default: linear_reg / logistic_reg / multinom_reg by outcome) and `model_args` (parsnip argument names) select the estimator in all three systems. Tree tasks keep predictors on their raw scale: trees are invariant to monotone transforms, and normalising would make exact ties at split points depend on the last bit of the baked values, which differs between R and Rust.",
   "tasks": [
     {
       "id": "synth_reg",
@@ -270,6 +270,159 @@
         "impute_median_numeric",
         "normalize_numeric"
       ],
+      "metrics": [
+        "accuracy",
+        "mn_log_loss",
+        "precision",
+        "recall",
+        "roc_auc",
+        "pr_auc",
+        "average_precision",
+        "f_meas",
+        "sens",
+        "spec",
+        "bal_accuracy",
+        "j_index",
+        "kap",
+        "mcc",
+        "brier_class"
+      ]
+    },
+    {
+      "id": "synth_reg_tree",
+      "dataset": "synthetic_reg_small",
+      "type": "regression",
+      "outcome": "y",
+      "predictors": [
+        "x1",
+        "x2",
+        "x3",
+        "g"
+      ],
+      "steps": [
+        "impute_median_numeric",
+        "dummy_nominal"
+      ],
+      "model": "decision_tree",
+      "metrics": [
+        "rmse",
+        "rsq",
+        "mae",
+        "rsq_trad"
+      ]
+    },
+    {
+      "id": "ames_reg_tree",
+      "dataset": "ames",
+      "type": "regression",
+      "outcome": "Sale_Price",
+      "predictors": [
+        "Gr_Liv_Area",
+        "Year_Built",
+        "Total_Bsmt_SF",
+        "Bldg_Type",
+        "Neighborhood"
+      ],
+      "steps": [
+        "dummy_nominal"
+      ],
+      "model": "decision_tree",
+      "model_args": {
+        "cost_complexity": 0.001,
+        "tree_depth": 8,
+        "min_n": 10
+      },
+      "metrics": [
+        "rmse",
+        "rsq",
+        "mae"
+      ]
+    },
+    {
+      "id": "synth_clf_tree",
+      "dataset": "synthetic_clf_small",
+      "type": "classification",
+      "outcome": "y",
+      "predictors": [
+        "x1",
+        "x2",
+        "g"
+      ],
+      "steps": [
+        "dummy_nominal"
+      ],
+      "model": "decision_tree",
+      "model_args": {
+        "min_n": 8
+      },
+      "metrics": [
+        "accuracy",
+        "mn_log_loss",
+        "precision",
+        "recall",
+        "roc_auc",
+        "pr_auc",
+        "average_precision",
+        "f_meas",
+        "sens",
+        "spec",
+        "bal_accuracy",
+        "j_index",
+        "kap",
+        "mcc",
+        "brier_class"
+      ]
+    },
+    {
+      "id": "synth_multi_tree",
+      "dataset": "synthetic_multi_small",
+      "type": "classification",
+      "outcome": "y",
+      "predictors": [
+        "x1",
+        "x2",
+        "x3",
+        "g"
+      ],
+      "steps": [
+        "dummy_nominal"
+      ],
+      "model": "decision_tree",
+      "model_args": {
+        "cost_complexity": 0.005,
+        "min_n": 5
+      },
+      "metrics": [
+        "accuracy",
+        "mn_log_loss",
+        "precision",
+        "recall",
+        "roc_auc",
+        "pr_auc",
+        "average_precision",
+        "f_meas",
+        "sens",
+        "spec",
+        "bal_accuracy",
+        "j_index",
+        "kap",
+        "mcc",
+        "brier_class"
+      ]
+    },
+    {
+      "id": "penguins_species_tree",
+      "dataset": "penguins",
+      "type": "classification",
+      "outcome": "species",
+      "predictors": [
+        "bill_length_mm",
+        "body_mass_g"
+      ],
+      "steps": [
+        "impute_median_numeric"
+      ],
+      "model": "decision_tree",
       "metrics": [
         "accuracy",
         "mn_log_loss",

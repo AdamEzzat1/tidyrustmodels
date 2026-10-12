@@ -1,6 +1,8 @@
 # Run the R tidymodels reference for every task in reference/tasks.json and write
 # one JSON fixture per task to reference/fixtures/r/<task_id>.json, plus
 # metrics_fixed.json (yardstick on fixed arrays, comparison level 2).
+# Numbers are written with 17 significant digits so every double round-trips exactly
+# (15 digits merged distinct doubles, which breaks ties in curve metrics).
 #
 # Run from the repository root AFTER export_datasets.R, make_synthetic.py and
 # generate_splits.py:
@@ -83,8 +85,12 @@ run_task <- function(task) {
   f <- as.formula(paste(task$outcome, "~ ."))
   rec <- add_steps(recipe(f, data = train), task$steps)
   n_lv <- if (task$type == "classification") nlevels(train[[task$outcome]]) else 0L
-  multi <- n_lv > 2
-  model <- if (task$type == "regression") linear_reg() %>% set_engine("lm") else
+  is_tree <- identical(task$model, "decision_tree")
+  multi <- n_lv > 2 && !is_tree
+  model <- if (is_tree) {
+    args <- if (is.null(task$model_args)) list() else task$model_args
+    do.call(decision_tree, args) %>% set_engine("rpart") %>% set_mode(task$type)
+  } else if (task$type == "regression") linear_reg() %>% set_engine("lm") else
            if (multi) multinom_reg() %>% set_engine("nnet", maxit = 10000, reltol = 1e-15, trace = FALSE) else
            logistic_reg() %>% set_engine("glm")
   wf <- workflow() %>% add_recipe(rec) %>% add_model(model)
@@ -103,8 +109,28 @@ run_task <- function(task) {
   # ---- Level 3: estimator ----
   fit <- fit(wf, data = train)
   eng <- extract_fit_engine(fit)
-  coefs <- coef(eng)
+  tree_info <- if (is_tree) {
+    fr <- eng$frame
+    nn <- nrow(fr)
+    leaf <- fr$var == "<leaf>"
+    idx <- 1L + c(0L, cumsum((!leaf) + fr$ncompete + fr$nsurrogate))[-(nn + 1L)]
+    idx[leaf] <- NA
+    sp <- eng$splits
+    k <- n_lv
+    list(node = as.integer(row.names(fr)), var = as.character(fr$var), n = fr$n, wt = fr$wt, dev = fr$dev,
+         yval = fr$yval, complexity = fr$complexity,
+         split_point = ifelse(is.na(idx), NA, sp[idx, "index"]),
+         split_dir = ifelse(is.na(idx), NA, sp[idx, "ncat"]),
+         split_improve = ifelse(is.na(idx), NA, sp[idx, "improve"]),
+         split_count = ifelse(is.na(idx), NA, sp[idx, "count"]),
+         counts = if (k > 0) unname(as.matrix(fr$yval2[, 1L + (1:k), drop = FALSE])) else NULL,
+         yprob = if (k > 0) unname(as.matrix(fr$yval2[, 1L + k + (1:k), drop = FALSE])) else NULL,
+         cptable = unname(eng$cptable[, c("CP", "nsplit", "rel error"), drop = FALSE]),
+         control = eng$control[c("minsplit", "minbucket", "cp", "maxdepth")])
+  } else NULL
+  coefs <- if (is_tree) NULL else coef(eng)
   coef_list <- function(cf) {
+    if (is.null(cf)) return(NULL)
     if (is.matrix(cf)) lapply(setNames(seq_len(nrow(cf)), rownames(cf)), function(r) as.list(cf[r, ])) else as.list(cf)
   }
   nnet_default <- if (multi) {
@@ -113,8 +139,9 @@ run_task <- function(task) {
     list(value = e2$value, convergence = e2$convergence, coefficients = coef_list(coef(e2)))
   } else NULL
   fit_info <- list(
+    tree = tree_info,
     coefficients = coef_list(coefs),
-    coefficient_names = if (multi) colnames(coefs) else names(coefs),
+    coefficient_names = if (is_tree) NULL else if (multi) colnames(coefs) else names(coefs),
     coefficient_levels = if (multi) rownames(coefs) else NULL,
     nnet_value = if (multi) eng$value else NULL,
     nnet_default = nnet_default,
@@ -123,9 +150,9 @@ run_task <- function(task) {
     predicted_test = if (task$type == "regression") as.numeric(predict(fit, test)$.pred)
                      else columns_as_list(predict(fit, test, type = "prob")),
     class_test = if (task$type == "classification") as.character(predict(fit, test)$.pred_class) else NULL,
-    converged = if (task$type == "classification") { if (multi) eng$convergence == 0 else eng$converged } else NULL,
-    iterations = if (task$type == "classification" && !multi) eng$iter else NULL,
-    deviance = if (task$type == "classification") { if (multi) 2 * eng$value else eng$deviance } else NULL,
+    converged = if (task$type == "classification" && !is_tree) { if (multi) eng$convergence == 0 else eng$converged } else NULL,
+    iterations = if (task$type == "classification" && !multi && !is_tree) eng$iter else NULL,
+    deviance = if (task$type == "classification" && !is_tree) { if (multi) 2 * eng$value else eng$deviance } else NULL,
     outcome_levels = if (task$type == "classification") levels(train[[task$outcome]]) else NULL,
     xtx_condition = {
       X <- as.matrix(baked_train[, pred_cols, drop = FALSE]); X <- cbind(1, X)
@@ -138,7 +165,7 @@ run_task <- function(task) {
       m <- ms(data.frame(truth = test[[task$outcome]], estimate = fit_info$predicted_test), truth = truth, estimate = estimate)
     } else {
       probs <- predict(fit, test, type = "prob"); cls <- predict(fit, test)$.pred_class
-      if (multi) {
+      if (n_lv > 2) {
         d <- cbind(data.frame(truth = test[[task$outcome]], estimate = cls), as.data.frame(probs))
         m <- ms(d, truth = truth, estimate = estimate, tidyselect::starts_with(".pred_"))
       } else {
@@ -157,6 +184,20 @@ run_task <- function(task) {
     make_splits(list(analysis = setdiff(seq_len(nrow(df)), assess), assessment = assess), data = df)
   })
   rset <- manual_rset(splits, sprintf("Fold%02d", seq_len(v)))
+  tree_frame <- function(e) {
+    fr <- e$frame; nn <- nrow(fr); leaf <- fr$var == "<leaf>"
+    idx <- 1L + c(0L, cumsum((!leaf) + fr$ncompete + fr$nsurrogate))[-(nn + 1L)]; idx[leaf] <- NA
+    list(node = as.integer(row.names(fr)), var = as.character(fr$var), n = fr$n, dev = fr$dev,
+         split_point = if (is.null(e$splits)) NULL else ifelse(is.na(idx), NA, e$splits[idx, "index"]),
+         split_improve = if (is.null(e$splits)) NULL else ifelse(is.na(idx), NA, e$splits[idx, "improve"]))
+  }
+  fold_trees <- if (is_tree) lapply(splits, function(s) {
+    f <- fit(wf, data = analysis(s)); a <- assessment(s)
+    c(tree_frame(extract_fit_engine(f)),
+      if (task$type == "regression") list(assess_pred = as.numeric(predict(f, a)$.pred))
+      else list(assess_prob = unname(as.matrix(predict(f, a, type = "prob"))),
+                assess_class = as.character(predict(f, a)$.pred_class)))
+  }) else NULL
   ms <- do.call(metric_set, unname(metric_fns[unlist(task$metrics)]))
   res <- fit_resamples(wf, resamples = rset, metrics = ms)
   per_fold <- collect_metrics(res, summarize = FALSE)
@@ -174,9 +215,9 @@ run_task <- function(task) {
                 predictor_names = pred_cols),
     fit = fit_info,
     test_metrics = test_metrics,
-    resample = list(ids = names(per_fold_list), per_fold = per_fold_list, summary = summary_list)
+    resample = list(ids = names(per_fold_list), per_fold = per_fold_list, summary = summary_list, fold_trees = fold_trees)
   )
-  write_json(out, file.path(out_dir, paste0(task$id, ".json")), auto_unbox = TRUE, digits = NA, na = "null", null = "null", pretty = FALSE)
+  write_json(out, file.path(out_dir, paste0(task$id, ".json")), auto_unbox = TRUE, digits = I(17), na = "null", null = "null", pretty = FALSE)
   cat("   wrote", file.path(out_dir, paste0(task$id, ".json")), "\n")
 }
 
@@ -276,5 +317,5 @@ fixed$undefined <- c(fixed$undefined, suppressWarnings(list(
   sens_no_events = sens_vec(factor(c("b", "b"), levels = lv), factor(c("a", "b"), levels = lv)),
   f_meas_both_zero = f_meas_vec(factor(c("a", "b"), levels = lv), factor(c("b", "a"), levels = lv))
 )))
-write_json(fixed, file.path(out_dir, "metrics_fixed.json"), auto_unbox = TRUE, digits = NA, na = "null", null = "null", pretty = TRUE)
+write_json(fixed, file.path(out_dir, "metrics_fixed.json"), auto_unbox = TRUE, digits = I(17), na = "null", null = "null", pretty = TRUE)
 cat("wrote metrics_fixed.json\n")

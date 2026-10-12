@@ -2,8 +2,10 @@
 
 ## Known limitations (v0.1 scope)
 
-- Estimators: linear regression, binary logistic regression and multinomial
-  regression. No penalized paths (`glmnet`), no trees, no case weights.
+- Estimators: linear regression, binary logistic regression, multinomial regression
+  and rpart-style decision trees (continuous predictors only; no surrogates, categorical
+  splits or custom priors). No penalized paths (`glmnet`), no random forests or boosted
+  trees yet, no case weights.
 - Precision: `f64` only.
 - Preprocessing: select, mean/median imputation, normalize, dummy, zv, nzv, corr, other,
   novel, unknown. No `step_interact`, `step_pca`, splines.

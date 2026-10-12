@@ -61,6 +61,8 @@ def _n_levels(data: trm.Table, outcome: str) -> int:
 
 
 def _model(task, data, engine="native"):
+    if task.get("model") == "decision_tree":
+        return trm.DecisionTree(**task.get("model_args", {}))
     if task["type"] == "regression":
         return trm.LinearReg(engine=engine)
     if _n_levels(data, task["outcome"]) > 2:
@@ -83,6 +85,8 @@ def _load_task(task):
 @pytest.mark.parametrize("engine", ["linfa", "smartcore", "native"])
 def test_python_matches_rust_bitwise(task, engine):
     """Same binary, same inputs: Python results must equal the Rust test's outputs exactly."""
+    if task.get("model") == "decision_tree" and engine != "native":
+        pytest.skip("decision_tree is implemented on the native engine only")
     rust_file = RUST_OUT / f"{task['id']}_{engine}.json"
     if not rust_file.exists():
         pytest.skip("run `cargo test -p tidyrustmodels --test differential` first")
@@ -96,9 +100,11 @@ def test_python_matches_rust_bitwise(task, engine):
     coefs = fitted.coefficients()
     if rust["class_coefficients"] is not None:
         assert coefs == rust["class_coefficients"], "class coefficients differ from Rust"
-    else:
+    elif rust["coefficients"] is not None:
         assert list(coefs.keys()) == rust["coefficient_names"]
         assert list(coefs.values()) == rust["coefficients"], "coefficients differ from Rust"
+    else:
+        assert coefs == {}
 
     if task["type"] == "regression":
         pred = fitted.predict(test)
@@ -129,9 +135,17 @@ def test_python_matches_r_within_tolerance(task):
     assert fitted.feature_names() == fx["prep"]["predictor_names"]
     coefs = fitted.coefficients()
     multi = "coefficient_levels" in fx["fit"] and fx["fit"]["coefficient_levels"] is not None
+    tree = fx["fit"].get("tree") is not None
     # bounds from reference/fixtures/tolerances.toml (multinom: nnet's residual, Phase 8c)
     rel = 1e-8 if task["type"] == "regression" else (1e-6 if multi else 1e-7)
-    sets = [(lv, coefs[lv], fx["fit"]["coefficients"][lv]) for lv in fx["fit"]["coefficient_levels"]] if multi         else [(None, coefs, fx["fit"]["coefficients"])]
+    sets = ([] if tree else [(lv, coefs[lv], fx["fit"]["coefficients"][lv]) for lv in fx["fit"]["coefficient_levels"]] if multi else [(None, coefs, fx["fit"]["coefficients"])])
+    if tree:
+        # the tree's test predictions must match rpart to round-off
+        if task["type"] == "regression":
+            theirs = np.asarray(fx["fit"]["predicted_test"], dtype=float)
+            assert np.max(np.abs(fitted.predict(test) - theirs) / np.maximum(1.0, np.abs(theirs))) < 1e-10
+        else:
+            assert fitted.predict(test) == fx["fit"]["class_test"]
     for _, ours, theirs in sets:
         for name in fx["fit"]["coefficient_names"]:
             r = theirs[name]
@@ -140,7 +154,7 @@ def test_python_matches_r_within_tolerance(task):
                 continue
             assert math.isclose(ours[name], r, rel_tol=rel, abs_tol=1e-9), name
     if task["type"] == "classification":
-        assert fitted.diagnostics()["converged"] is True
+        assert tree or fitted.diagnostics()["converged"] is True
         proba = fitted.predict_proba(test)
         levels = fitted.levels(test)
         assert levels == fx["fit"]["outcome_levels"]
