@@ -58,7 +58,10 @@ fn infer_column(raw: &[String]) -> Result<Column> {
         })
         .collect();
     let numeric = raw.iter().zip(&parsed).all(|(s, p)| s.is_empty() || p.is_some());
-    if numeric && raw.iter().any(|s| !s.is_empty()) {
+    // An entirely empty column has no type evidence; R's read.csv yields an all-NA
+    // logical column. The closest representation here is numeric with every row missing
+    // (filters such as `StepZv` then remove it, as `step_zv` does in R).
+    if numeric {
         Column::numeric_with_missing(parsed)
     } else {
         let mut levels: Vec<String> = raw.iter().filter(|s| !s.is_empty()).cloned().collect();

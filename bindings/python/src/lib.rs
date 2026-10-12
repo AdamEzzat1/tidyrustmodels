@@ -47,6 +47,7 @@ fn parse_engine(engine: &str) -> PyResult<Engine> {
     match engine {
         "linfa" => Ok(Engine::Linfa),
         "smartcore" => Ok(Engine::Smartcore),
+        "native" => Ok(Engine::Native),
         other => Err(InvalidArgumentError::new_err(format!("unknown engine `{other}` (use 'linfa' or 'smartcore')"))),
     }
 }
@@ -201,6 +202,39 @@ impl PyRecipe {
         Ok(PyRecipe { inner: self.inner.clone().step(StepSelect::new(parse_selector(selector)?)) })
     }
 
+    fn step_zv(&self, selector: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(PyRecipe { inner: self.inner.clone().step(StepZv::new(parse_selector(selector)?)) })
+    }
+
+    #[pyo3(signature = (selector, freq_cut = 19.0, unique_cut = 10.0))]
+    fn step_nzv(&self, selector: &Bound<'_, PyAny>, freq_cut: f64, unique_cut: f64) -> PyResult<Self> {
+        Ok(PyRecipe {
+            inner: self.inner.clone().step(StepNzv::new(parse_selector(selector)?).freq_cut(freq_cut).unique_cut(unique_cut)),
+        })
+    }
+
+    #[pyo3(signature = (selector, threshold = 0.9))]
+    fn step_corr(&self, selector: &Bound<'_, PyAny>, threshold: f64) -> PyResult<Self> {
+        Ok(PyRecipe { inner: self.inner.clone().step(StepCorr::new(parse_selector(selector)?).threshold(threshold)) })
+    }
+
+    #[pyo3(signature = (selector, threshold = 0.05, other = "other"))]
+    fn step_other(&self, selector: &Bound<'_, PyAny>, threshold: f64, other: &str) -> PyResult<Self> {
+        Ok(PyRecipe {
+            inner: self.inner.clone().step(StepOther::new(parse_selector(selector)?).threshold(threshold).other(other)),
+        })
+    }
+
+    #[pyo3(signature = (selector, new_level = "new"))]
+    fn step_novel(&self, selector: &Bound<'_, PyAny>, new_level: &str) -> PyResult<Self> {
+        Ok(PyRecipe { inner: self.inner.clone().step(StepNovel::new(parse_selector(selector)?).new_level(new_level)) })
+    }
+
+    #[pyo3(signature = (selector, new_level = "unknown"))]
+    fn step_unknown(&self, selector: &Bound<'_, PyAny>, new_level: &str) -> PyResult<Self> {
+        Ok(PyRecipe { inner: self.inner.clone().step(StepUnknown::new(parse_selector(selector)?).new_level(new_level)) })
+    }
+
     #[getter]
     fn outcome(&self) -> String {
         self.inner.outcome().to_string()
@@ -219,7 +253,7 @@ struct PyLinearReg {
 #[pymethods]
 impl PyLinearReg {
     #[new]
-    #[pyo3(signature = (engine = "linfa", intercept = true))]
+    #[pyo3(signature = (engine = "native", intercept = true))]
     fn new(engine: &str, intercept: bool) -> PyResult<Self> {
         Ok(PyLinearReg { inner: LinearRegSpec::new().engine(parse_engine(engine)?).intercept(intercept) })
     }
@@ -235,7 +269,7 @@ struct PyLogisticReg {
 #[pymethods]
 impl PyLogisticReg {
     #[new]
-    #[pyo3(signature = (engine = "linfa", intercept = true, penalty = 0.0, max_iterations = 1000, gradient_tolerance = 1e-8))]
+    #[pyo3(signature = (engine = "native", intercept = true, penalty = 0.0, max_iterations = 1000, gradient_tolerance = 1e-8))]
     fn new(engine: &str, intercept: bool, penalty: f64, max_iterations: u64, gradient_tolerance: f64) -> PyResult<Self> {
         Ok(PyLogisticReg {
             inner: LogisticRegSpec::new()
@@ -468,6 +502,7 @@ impl PyFittedWorkflow {
         d.set_item("converged", dg.converged)?;
         d.set_item("iterations", dg.iterations)?;
         d.set_item("final_gradient_norm", dg.final_gradient_norm)?;
+        d.set_item("deviance", dg.deviance)?;
         d.set_item("warnings", dg.warnings)?;
         d.set_item("aliased", dg.aliased)?;
         d.set_item("note", dg.note)?;

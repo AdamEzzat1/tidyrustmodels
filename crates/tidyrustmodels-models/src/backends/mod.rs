@@ -15,15 +15,15 @@ use tidyrustmodels_core::{BackendInfo, DesignMatrix, Error, FitDiagnostics, Resu
 #[serde(rename_all = "lowercase")]
 pub enum Engine {
     /// `linfa-linear` / `linfa-logistic` 0.8.1.
-    #[cfg_attr(feature = "linfa", default)]
     Linfa,
     /// `smartcore` 0.6.16.
-    #[cfg_attr(all(not(feature = "linfa"), feature = "smartcore"), default)]
     Smartcore,
+    /// Pure-Rust ports of R's own algorithms (`lm.fit` pivoted QR, `glm.fit` IRLS);
+    /// always compiled in and the default since ADR-0009 (exact R parity, 3–4× faster
+    /// logistic fits than the L-BFGS engines in BENCHMARKS.md run `…-f`).
+    #[default]
+    Native,
 }
-
-#[cfg(not(any(feature = "linfa", feature = "smartcore")))]
-compile_error!("tidyrustmodels-models needs at least one backend feature enabled");
 
 impl Engine {
     /// Stable identifier.
@@ -31,6 +31,17 @@ impl Engine {
         match self {
             Engine::Linfa => "linfa",
             Engine::Smartcore => "smartcore",
+            Engine::Native => "native",
+        }
+    }
+
+    /// Parse a stable identifier.
+    pub fn from_name(name: &str) -> Option<Engine> {
+        match name {
+            "linfa" => Some(Engine::Linfa),
+            "smartcore" => Some(Engine::Smartcore),
+            "native" => Some(Engine::Native),
+            _ => None,
         }
     }
 
@@ -39,6 +50,7 @@ impl Engine {
         match self {
             Engine::Linfa => cfg!(feature = "linfa"),
             Engine::Smartcore => cfg!(feature = "smartcore"),
+            Engine::Native => true,
         }
     }
 }
@@ -77,6 +89,16 @@ pub fn info(engine: Engine, model: &str) -> BackendInfo {
             crate_version: "0.6.16".into(),
             solver: "L-BFGS (smartcore, g_atol=1e-8)".into(),
         },
+        (Engine::Native, "linear_reg") => BackendInfo {
+            engine: "native".into(),
+            crate_version: env!("CARGO_PKG_VERSION").into(),
+            solver: "Householder QR with dqrdc2 pivoting (lm.fit port, tol 1e-7)".into(),
+        },
+        (Engine::Native, _) => BackendInfo {
+            engine: "native".into(),
+            crate_version: env!("CARGO_PKG_VERSION").into(),
+            solver: "IRLS with weighted pivoted QR (glm.fit port)".into(),
+        },
     }
 }
 
@@ -95,6 +117,7 @@ pub(crate) fn fit_linear(engine: Engine, x: &DesignMatrix, y: &[f64], intercept:
         Engine::Linfa => linfa::fit_linear(x, y, intercept),
         #[cfg(feature = "smartcore")]
         Engine::Smartcore => smartcore::fit_linear(x, y, intercept),
+        Engine::Native => crate::native::fit_linear(x, y, intercept),
         #[allow(unreachable_patterns)]
         other => Err(unavailable(other)),
     }
@@ -112,6 +135,16 @@ pub(crate) fn fit_logistic(
         Engine::Linfa => linfa::fit_logistic(x, y, opts),
         #[cfg(feature = "smartcore")]
         Engine::Smartcore => smartcore::fit_logistic(x, y, opts),
+        Engine::Native => crate::native::fit_logistic(
+            x,
+            y,
+            crate::native::NativeLogisticOptions {
+                intercept: opts.intercept,
+                penalty: opts.penalty,
+                epsilon: opts.irls_epsilon,
+                maxit: opts.irls_max_iterations,
+            },
+        ),
         #[allow(unreachable_patterns)]
         other => Err(unavailable(other)),
     }

@@ -70,6 +70,29 @@ impl Tolerances {
             .unwrap_or_else(|| panic!("no tolerance `{key}`"))
     }
 
+    fn lookup(&self, task: &str, key: &str) -> Option<f64> {
+        self.tasks
+            .get(task)
+            .and_then(|t| t.get(key))
+            .or_else(|| self.defaults.get(key))
+            .copied()
+    }
+
+    /// Engine-specific bound (`<engine>_<key>`) when present, else the shared one.
+    fn get_eng(&self, task: &str, key: &str, engine: &str) -> f64 {
+        self.lookup(task, &format!("{engine}_{key}"))
+            .unwrap_or_else(|| self.get(task, key))
+    }
+
+    fn pair_eng(&self, task: &str, base: &str, engine: &str) -> (f64, f64) {
+        let rel = self.get_eng(task, &format!("{base}_rel"), engine);
+        let abs = self
+            .lookup(task, &format!("{engine}_{base}_abs"))
+            .or_else(|| self.lookup(task, &format!("{base}_abs")))
+            .unwrap_or(0.0);
+        (rel, abs)
+    }
+
     fn pair(&self, task: &str, base: &str) -> (f64, f64) {
         let rel = self.get(task, &format!("{base}_rel"));
         let abs = self
@@ -241,6 +264,12 @@ fn build_recipe(task: &Value) -> Recipe {
             "impute_mean_numeric" => rec.step(StepImputeMean::new(Selector::AllNumericPredictors)),
             "normalize_numeric" => rec.step(StepNormalize::new(Selector::AllNumericPredictors)),
             "dummy_nominal" => rec.step(StepDummy::new(Selector::AllNominalPredictors)),
+            "zv" => rec.step(StepZv::new(Selector::AllPredictors)),
+            "nzv" => rec.step(StepNzv::new(Selector::AllPredictors)),
+            "corr_numeric" => rec.step(StepCorr::new(Selector::AllNumericPredictors)),
+            "other_nominal" => rec.step(StepOther::new(Selector::AllNominalPredictors)),
+            "novel_nominal" => rec.step(StepNovel::new(Selector::AllNominalPredictors)),
+            "unknown_nominal" => rec.step(StepUnknown::new(Selector::AllNominalPredictors)),
             other => panic!("unknown step {other}"),
         };
     }
@@ -310,7 +339,8 @@ fn differential_against_r_fixtures() {
         for (ours, theirs) in prepped.steps().iter().zip(r_steps) {
             let state = ours.state().unwrap();
             let tidy = &theirs["tidy"];
-            match theirs["step"].as_str().unwrap() {
+            let theirs_step = theirs["step"].as_str().unwrap();
+            match theirs_step {
                 "step_normalize" => {
                     let terms = strs(&tidy["terms"]);
                     let stat = strs(&tidy["statistic"]);
@@ -392,6 +422,67 @@ fn differential_against_r_fixtures() {
                         .collect();
                     report.exact(id, "-", "L1", "dummy column names", &ours, &r_names);
                 }
+                "step_zv" | "step_nzv" | "step_corr" => {
+                    let ours: Vec<String> = state["removals"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.as_str().unwrap().to_string())
+                        .collect();
+                    let mut theirs = strs(&tidy["terms"]);
+                    let mut ours_sorted = ours.clone();
+                    // Order of removals is not part of the contract; membership is.
+                    ours_sorted.sort();
+                    theirs.sort();
+                    report.exact(
+                        id,
+                        "-",
+                        "L1",
+                        &format!("{} removals", theirs_step),
+                        &ours_sorted,
+                        &theirs,
+                    );
+                }
+                "step_other" => {
+                    let terms = strs(&tidy["terms"]);
+                    let retained = strs(&tidy["retained"]);
+                    for o in state["objects"].as_array().unwrap() {
+                        let col = o["column"].as_str().unwrap();
+                        let ours: Vec<String> = o["keep"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|v| v.as_str().unwrap().to_string())
+                            .collect();
+                        let theirs: Vec<String> = terms
+                            .iter()
+                            .zip(&retained)
+                            .filter(|(t, _)| *t == col)
+                            .map(|(_, r)| r.clone())
+                            .collect();
+                        report.exact(id, "-", "L1", &format!("other retained `{col}`"), &ours, &theirs);
+                    }
+                }
+                "step_novel" | "step_unknown" => {
+                    let terms = strs(&tidy["terms"]);
+                    let values = strs(&tidy["value"]);
+                    let ours: Vec<String> = state["objects"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|o| o[0].as_str().unwrap().to_string())
+                        .collect();
+                    report.exact(id, "-", "L1", &format!("{} columns", theirs_step), &ours, &terms);
+                    let our_level = state["new_level"].as_str().unwrap().to_string();
+                    report.exact(
+                        id,
+                        "-",
+                        "L1",
+                        &format!("{} level", theirs_step),
+                        &our_level,
+                        &values[0],
+                    );
+                }
                 other => panic!("unexpected R step {other}"),
             }
         }
@@ -431,7 +522,7 @@ fn differential_against_r_fixtures() {
 
         // ---- Level 3 + 4 per engine ----
         let metrics = MetricSet::from_names(&strs(&task["metrics"])).unwrap();
-        for engine in [Engine::Linfa, Engine::Smartcore] {
+        for engine in [Engine::Linfa, Engine::Smartcore, Engine::Native] {
             let eng = engine.as_str();
             let spec = model_for(task, engine);
             let fitted = spec.fit(&x_train, &y_train).unwrap();
@@ -464,7 +555,7 @@ fn differential_against_r_fixtures() {
                     ),
                 }
             }
-            let coef_tol = tol.pair(id, if is_reg { "ols_coef" } else { "logistic_coef" });
+            let coef_tol = tol.pair_eng(id, if is_reg { "ols_coef" } else { "logistic_coef" }, eng);
             report.compare(id, eng, "L3", "coefficients", &our_vals, &r_vals, coef_tol);
 
             let pred_test = fitted.predict(&x_test).unwrap();
@@ -500,7 +591,7 @@ fn differential_against_r_fixtures() {
                     "test predictions",
                     &ours,
                     &f64s(&fx["fit"]["predicted_test"]),
-                    tol.pair(id, "ols_pred"),
+                    tol.pair_eng(id, "ols_pred", eng),
                 );
             } else {
                 let (codes, levels, probs) = match &pred_test {
@@ -528,7 +619,7 @@ fn differential_against_r_fixtures() {
                         &format!("test prob `{lv}`"),
                         probs.column(j),
                         &theirs,
-                        (0.0, tol.get(id, "logistic_prob_abs")),
+                        (0.0, tol.get_eng(id, "logistic_prob_abs", eng)),
                     );
                 }
                 let our_classes: Vec<String> = codes.iter().map(|c| levels[*c as usize].clone()).collect();
@@ -562,7 +653,7 @@ fn differential_against_r_fixtures() {
                         &format!("test metric {}", m.name),
                         &[a],
                         &[b],
-                        tol.pair(id, "resample_metric"),
+                        tol.pair_eng(id, "resample_metric", eng),
                     ),
                     (a, b) => report.exact(id, eng, "L2", &format!("test metric {} (NA)", m.name), &a, &b),
                 }
@@ -604,7 +695,7 @@ fn differential_against_r_fixtures() {
                             &format!("{} {}", fold.id, m.name),
                             &[a],
                             &[b],
-                            tol.pair(id, "resample_metric"),
+                            tol.pair_eng(id, "resample_metric", eng),
                         ),
                         (a, b) => {
                             report.exact(id, eng, "L4", &format!("{} {} (NA)", fold.id, m.name), &a, &b)
@@ -624,7 +715,7 @@ fn differential_against_r_fixtures() {
                     &format!("summary mean {}", s.name),
                     &[s.mean.unwrap()],
                     &[theirs["mean"].as_f64().unwrap()],
-                    tol.pair(id, "summary"),
+                    tol.pair_eng(id, "summary", eng),
                 );
                 report.compare(
                     id,
@@ -633,7 +724,7 @@ fn differential_against_r_fixtures() {
                     &format!("summary std_err {}", s.name),
                     &[s.std_err.unwrap()],
                     &[theirs["std_err"].as_f64().unwrap()],
-                    tol.pair(id, "summary"),
+                    tol.pair_eng(id, "summary", eng),
                 );
                 report.exact(
                     id,

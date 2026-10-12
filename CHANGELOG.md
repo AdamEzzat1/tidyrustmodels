@@ -25,6 +25,14 @@ VERIFICATION.md; nothing is claimed beyond those records.
   hierarchy; bitwise parity with the Rust API.
 - Reference harness against R tidymodels 1.5.0 with committed fixtures, shared split ids,
   per-quantity tolerances, and a differential test (611 comparisons).
+- `native` engine (ADR-0009), now the **default**: pure-Rust ports of R's `lm.fit`
+  pivoted QR and `glm.fit` IRLS; matches R to round-off on every reference task,
+  reproduces R's `NA` column choice under collinearity, and fits logistic models 3–4×
+  faster than the L-BFGS engines. `FitDiagnostics` gains `deviance`; `LogisticRegSpec` gains
+  `irls_epsilon` / `irls_max_iterations`.
+- Recipe steps `StepZv`, `StepNzv`, `StepCorr`, `StepOther`, `StepNovel`, `StepUnknown`
+  (recipes 1.3.2 semantics; two new differential tasks, all states exact against R).
+  `read_csv` accepts entirely empty columns as numeric all-missing.
 - Benchmark harness (Rust and R drivers, orchestrator with peak-RSS sampling, report) and
   four recorded runs (`benchmarks/results/2026-10-12-win11-i7-11390H` and `…-b`, `…-c`,
   `…-d`: exact peak memory, a like-for-like workflow-fit phase, the Python wrapper as a

@@ -14,8 +14,11 @@ What is verified today (VERIFICATION.md):
 - Preprocessing, OLS, metrics and resampling match R tidymodels 1.5.0 to floating-point
   round-off on six reference tasks; logistic regression matches to ~1e-8 relative
   (same objective, different optimizer).
-- Both engines (`linfa`, `smartcore`) reproduce exact analytic baselines that are
-  independent of R.
+- All three engines (`linfa`, `smartcore`, `native`) reproduce exact analytic baselines
+  that are independent of R. The default `native` engine ports R's own `lm.fit` and
+  `glm.fit` algorithms and agrees with R to round-off (3e-13 relative), including which
+  coefficient R reports as `NA` under collinearity; it fits logistic models 3–4× faster
+  than the L-BFGS engines (BENCHMARKS.md run F).
 - The Python bindings produce bitwise-identical results to the Rust API.
 
 What is measured today (BENCHMARKS.md, one Windows laptop, 5 trials): OLS workflows run

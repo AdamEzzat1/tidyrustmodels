@@ -1,6 +1,6 @@
 # Benchmarks
 
-Status: runs A, B, C and D recorded under `2026-10-12-win11-i7-11390H[-b|-c|-d]` (see Results; run C is invalid for timing). The
+Status: runs A–F recorded under `2026-10-12-win11-i7-11390H[-b|-c|-d|-e|-f]` (see Results; runs C and E are disturbed and not used for conclusions). The
 methodology below is the target protocol; the Results section lists every point where
 the recorded run fell short of it. No number in this file was produced by anything other
 than `benchmarks/run_benchmarks.py` on the recorded machine.
@@ -387,4 +387,36 @@ is not comparable between the Python driver and the other two here. Compare phas
 - Memory at 100k rows: R 605–744 MB, Python 128–132 MB, Rust 81–83 MB.
 
 Raw data: `benchmarks/results/2026-10-12-win11-i7-11390H-d/{results.csv, env.json, report.md}`.
+
+### Runs `…-e` and `…-f`: `native` engine vs `linfa` (ADR-0009)
+
+Rust binary only, 1 thread, six tasks, interleaved trials, 5 cold trials each, 60 of 60
+ok in both runs. Run E was disturbed by R and Python processes started from this
+session while it ran (absolute times 1.3–2× above run D); run F repeated it with the
+machine idle and its `linfa` rows agree with run D. Decision evidence is run F.
+
+| task | phase | linfa | native | native / linfa speed |
+|---|---|---|---|---|
+| synth_100000_clf | model fit · warm fit · workflow fit | 585 · 997 · 643 ms | 145 · 208 · 148 ms | 4.0× · 4.8× · 4.3× |
+| synth_100000_clf | 5-fold CV · tune (5 × 5) | 4.62 s · 28.2 s | 1.44 s · 7.4 s | 3.2× · 3.8× |
+| synth_10000_clf | model fit · CV · tune | 42.2 ms · 268 ms · 1.12 s | 13.3 ms · 99 ms · 0.47 s | 3.2× · 2.7× · 2.4× |
+| penguins_clf | model fit · CV · tune | 0.74 · 4.4 · 19.2 ms | 0.25 · 1.4 · 6.6 ms | 2.9× · 3.1× · 2.9× |
+| synth_100000_reg | model fit · CV | 22.8 ms · 359 ms | 22.0 ms · 361 ms | 1.0× · 1.0× |
+| ames_reg | model fit · CV | 1.35 ms · 16.3 ms | 2.06 ms · 19.1 ms | 0.65× · 0.85× |
+| penguins_reg | model fit · CV | 0.057 · 0.50 ms | 0.043 · 0.53 ms | 1.3× · 0.95× |
+
+Peak working set is within 10% on every task (5–87 MB). The native IRLS converges in
+5–8 Newton steps where L-BFGS needs tens of gradient passes, which is the whole of the
+logistic gain; on OLS both do one direct solve and the unblocked Householder loop is
+slower than linfa on the 34-column Ames design.
+
+What this changes in the earlier conclusions: with `native` as the default engine, the
+100k-row logistic case is no longer slower than R. Compared with run D's R rows (same
+machine, same day): model fit 145 ms vs `glm` 708 ms cold / 526 ms warm (3.6–4.9×),
+5-fold CV 1.44 s vs 5.21 s (3.6×), tuning 7.4 s vs glmnet 18.2 s (2.5×). These are
+cross-run numbers and carry run-to-run noise of roughly ±15%; a same-run R-vs-native
+comparison is the next benchmark to record.
+
+Raw data: `benchmarks/results/2026-10-12-win11-i7-11390H-e/` (disturbed, kept) and
+`…-f/{results.csv, env.json, report.md}`.
 

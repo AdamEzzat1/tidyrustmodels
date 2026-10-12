@@ -61,6 +61,7 @@ fn run() -> Result<()> {
     let engine = match need("--engine")?.as_str() {
         "linfa" => Engine::Linfa,
         "smartcore" => Engine::Smartcore,
+        "native" => Engine::Native,
         e => return Err(Error::InvalidArgument(format!("unknown engine {e}"))),
     };
     let threads: usize = need("--threads")?.parse().map_err(|_| Error::InvalidArgument("--threads".into()))?;

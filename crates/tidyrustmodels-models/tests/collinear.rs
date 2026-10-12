@@ -63,6 +63,27 @@ fn smartcore_returns_a_finite_solution() {
 }
 
 #[test]
+fn native_aliases_the_later_collinear_column_like_r() {
+    // R 4.4.0: lm(y ~ a + b + c) with b = 2a gives (Intercept) 1, a 0.5, b NA, c -1.
+    let (x, y) = collinear();
+    let m = LinearRegSpec::new().engine(Engine::Native).fit(&x, &y).unwrap();
+    assert_eq!(m.diagnostics().aliased, vec!["b"]);
+    let c = m.coefficients().unwrap();
+    assert!((c.intercept.unwrap() - 1.0).abs() < 1e-10);
+    assert!((c.terms[0].1 - 0.5).abs() < 1e-10);
+    assert_eq!(c.terms[1].1, 0.0);
+    assert!((c.terms[2].1 + 1.0).abs() < 1e-10);
+    match m.predict(&x).unwrap() {
+        tidyrustmodels_core::Prediction::Numeric(v) => {
+            for (a, b) in v.iter().zip(y.as_numeric().unwrap()) {
+                assert!((a - b).abs() < 1e-10);
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
 fn constant_and_zero_columns_are_aliased_not_errors() {
     let x = DesignMatrix::from_columns(vec![
         ("a".into(), vec![1.0, 2.0, 3.0, 4.0]),
@@ -71,7 +92,7 @@ fn constant_and_zero_columns_are_aliased_not_errors() {
     ])
     .unwrap();
     let y = Outcome::Numeric(vec![2.0, 4.0, 6.0, 8.0]);
-    for engine in [Engine::Linfa, Engine::Smartcore] {
+    for engine in [Engine::Linfa, Engine::Smartcore, Engine::Native] {
         let m = LinearRegSpec::new().engine(engine).fit(&x, &y).unwrap();
         let d = m.diagnostics();
         assert_eq!(d.aliased, vec!["zero", "k"], "{engine:?}");

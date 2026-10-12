@@ -37,7 +37,7 @@ Gate:
 
 Gate:
 - [x] `maturin develop --release` builds on Windows (pyo3 0.29.3, abi3-py311); CI matrix for Linux/macOS added, not yet executed.
-- [x] NumPy (C and Fortran order), dict and pandas input paths tested; exception mapping tested (`python/tests/test_parity.py`, 21 tests).
+- [x] NumPy (C and Fortran order), dict and pandas input paths tested; exception mapping tested (`python/tests/test_parity.py`, 35 tests across 8 tasks × 3 engines).
 - [x] Python vs Rust parity bitwise on shared inputs for all 6 tasks × 2 engines (coefficients, predictions, per-fold metrics).
 - [ ] Independent reviewer sign-off recorded.
 
@@ -68,11 +68,29 @@ Gate:
 Gate: docs, examples (Rust + Python), feature matrix, compatibility report, benchmark
 report, limitations, install instructions, release notes. Reviewer approval.
 
-## Phase 7 — Native algorithms — not started
+## Phase 8 — Breadth (started 2026-10-12)
+
+Priorities from the gap analysis, each gated on differential verification where R has
+an equivalent: (a) recipe filters and level steps — **done** (zv, nzv, corr, other,
+novel, unknown; VERIFICATION.md Phase 8a); (b) classification metrics (roc_auc,
+pr_auc, f_meas, sens/spec, bal_accuracy, kap, mcc, j_index, brier_class, conf_mat);
+(c) multiclass outcomes; (d) tree models via backends; (e) case weights; (f) bootstrap,
+repeated/grouped CV, time-series splits; (g) `select_best` / `finalize_workflow` /
+`last_fit`; (h) Arrow/Polars/sparse inputs; (i) workflowsets.
+
+## Phase 7 — Native algorithms (2026-10-12) — first two solvers complete, pending review
 
 Only with a written justification per algorithm referencing a measured need.
 Measured need on record: BENCHMARKS.md shows L-BFGS logistic at 1e5 rows is 0.76× the
-speed of `glm` IRLS in steady state and 0.69× glmnet for tuning.
+speed of `glm` IRLS in steady state and 0.69× glmnet for tuning; neither backend pivots
+for rank deficiency.
+
+Gate:
+- [x] `Engine::Native` with a `dqrdc2`-pivoting QR (`lm.fit`) and a `glm.fit` IRLS port (ADR-0009), no external dependency.
+- [x] Differential suite on all six tasks: coefficients 3.3e-13 rel, probabilities 4e-15 abs, `converged` exact; tolerances set 30× above measured maxima.
+- [x] Analytic baselines and collinearity tests pass on the native engine; R's choice of aliased column reproduced.
+- [x] Before/after benchmark recorded (runs `…-e`, `…-f`); `native` made the default engine (ADR-0009).
+- [ ] Independent reviewer sign-off recorded.
 Candidates visible so far: an IRLS logistic solver (closer match to `glm`, deterministic
 iteration count, no L-BFGS bound on parity) and a pivoted-QR least squares (general
 rank deficiency with `NA`-style reporting, which neither backend provides).

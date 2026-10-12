@@ -139,6 +139,57 @@ defined but has not run on those platforms); free-threaded builds; pandas object
 columns holding non-string values (`from_pandas` stringifies them with `str()`, which
 is documented but untested).
 
+## Native engine (Phase 7)
+
+Executed 2026-10-12 on the host in DEPENDENCIES.md after adding `Engine::Native`
+(ADR-0009). The differential suite now loops over three engines on every task; the
+native rows are compared against engine-specific bounds in `tolerances.toml`.
+
+| quantity (native engine, max over 6 tasks) | measured max | bound | note |
+|---|---|---|---|
+| OLS and logistic coefficients (L3) | 3.3e-13 rel (ames_reg) | 1e-11 | same algorithms as R; residual is summation order |
+| OLS test predictions (L3) | 5.4e-15 rel, 5.8e-10 abs at 1e5 scale | 1e-13 rel / 1e-9 abs | |
+| class probabilities (L3) | 4.0e-15 abs | 1e-13 | |
+| `converged`, classes, levels, names | exact | exact | `converged` is `glm`'s deviance criterion on both sides |
+| per-fold and summary metrics (L4) | 7e-14 rel | 1e-12 | |
+
+Unit tests pin R 4.4.0 behaviour that the fixtures do not cover: the later of two
+exactly collinear columns is the aliased one (`tests/collinear.rs`,
+`native/qr.rs`), the closed-form MLE and deviance (`native/irls.rs`), and a zero column
+plus a square system. The analytic baselines (`tests/baselines.rs`) run on all three
+engines.
+
+Not covered: `glm.fit` step halving (no reference task triggers it; the code path is
+exercised only by the unit test for separable data), rank deficiency inside IRLS on a
+reference task. Performance: BENCHMARKS.md runs `…-e`/`…-f` (native 2.9–4× faster than
+linfa on logistic fits, 0.65–1.3× on OLS); `native` is the default engine since ADR-0009.
+
+## Recipe filters and level steps (Phase 8a)
+
+Executed 2026-10-12. `StepZv`, `StepNzv`, `StepCorr`, `StepOther`, `StepNovel`,
+`StepUnknown` were ported from the recipes 1.3.2 sources (`one_unique`, `nzv`,
+`corr_filter`, `keep_levels`, `bake.step_*`, read from the installed package) and
+added to the differential suite through two new reference tasks:
+
+| task | dataset | steps | what R did (fixture) |
+|---|---|---|---|
+| `synth_filter_reg` | `synthetic_filter_reg` (150 × 8, built so every step fires) | unknown, zv, nzv, other, novel, impute_median, normalize, corr, dummy | zv removed `x4` (constant) and `x5` (all NA); nzv removed `x3` (96% zeros); corr removed `x1` (cor(x1, x2) ≈ 0.98); other kept 4 of 6 `g` levels and all 3 of `h`; novel/unknown added `new`/`unknown`; `lm` reported NA for `g_new` and `h_new` |
+| `ames_other_reg` | Ames | other, novel, normalize, dummy | `Neighborhood` 28 levels → 8 retained + `other`, `Bldg_Type` 5 → 2 + `other`; NA for the two zero-count `new` dummies |
+
+Results (differential report, 262 comparisons on the two tasks, all engines):
+removals, retained levels, added levels and dummy column names **exact**; baked
+values ≤ 2.0e-14 relative; coefficients ≤ 5.5e-15 relative (all engines); aliasing of
+the zero-count `new` dummies matches R's NA on every engine. The six existing tasks
+are unchanged (fixtures regenerated; only the timestamp differs).
+
+Finding: `read_csv` previously rejected an entirely empty column; R reads it as an
+all-NA logical column. It now yields a numeric all-missing column so `StepZv` can
+remove it as `step_zv` does.
+
+Not covered: `step_corr` NA branches (no reference task has undefined correlations;
+unit-tested against a hand-checked matrix), `step_other` with ties at the threshold,
+and recipes' warnings (we record them in state or stay silent; see COMPATIBILITY.md).
+
 ## Test inventory
 
 | suite | location | runs in CI | needs R |

@@ -5,7 +5,7 @@ use approx::assert_relative_eq;
 use tidyrustmodels_core::{DesignMatrix, Error, ModelSpec, Outcome, Prediction};
 use tidyrustmodels_models::{Engine, LinearRegSpec, LogisticRegSpec};
 
-const ENGINES: [Engine; 2] = [Engine::Linfa, Engine::Smartcore];
+const ENGINES: [Engine; 3] = [Engine::Linfa, Engine::Smartcore, Engine::Native];
 
 /// Dataset and exact solution from reference/independent/exact_ols.py
 /// (beta = -3445/1683, 1300/1683, 1895/1683).
@@ -139,12 +139,22 @@ fn engines_agree_on_a_two_feature_logistic_problem() {
         .engine(Engine::Smartcore)
         .fit(&x, &y)
         .unwrap();
-    let (ca, cb) = (a.coefficients().unwrap(), b.coefficients().unwrap());
+    let c = LogisticRegSpec::new().engine(Engine::Native).fit(&x, &y).unwrap();
+    let (ca, cb, cc) = (
+        a.coefficients().unwrap(),
+        b.coefficients().unwrap(),
+        c.coefficients().unwrap(),
+    );
     assert_relative_eq!(ca.intercept.unwrap(), cb.intercept.unwrap(), max_relative = 1e-5);
-    for (ta, tb) in ca.terms.iter().zip(&cb.terms) {
+    assert_relative_eq!(ca.intercept.unwrap(), cc.intercept.unwrap(), max_relative = 1e-5);
+    for ((ta, tb), tc) in ca.terms.iter().zip(&cb.terms).zip(&cc.terms) {
         assert_relative_eq!(ta.1, tb.1, max_relative = 1e-5);
+        assert_relative_eq!(ta.1, tc.1, max_relative = 1e-5);
     }
     assert!(a.diagnostics().converged.unwrap() && b.diagnostics().converged.unwrap());
+    let dc = c.diagnostics();
+    assert_eq!(dc.converged, Some(true));
+    assert!(dc.iterations.is_some() && dc.deviance.is_some(), "{dc:?}");
 }
 
 #[test]

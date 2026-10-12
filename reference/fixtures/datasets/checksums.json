@@ -19,6 +19,10 @@
   "rows": 60,
   "sha256": "a8e408987cf6e4a2edcf965372332af6698395fbcabee69f3801ec795737048b"
  },
+ "synthetic_filter_reg": {
+  "rows": 150,
+  "sha256": "997973140b30b63aa842404a5c6802ab1d547b2bb8e1023ee8747e8fd4ca2caa"
+ },
  "synthetic_reg_small": {
   "rows": 40,
   "sha256": "278d7d37ea68cb4af7019fa902d5ca61b5488bcace0b011ced3bc8d32ab9b1ac"

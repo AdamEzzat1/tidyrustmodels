@@ -51,6 +51,12 @@ add_steps <- function(rec, steps) {
       impute_mean_numeric   = step_impute_mean(rec, all_numeric_predictors()),
       normalize_numeric     = step_normalize(rec, all_numeric_predictors()),
       dummy_nominal         = step_dummy(rec, all_nominal_predictors()),
+      zv                    = step_zv(rec, all_predictors()),
+      nzv                   = step_nzv(rec, all_predictors()),
+      corr_numeric          = step_corr(rec, all_numeric_predictors()),
+      other_nominal         = step_other(rec, all_nominal_predictors()),
+      novel_nominal         = step_novel(rec, all_nominal_predictors()),
+      unknown_nominal       = step_unknown(rec, all_nominal_predictors()),
       stop("unknown step ", s))
   }
   rec

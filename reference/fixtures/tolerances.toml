@@ -40,6 +40,23 @@ resample_metric_abs = 1e-7
 summary_rel = 1e-7
 summary_abs = 1e-7
 
+# Engine-specific bounds: `<engine>_<key>` overrides `<key>` for that engine only.
+# native: the same algorithms as R (dqrdc2 pivoted QR for lm, glm.fit IRLS with the
+# deviance criterion), so differences are summation-order round-off. First measured run
+# (2026-10-12, VERIFICATION.md Phase 7): coefficients max 3.3e-13 rel (ames_reg, OLS and
+# logistic alike), predictions 5.4e-15 rel, probabilities 4.0e-15 abs, fold/summary
+# metrics <= 7e-14 rel, `converged` and classes exact. Bounds are >= 30x the measured
+# maxima.
+native_ols_coef_rel = 1e-11
+native_ols_pred_rel = 1e-13
+native_ols_pred_abs = 1e-9
+native_logistic_coef_rel = 1e-11
+native_logistic_prob_abs = 1e-13
+native_resample_metric_rel = 1e-12
+native_resample_metric_abs = 1e-12
+native_summary_rel = 1e-12
+native_summary_abs = 1e-12
+
 [tasks.ames_reg]
 # Wide dummy design (Neighborhood has 28 levels) with Sale_Price in the 1e5 range; the
 # fixture records xtx_condition. Bound set after the first measured run; see

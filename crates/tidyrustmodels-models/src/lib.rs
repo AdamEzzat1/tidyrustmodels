@@ -14,6 +14,7 @@ pub mod diag;
 pub mod fitted;
 pub mod linear;
 pub mod logistic;
+pub mod native;
 
 pub use backends::Engine;
 pub use fitted::{fitted_model_from_state, FittedLinear, FittedLogistic};

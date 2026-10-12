@@ -14,4 +14,7 @@ pub mod steps;
 
 pub use recipe::{FittedRecipe, Recipe};
 pub use selector::Selector;
-pub use steps::{StepDummy, StepImputeMean, StepImputeMedian, StepNormalize, StepSelect};
+pub use steps::{
+    StepCorr, StepDummy, StepImputeMean, StepImputeMedian, StepNormalize, StepNovel, StepNzv, StepOther,
+    StepSelect, StepUnknown, StepZv,
+};

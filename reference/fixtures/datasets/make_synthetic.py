@@ -60,6 +60,40 @@ def synthetic_clf_small():
     write_csv("synthetic_clf_small", ["x1", "x2", "g", "y"], rows)
 
 
+def synthetic_filter_reg():
+    """Designed so every filter/level step has something to do: x2 is ~0.98 correlated
+    with x1 (step_corr), x3 is 96% zeros (step_nzv), x4 is constant and x5 all missing
+    (step_zv), g has two rare levels (step_other), h has missing values (step_unknown)."""
+    rng = random.Random(20261014)
+    rows = []
+    g_levels = ["p", "q", "r", "s", "t", "u"]
+    g_probs = [0.40, 0.30, 0.15, 0.10, 0.03, 0.02]
+    for i in range(150):
+        x1 = rng.gauss(0.0, 1.0)
+        x2 = x1 + rng.gauss(0.0, 0.2)
+        x3 = 0.0 if rng.random() < 0.96 else round(rng.uniform(1.0, 3.0), 3)
+        x4 = 2.5
+        x5 = None
+        u = rng.random()
+        acc = 0.0
+        g = g_levels[-1]
+        for lv, pr in zip(g_levels, g_probs):
+            acc += pr
+            if u < acc:
+                g = lv
+                break
+        h = None if rng.random() < 0.08 else ("m" if rng.random() < 0.6 else "n")
+        geff = {"p": 0.0, "q": 0.5, "r": -0.5, "s": 1.0, "t": 2.0, "u": -2.0}[g]
+        heff = 0.0 if h is None else (0.3 if h == "m" else -0.3)
+        y = 2.0 + 1.5 * x1 - 0.5 * x2 + 0.8 * x3 + geff + heff + rng.gauss(0.0, 0.4)
+        rows.append([round(x1, 6), round(x2, 6), x3, x4, x5, g, h, round(y, 6)])
+    # a few missing x1 values for the imputation step
+    for i in [5, 40, 77, 120]:
+        rows[i][0] = None
+    write_csv("synthetic_filter_reg", ["x1", "x2", "x3", "x4", "x5", "g", "h", "y"], rows)
+
+
 if __name__ == "__main__":
     synthetic_reg_small()
     synthetic_clf_small()
+    synthetic_filter_reg()

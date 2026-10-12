@@ -29,13 +29,17 @@
   framework validates and aliases before calling it.
 - linfa-logistic does not expose L-BFGS termination status; convergence is verified by
   the framework's own gradient check.
+- The `native` engine (ADR-0009) reproduces R's `dqrdc2` pivoting and `glm.fit` IRLS;
+  against the pinned fixtures it agrees to round-off (3.3e-13 rel) where the L-BFGS
+  engines are bounded at ~1e-8 by the optimizer difference.
 
 ## Findings from benchmarking (run `2026-10-12-win11-i7-11390H`, BENCHMARKS.md)
 
 - OLS workflows: 8–240× faster per workflow fit (prep+bake+fit) and 5–57× faster end-to-end than R tidymodels
   on the recorded laptop, 8–50× less memory. Both sides used unoptimised single-threaded
   linear algebra (R's bundled `Rblas.dll`; pure-Rust linfa/smartcore).
-- Logistic workflows at 1e5 rows: the L-BFGS backends are **not faster** than R's IRLS
+- (Superseded for the default engine by ADR-0009 / runs E–F; still true for the L-BFGS
+  engines.) Logistic workflows at 1e5 rows: the L-BFGS backends are **not faster** than R's IRLS
   `glm` in steady state (Rust warm model-only fit 770 ms vs R warm workflow fit 587 ms), tuning is 0.69× the speed of
   glmnet, and single-thread end-to-end wall is slower than R (37.7 s vs 35.0 s). This is
   the measured need for an IRLS solver (ROADMAP.md Phase 7).
@@ -70,6 +74,7 @@
 | R9 | Rayon oversubscription when backends are also threaded | low | medium | Scoped pool; backends are single-threaded |
 | R10 | Windows peak-RSS sampling misses short-lived peaks | **occurred, fixed** | low | 81/180 Rust rows not captured in run A. Harness now retains a handle per tree process and reads `PeakWorkingSetSize` after exit; run B has no missing cell. POSIX path (`ru_maxrss` wrapper) untested |
 | R14 | Machine-state drift during long benchmark runs (laptop) | **occurred** (run C) | high for between-system ratios | Interleaved trial order; canary trial before/after; invalid runs kept on record and labelled, never averaged in |
-| R13 | L-BFGS logistic solver loses to IRLS/glmnet at large n | **measured** | medium | 1e5 rows: Rust model-only warm fit is 0.76× the speed of R's warm workflow fit, tuning 0.69× glmnet. Mitigation is a native IRLS solver (Phase 7), gated on a before/after benchmark |
+| R13 | L-BFGS logistic solver loses to IRLS/glmnet at large n | **resolved by default** | low | Native IRLS engine is the default (ADR-0009): 4× faster than linfa at 1e5 rows, 3.6–4.9× faster than `glm` cross-run. L-BFGS engines remain available and still lose at large n |
+| R15 | Native OLS is slower than linfa on wide designs | **measured** | low | Ames (34 columns): 2.06 vs 1.35 ms per fit. Unblocked Householder loop; blocked QR is the follow-up if wide designs matter |
 | R11 | tidymodels semantics misread | was medium | high | **mitigated**: every row in COMPATIBILITY.md marked "tested" is backed by a fixture comparison |
 | R12 | Fixtures drift from the committed datasets | low | medium | `checksums.json`; regeneration is a reviewed change |

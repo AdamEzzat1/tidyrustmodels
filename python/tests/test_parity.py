@@ -39,6 +39,18 @@ def _recipe(task: dict) -> trm.Recipe:
             rec = rec.step_normalize("all_numeric_predictors")
         elif s == "dummy_nominal":
             rec = rec.step_dummy("all_nominal_predictors")
+        elif s == "zv":
+            rec = rec.step_zv("all_predictors")
+        elif s == "nzv":
+            rec = rec.step_nzv("all_predictors")
+        elif s == "corr_numeric":
+            rec = rec.step_corr("all_numeric_predictors")
+        elif s == "other_nominal":
+            rec = rec.step_other("all_nominal_predictors")
+        elif s == "novel_nominal":
+            rec = rec.step_novel("all_nominal_predictors")
+        elif s == "unknown_nominal":
+            rec = rec.step_unknown("all_nominal_predictors")
         else:
             raise ValueError(s)
     return rec
@@ -56,7 +68,7 @@ def _load_task(task):
 
 
 @pytest.mark.parametrize("task", TASKS, ids=[t["id"] for t in TASKS])
-@pytest.mark.parametrize("engine", ["linfa", "smartcore"])
+@pytest.mark.parametrize("engine", ["linfa", "smartcore", "native"])
 def test_python_matches_rust_bitwise(task, engine):
     """Same binary, same inputs: Python results must equal the Rust test's outputs exactly."""
     rust_file = RUST_OUT / f"{task['id']}_{engine}.json"

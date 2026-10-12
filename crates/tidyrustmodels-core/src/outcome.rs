@@ -151,6 +151,10 @@ pub struct FitDiagnostics {
     /// Infinity norm of the objective gradient at the returned coefficients, computed
     /// by the framework independently of the backend (`None` for direct solvers).
     pub final_gradient_norm: Option<f64>,
+    /// Residual deviance at the solution, when the solver computes it (the native IRLS
+    /// engine; `glm$deviance`). Includes the penalty term when a penalty is set.
+    #[serde(default)]
+    pub deviance: Option<f64>,
     /// Warnings in the spirit of R's `glm` (e.g. fitted probabilities numerically 0 or 1).
     pub warnings: Vec<String>,
     /// Columns dropped before fitting because they were constant (aliased with the

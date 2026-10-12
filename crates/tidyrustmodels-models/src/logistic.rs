@@ -26,6 +26,18 @@ pub struct LogisticRegSpec {
     penalty: f64,
     max_iterations: u64,
     gradient_tolerance: f64,
+    #[serde(default = "default_irls_epsilon")]
+    irls_epsilon: f64,
+    #[serde(default = "default_irls_max_iterations")]
+    irls_max_iterations: usize,
+}
+
+fn default_irls_epsilon() -> f64 {
+    1e-8
+}
+
+fn default_irls_max_iterations() -> usize {
+    25
 }
 
 impl Default for LogisticRegSpec {
@@ -36,6 +48,8 @@ impl Default for LogisticRegSpec {
             penalty: 0.0,
             max_iterations: 1000,
             gradient_tolerance: 1e-8,
+            irls_epsilon: default_irls_epsilon(),
+            irls_max_iterations: default_irls_max_iterations(),
         }
     }
 }
@@ -77,6 +91,21 @@ impl LogisticRegSpec {
         self
     }
 
+    /// `glm.control(epsilon)` for the `native` IRLS engine (default `1e-8`): relative
+    /// change in deviance below which the fit is declared converged. Ignored by the
+    /// L-BFGS engines.
+    pub fn irls_epsilon(mut self, epsilon: f64) -> Self {
+        self.irls_epsilon = epsilon;
+        self
+    }
+
+    /// `glm.control(maxit)` for the `native` IRLS engine (default 25). Ignored by the
+    /// L-BFGS engines.
+    pub fn irls_max_iterations(mut self, n: usize) -> Self {
+        self.irls_max_iterations = n;
+        self
+    }
+
     /// Current penalty.
     pub fn penalty_value(&self) -> f64 {
         self.penalty
@@ -102,6 +131,14 @@ impl LogisticRegSpec {
         if self.max_iterations == 0 {
             return Err(Error::InvalidArgument("max_iterations must be >= 1".into()));
         }
+        if !self.irls_epsilon.is_finite() || self.irls_epsilon <= 0.0 {
+            return Err(Error::InvalidArgument(
+                "irls_epsilon must be finite and > 0".into(),
+            ));
+        }
+        if self.irls_max_iterations == 0 {
+            return Err(Error::InvalidArgument("irls_max_iterations must be >= 1".into()));
+        }
         Ok(())
     }
 }
@@ -113,6 +150,8 @@ pub(crate) struct LogisticOptions {
     pub penalty: f64,
     pub max_iterations: u64,
     pub gradient_tolerance: f64,
+    pub irls_epsilon: f64,
+    pub irls_max_iterations: usize,
 }
 
 impl ModelSpec for LogisticRegSpec {
@@ -155,16 +194,26 @@ impl ModelSpec for LogisticRegSpec {
             penalty: self.penalty,
             max_iterations: self.max_iterations,
             gradient_tolerance: self.gradient_tolerance,
+            irls_epsilon: self.irls_epsilon,
+            irls_max_iterations: self.irls_max_iterations,
         };
         let (xr, keep, aliased) = drop_aliased(x, self.intercept)?;
         let mut out = backends::fit_logistic(self.engine, &xr, codes, opts)?;
         out.coefs = expand(&out.coefs, &keep, x.ncols());
-        out.diagnostics.aliased = aliased;
+        // Constant/zero columns dropped before the fit come first, then any column the
+        // backend itself judged aliased (native pivoted QR).
+        let mut all_aliased = aliased;
+        all_aliased.append(&mut out.diagnostics.aliased);
+        out.diagnostics.aliased = all_aliased;
         let gnorm = logistic_gradient_norm(x, codes, out.intercept, &out.coefs, self.penalty);
         out.diagnostics.final_gradient_norm = Some(gnorm);
-        // Scale-aware convergence verdict: gradient entries are sums over n rows.
+        // Scale-aware convergence verdict: gradient entries are sums over n rows. A
+        // backend that reports its own verdict (the native IRLS, with glm's deviance
+        // criterion) keeps it, so `converged` means the same thing as R's `glm$converged`.
         let scale = (x.nrows() as f64).max(1.0);
-        out.diagnostics.converged = Some(gnorm <= self.gradient_tolerance * scale);
+        if out.diagnostics.converged.is_none() {
+            out.diagnostics.converged = Some(gnorm <= self.gradient_tolerance * scale);
+        }
         if probabilities_saturated(x, out.intercept, &out.coefs) {
             out.diagnostics
                 .warnings

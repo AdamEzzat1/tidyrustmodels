@@ -1,12 +1,16 @@
 //! Built-in preprocessing steps.
 
 mod dummy;
+mod filter;
 mod impute;
+mod levels;
 mod normalize;
 mod select;
 
 pub use dummy::{FittedDummy, StepDummy};
+pub use filter::{FittedCorr, FittedRemoveCols, StepCorr, StepNzv, StepZv};
 pub use impute::{FittedImpute, ImputeStat, StepImputeMean, StepImputeMedian};
+pub use levels::{FittedLevelAdd, FittedOther, OtherObject, StepNovel, StepOther, StepUnknown};
 pub use normalize::{FittedNormalize, StepNormalize};
 pub use select::{FittedSelect, StepSelect};
 
@@ -26,6 +30,10 @@ pub fn fitted_step_from_state(value: &serde_json::Value) -> Result<Box<dyn Fitte
         }
         "dummy" => Box::new(serde_json::from_value::<FittedDummy>(value.clone()).map_err(de)?),
         "select" => Box::new(serde_json::from_value::<FittedSelect>(value.clone()).map_err(de)?),
+        "zv" | "nzv" => Box::new(serde_json::from_value::<FittedRemoveCols>(value.clone()).map_err(de)?),
+        "corr" => Box::new(serde_json::from_value::<FittedCorr>(value.clone()).map_err(de)?),
+        "other" => Box::new(serde_json::from_value::<FittedOther>(value.clone()).map_err(de)?),
+        "novel" | "unknown" => Box::new(serde_json::from_value::<FittedLevelAdd>(value.clone()).map_err(de)?),
         other => return Err(Error::Serialization(format!("unknown built-in step `{other}`"))),
     })
 }

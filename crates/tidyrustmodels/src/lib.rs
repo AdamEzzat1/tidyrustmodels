@@ -43,7 +43,8 @@ pub mod prelude {
     pub use tidyrustmodels_metrics::{Metric, MetricSet, MetricValue};
     pub use tidyrustmodels_models::{Engine, LinearRegSpec, LogisticRegSpec};
     pub use tidyrustmodels_recipes::{
-        Recipe, Selector, StepDummy, StepImputeMean, StepImputeMedian, StepNormalize, StepSelect,
+        Recipe, Selector, StepCorr, StepDummy, StepImputeMean, StepImputeMedian, StepNormalize, StepNovel,
+        StepNzv, StepOther, StepSelect, StepUnknown, StepZv,
     };
     pub use tidyrustmodels_resample::{initial_split, strata_from_numeric, vfold_cv, Folds, Split};
     pub use tidyrustmodels_tune::{grid_random, grid_regular, tune_grid, Grid, ParamRange, TuneResults};

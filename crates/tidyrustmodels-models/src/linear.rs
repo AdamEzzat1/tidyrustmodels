@@ -9,7 +9,7 @@ use tidyrustmodels_core::{
 };
 
 /// Ordinary least squares, equivalent in objective to `parsnip::linear_reg()` with
-/// engine `lm`.
+/// engine `lm`. The default engine (`native`) is a port of `lm.fit`'s pivoted QR.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LinearRegSpec {
     engine: Engine,
@@ -69,7 +69,11 @@ impl ModelSpec for LinearRegSpec {
         validate_shapes(x, y.len(), self.intercept)?;
         let (xr, keep, aliased) = drop_aliased(x, self.intercept)?;
         let mut out = backends::fit_linear(self.engine, &xr, y, self.intercept)?;
-        out.diagnostics.aliased = aliased;
+        // Constant/zero columns dropped before the fit come first, then any column the
+        // backend itself judged aliased (native pivoted QR).
+        let mut all_aliased = aliased;
+        all_aliased.append(&mut out.diagnostics.aliased);
+        out.diagnostics.aliased = all_aliased;
         Ok(Box::new(FittedLinear::new(
             out.intercept,
             expand(&out.coefs, &keep, x.ncols()),
