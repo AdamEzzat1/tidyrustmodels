@@ -60,13 +60,18 @@ yardstick 1.4.0, tune 2.1.0.
 | `.pred_<level>` probability columns | `Prediction::Class{probabilities}` ordered as `levels` | event = `levels[0]` | tested (L3) |
 | `predict(type = "class")` | `Prediction::Class{codes}` | larger probability wins; ties → first level | tested (L3, exact) |
 | `glm$converged`, `glm$iter`, `glm$deviance` | `FitDiagnostics { converged, iterations, deviance, final_gradient_norm }` | native: same meaning and same values; L-BFGS engines: convergence by gradient check, no iteration count | tested (`converged` exact on all engines) |
+| `multinom_reg()` + `set_engine("nnet")` | `MultinomRegSpec` | first level is the baseline; `class_coefficients()` = `coef(multinom)` rows; native Newton-Raphson vs nnet's BFGS on the same objective (ADR-0010) | tested (L3 on 2 tasks × 3 engines: deviance 2.4e-15 rel, coefficients ≤ 3.5e-7 rel, probabilities ≤ 2e-8 abs — nnet's residual; L4 metrics) |
+| `multinom_reg(penalty)` ↔ nnet `decay` | `MultinomRegSpec::penalty` | **different**: unscaled L2 on slopes only vs `decay` on all weights incl. intercepts; verified at `penalty = 0` only | **difference** |
+| `predict(type = "class")` for `multinom` | arg-max | nnet's `max.col` breaks exact ties at random; here the first level wins | **difference** (ties only) |
+| `multinom` with rank-deficient design | aliased columns → coefficient 0 + `aliased` (ADR-0007) | nnet keeps unidentified parameters (no `NA`) | **difference** |
+| `multinom` with an outcome level absent from training | error | nnet fits (that level's probabilities collapse) | **difference** |
+| `tidy(multinom_fit)` std.error / p.value | not provided | | unsupported |
 | Case weights | not supported | | unsupported |
 | `workflowsets` | not supported | | unsupported |
 
 ## Unsupported in v0.1
 
-workflowsets, bootstraps, repeated CV, grouped resampling, case weights, multiclass
-**models** (multiclass metrics are implemented and verified on fixed arrays),
+workflowsets, bootstraps, repeated CV, grouped resampling, case weights,
 glmnet-equivalent penalization, tree models, `tailor` post-processing,
 `step_zv(group =)`, `step_corr(method = "spearman"/"kendall")`, case-weighted filters,
 `roc_curve(thresholds =)`, `gain_curve`/`lift_curve`, `classification_cost`,

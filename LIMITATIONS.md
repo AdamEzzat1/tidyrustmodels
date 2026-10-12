@@ -2,9 +2,8 @@
 
 ## Known limitations (v0.1 scope)
 
-- Estimators: linear regression and binary logistic regression only. No multiclass
-  models (the multiclass metrics exist and are verified on fixed arrays), no penalized
-  paths (`glmnet`), no trees.
+- Estimators: linear regression, binary logistic regression and multinomial
+  regression. No penalized paths (`glmnet`), no trees, no case weights.
 - Precision: `f64` only.
 - Preprocessing: select, mean/median imputation, normalize, dummy, zv, nzv, corr, other,
   novel, unknown. No `step_interact`, `step_pca`, splines.

@@ -48,6 +48,8 @@ pub enum Capability {
     Regression,
     /// Two-level categorical outcomes.
     BinaryClassification,
+    /// Categorical outcomes with three or more levels (ADR-0010).
+    MulticlassClassification,
     /// Returns a full probability matrix for classification.
     ClassProbabilities,
     /// Exposes named linear coefficients.
@@ -119,8 +121,15 @@ pub trait FittedModel: Debug + Send + Sync {
     /// Feature names the model was fitted on.
     fn feature_names(&self) -> &[String];
 
-    /// Linear coefficients, when the model exposes them.
+    /// Linear coefficients, when the model exposes a single set of them.
     fn coefficients(&self) -> Option<Coefficients> {
+        None
+    }
+
+    /// Per-level coefficient sets for multiclass linear models: one entry per
+    /// non-baseline level `(level, coefficients)` in level order, relative to the first
+    /// level, as `coef(nnet::multinom)` reports them (ADR-0010). `None` otherwise.
+    fn class_coefficients(&self) -> Option<Vec<(String, Coefficients)>> {
         None
     }
 

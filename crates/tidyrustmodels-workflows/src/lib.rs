@@ -132,10 +132,18 @@ pub fn check_capabilities(model: &dyn ModelSpec, y: &Outcome) -> Result<()> {
                 model.name()
             )))
         }
-        Outcome::Class { levels, .. } if levels.len() != 2 => Err(Error::Unsupported(format!(
-            "`{}` does not support {}-level classification",
-            model.name(),
-            levels.len()
+        Outcome::Class { levels, .. }
+            if levels.len() > 2 && !caps.contains(&Capability::MulticlassClassification) =>
+        {
+            Err(Error::Unsupported(format!(
+                "`{}` does not support {}-level classification",
+                model.name(),
+                levels.len()
+            )))
+        }
+        Outcome::Class { levels, .. } if levels.len() < 2 => Err(Error::Unsupported(format!(
+            "`{}` needs at least two outcome levels",
+            model.name()
         ))),
         _ => Ok(()),
     }

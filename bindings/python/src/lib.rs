@@ -282,14 +282,52 @@ impl PyLogisticReg {
     }
 }
 
+/// `parsnip::multinom_reg()`: multinomial regression (ADR-0010). The first outcome level
+/// is the baseline; `coefficients()` on the fitted workflow returns one dict per other
+/// level. `penalty` is the unscaled L2 term of the Rust API (not nnet's `decay`).
+#[pyclass(name = "MultinomReg", module = "tidyrustmodels._native", from_py_object)]
+#[derive(Clone)]
+struct PyMultinomReg {
+    inner: MultinomRegSpec,
+}
+
+#[pymethods]
+impl PyMultinomReg {
+    #[new]
+    #[pyo3(signature = (engine = "native", intercept = true, penalty = 0.0, epsilon = 1e-10, newton_max_iterations = 100, max_iterations = 1000, gradient_tolerance = 1e-8))]
+    fn new(
+        engine: &str,
+        intercept: bool,
+        penalty: f64,
+        epsilon: f64,
+        newton_max_iterations: usize,
+        max_iterations: u64,
+        gradient_tolerance: f64,
+    ) -> PyResult<Self> {
+        Ok(PyMultinomReg {
+            inner: MultinomRegSpec::new()
+                .engine(parse_engine(engine)?)
+                .intercept(intercept)
+                .penalty(penalty)
+                .epsilon(epsilon)
+                .newton_max_iterations(newton_max_iterations)
+                .max_iterations(max_iterations)
+                .gradient_tolerance(gradient_tolerance),
+        })
+    }
+}
+
 fn model_from_py(model: &Bound<'_, PyAny>) -> PyResult<Box<dyn ModelSpec>> {
+    if let Ok(m) = model.extract::<PyMultinomReg>() {
+        return Ok(Box::new(m.inner));
+    }
     if let Ok(m) = model.extract::<PyLinearReg>() {
         return Ok(Box::new(m.inner));
     }
     if let Ok(m) = model.extract::<PyLogisticReg>() {
         return Ok(Box::new(m.inner));
     }
-    Err(InvalidArgumentError::new_err("model must be a LinearReg or LogisticReg"))
+    Err(InvalidArgumentError::new_err("model must be a LinearReg, LogisticReg or MultinomReg"))
 }
 
 // ---------------------------------------------------------------- Resampling
@@ -478,14 +516,25 @@ impl PyFittedWorkflow {
         })
     }
 
-    /// `{"(Intercept)": float | None, feature: float, ...}` in design-matrix order.
+    /// `{"(Intercept)": float | None, feature: float, ...}` in design-matrix order; for a
+    /// multinomial model, `{level: {...}}` with one such dict per non-baseline level.
     fn coefficients<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let d = PyDict::new(py);
-        if let Some(c) = self.inner.model().coefficients() {
+        let fill = |d: &Bound<'py, PyDict>, c: Coefficients| -> PyResult<()> {
             d.set_item("(Intercept)", c.intercept)?;
             for (name, v) in c.terms {
                 d.set_item(name, v)?;
             }
+            Ok(())
+        };
+        if let Some(sets) = self.inner.model().class_coefficients() {
+            for (level, c) in sets {
+                let inner = PyDict::new(py);
+                fill(&inner, c)?;
+                d.set_item(level, inner)?;
+            }
+        } else if let Some(c) = self.inner.model().coefficients() {
+            fill(&d, c)?;
         }
         Ok(d)
     }
@@ -686,6 +735,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRecipe>()?;
     m.add_class::<PyLinearReg>()?;
     m.add_class::<PyLogisticReg>()?;
+    m.add_class::<PyMultinomReg>()?;
     m.add_class::<PyFolds>()?;
     m.add_class::<PyWorkflow>()?;
     m.add_class::<PyFittedWorkflow>()?;

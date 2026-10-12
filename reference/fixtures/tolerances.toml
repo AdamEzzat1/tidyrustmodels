@@ -33,6 +33,18 @@ ols_pred_abs = 1e-8
 logistic_coef_rel = 1e-7
 logistic_prob_abs = 1e-7
 
+# Level 3: multinomial coefficients and probabilities. R: nnet's BFGS on the same
+# objective stopped at reltol = 1e-15 (maxit 10000); Rust native: Newton-Raphson to a
+# relative deviance change of 1e-10. First run (2026-10-12, VERIFICATION.md Phase 8c):
+# deviances agree to 2.4e-15 relative on every engine and ours is never above nnet's,
+# while coefficients differ by up to 3.5e-7 relative and probabilities by 2e-8 absolute
+# on every engine alike, i.e. the residual is nnet's position on a flat objective, not
+# the Rust solvers'. Bounds are ~3x the measured maxima (tightened from the provisional
+# 1e-5 / 1e-6 / 1e-8).
+multinom_coef_rel = 1e-6
+multinom_prob_abs = 1e-7
+multinom_deviance_rel = 1e-13
+
 # Level 4: per-fold metrics inherit the level-3 bound of the task; summary mean/std_err
 # are plain arithmetic over per-fold values.
 resample_metric_rel = 1e-7
@@ -63,3 +75,27 @@ native_summary_abs = 1e-12
 # VERIFICATION.md Phase 4 record for the measured value.
 ols_coef_rel = 1e-7
 ols_pred_rel = 1e-9
+
+# Multiclass tasks: metrics inherit the multinomial probability residual of nnet (see
+# above), on the native engine as well, so its exact-arithmetic overrides do not apply.
+# Measured maxima (Phase 8c): fold/summary metrics 3.5e-7 rel / 1.4e-8 abs
+# (penguins_species std_err), test-set metrics 5.5e-9 rel.
+[tasks.synth_multi]
+resample_metric_rel = 1e-6
+resample_metric_abs = 1e-7
+summary_rel = 1e-6
+summary_abs = 1e-7
+native_resample_metric_rel = 1e-6
+native_resample_metric_abs = 1e-7
+native_summary_rel = 1e-6
+native_summary_abs = 1e-7
+
+[tasks.penguins_species]
+resample_metric_rel = 1e-6
+resample_metric_abs = 1e-7
+summary_rel = 1e-6
+summary_abs = 1e-7
+native_resample_metric_rel = 1e-6
+native_resample_metric_abs = 1e-7
+native_summary_rel = 1e-6
+native_summary_abs = 1e-7

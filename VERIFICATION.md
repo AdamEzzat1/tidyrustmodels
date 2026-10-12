@@ -222,6 +222,40 @@ fixture in `python/tests/test_parity.py` (36 tests pass).
 Not covered: case weights, `roc_curve(thresholds =)`, multiclass metrics on model
 predictions (no multiclass model yet; Phase 8c), and yardstick's warnings (silent here).
 
+## Multiclass outcomes (Phase 8c)
+
+Executed 2026-10-12. `MultinomRegSpec` (ADR-0010) on three engines against
+`parsnip::multinom_reg() %>% set_engine("nnet", maxit = 10000, reltol = 1e-15)` on two
+new reference tasks, through the same differential suite (now 3027 comparisons, 0
+failures):
+
+| task | dataset | what R did | deviance (ours vs nnet) | coefficients | probabilities |
+|---|---|---|---|---|---|
+| `synth_multi` | `synthetic_multi_small` (180 × 5, three overlapping classes, nominal `g`) | converged, deviance 179.7489 | agree to 2.4e-15 rel on linfa, smartcore and native; ours ≤ nnet's on all | ≤ 3.5e-7 rel (every engine) | ≤ 2e-8 abs |
+| `penguins_species` | penguins, `species ~ bill_length_mm + body_mass_g` (near-separable; |coef| up to 19 after normalisation) | converged, deviance 58.3987 | agree to 1.5e-15 rel; ours ≤ nnet's | ≤ 7e-8 rel | ≤ 8e-9 abs |
+
+Reading: the three Rust engines reach the same optimum (they agree with each other to
+~1e-8 and the native Newton solver reports the deviance the harness recomputes from its
+probabilities to 0 ulp), and the remaining 1e-7-level difference to R is where nnet's
+BFGS stopped on a flat objective. nnet's **default** `reltol = 1e-8` is further away:
+coefficients 4e-4 relative off the optimum on `synth_multi` and 0.9% on
+`penguins_species` (recorded in each fixture under `fit.nnet_default`).
+
+Also covered: coefficient levels and names exact; `converged` exact; predicted classes
+exact; the 15 multiclass metrics on the test set (L2) and per fold with summaries (L4)
+within 3.5e-7 relative (nnet's residual propagated; bounds per task in
+tolerances.toml). Independent baselines in
+`crates/tidyrustmodels-models/tests/multinom.rs`: closed-form MLE on a saturated design
+(all engines), engine agreement with the native deviance as the minimum, two-level
+reduction to `logistic_reg` (1e-8), aliased columns, absent-level error, exact state
+round trip. Python: `MultinomReg` is bitwise equal to the Rust outputs and within the
+same bounds of R (44 tests pass).
+
+Excluded on purpose: iris with four predictors and penguins with `sex` are (quasi-)
+separable; nnet reports convergence at coefficient magnitudes of 90–250 that depend on
+its stopping rule, so no finite reference exists. Not covered: `penalty > 0` against
+`decay`, case weights, absent outcome levels.
+
 ## Test inventory
 
 | suite | location | runs in CI | needs R |
@@ -230,6 +264,7 @@ predictions (no multiclass model yet; Phase 8c), and yardstick's warnings (silen
 | property | `crates/tidyrustmodels-recipes/tests/prop_steps.rs` | yes | no |
 | analytic baselines | `crates/tidyrustmodels-models/tests/baselines.rs` | yes | no |
 | collinearity behaviour | `crates/tidyrustmodels-models/tests/collinear.rs` | yes | no |
+| multinomial baselines | `crates/tidyrustmodels-models/tests/multinom.rs` | yes | no |
 | differential vs pinned R fixtures | `crates/tidyrustmodels/tests/differential.rs` | yes | no (fixtures committed) |
 | fixture regeneration | `reference/tidymodels-r/` | scheduled job only | yes |
 | Python parity | `python/tests/` | yes (python job) | no |

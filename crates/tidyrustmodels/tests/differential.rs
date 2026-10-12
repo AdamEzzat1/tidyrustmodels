@@ -290,9 +290,11 @@ fn task_table(task: &Value) -> Table {
     Table::new(cols).unwrap()
 }
 
-fn model_for(task: &Value, engine: Engine) -> Box<dyn ModelSpec> {
+fn model_for(task: &Value, engine: Engine, y: &Outcome) -> Box<dyn ModelSpec> {
     if task["type"] == "regression" {
         Box::new(LinearRegSpec::new().engine(engine))
+    } else if y.as_class().map(|(_, l)| l.len()).unwrap_or(0) > 2 {
+        Box::new(MultinomRegSpec::new().engine(engine))
     } else {
         Box::new(LogisticRegSpec::new().engine(engine))
     }
@@ -524,46 +526,152 @@ fn differential_against_r_fixtures() {
         let metrics = MetricSet::from_names(&strs(&task["metrics"])).unwrap();
         for engine in [Engine::Linfa, Engine::Smartcore, Engine::Native] {
             let eng = engine.as_str();
-            let spec = model_for(task, engine);
+            let spec = model_for(task, engine, &y_train);
+            let is_multi = spec.name() == "multinom_reg";
             let fitted = spec.fit(&x_train, &y_train).unwrap();
-            let coefs = fitted.coefficients().unwrap();
             let r_names = strs(&fx["fit"]["coefficient_names"]);
-            let our_names: Vec<String> = std::iter::once("(Intercept)".to_string())
-                .chain(coefs.terms.iter().map(|t| t.0.clone()))
-                .collect();
-            report.exact(id, eng, "L3", "coefficient names", &our_names, &r_names);
-            let all_ours: Vec<f64> = std::iter::once(coefs.intercept.unwrap())
-                .chain(coefs.terms.iter().map(|t| t.1))
-                .collect();
-            let mut our_vals = Vec::new();
-            let mut r_vals = Vec::new();
             let aliased = fitted.diagnostics().aliased;
-            for (n, v) in r_names.iter().zip(&all_ours) {
-                match fx["fit"]["coefficients"][n].as_f64() {
-                    Some(r) => {
-                        our_vals.push(*v);
-                        r_vals.push(r);
+            // One coefficient set for lm/glm; one per non-baseline level for multinom.
+            let sets: Vec<(Option<String>, Coefficients)> = if is_multi {
+                let cc = fitted.class_coefficients().unwrap();
+                report.exact(
+                    id,
+                    eng,
+                    "L3",
+                    "coefficient levels",
+                    &cc.iter().map(|(l, _)| l.clone()).collect::<Vec<_>>(),
+                    &strs(&fx["fit"]["coefficient_levels"]),
+                );
+                cc.into_iter().map(|(l, c)| (Some(l), c)).collect()
+            } else {
+                vec![(None, fitted.coefficients().unwrap())]
+            };
+            let coef_key = if is_reg {
+                "ols_coef"
+            } else if is_multi {
+                "multinom_coef"
+            } else {
+                "logistic_coef"
+            };
+            let mut class_dump = serde_json::Map::new();
+            for (level, coefs) in &sets {
+                let label = level.as_deref().map(|l| format!(" `{l}`")).unwrap_or_default();
+                let our_names: Vec<String> = std::iter::once("(Intercept)".to_string())
+                    .chain(coefs.terms.iter().map(|t| t.0.clone()))
+                    .collect();
+                report.exact(
+                    id,
+                    eng,
+                    "L3",
+                    &format!("coefficient names{label}"),
+                    &our_names,
+                    &r_names,
+                );
+                let all_ours: Vec<f64> = std::iter::once(coefs.intercept.unwrap())
+                    .chain(coefs.terms.iter().map(|t| t.1))
+                    .collect();
+                let theirs = match level {
+                    Some(l) => &fx["fit"]["coefficients"][l],
+                    None => &fx["fit"]["coefficients"],
+                };
+                let mut our_vals = Vec::new();
+                let mut r_vals = Vec::new();
+                for (n, v) in r_names.iter().zip(&all_ours) {
+                    match theirs[n].as_f64() {
+                        Some(r) => {
+                            our_vals.push(*v);
+                            r_vals.push(r);
+                        }
+                        // R reports NA for an aliased coefficient; we must have flagged the same column.
+                        None => report.exact(
+                            id,
+                            eng,
+                            "L3",
+                            &format!("aliased `{n}`{label} (R: NA)"),
+                            &true,
+                            &aliased.contains(n),
+                        ),
                     }
-                    // R reports NA for an aliased coefficient; we must have flagged the same column.
-                    None => report.exact(
+                }
+                report.compare(
+                    id,
+                    eng,
+                    "L3",
+                    &format!("coefficients{label}"),
+                    &our_vals,
+                    &r_vals,
+                    tol.pair_eng(id, coef_key, eng),
+                );
+                if let Some(l) = level {
+                    let m: serde_json::Map<String, Value> = r_names
+                        .iter()
+                        .zip(&all_ours)
+                        .map(|(n, v)| (n.clone(), serde_json::json!(v)))
+                        .collect();
+                    class_dump.insert(l.clone(), Value::Object(m));
+                }
+            }
+            let coefs = &sets[0].1;
+            if is_multi {
+                // Both solvers minimise the same deviance; ours must not end above nnet's.
+                // Deviance recomputed by the harness from the fitted probabilities on the
+                // training rows (the L-BFGS engines report none; the native one must agree).
+                let d = match fitted.predict(&x_train).unwrap() {
+                    Prediction::Class {
+                        probabilities: Some(p),
+                        ..
+                    } => {
+                        let (codes, _) = y_train.as_class().unwrap();
+                        -2.0 * codes
+                            .iter()
+                            .enumerate()
+                            .map(|(i, c)| p.get(i, *c as usize).ln())
+                            .sum::<f64>()
+                    }
+                    _ => unreachable!(),
+                };
+                if let Some(dd) = fitted.diagnostics().deviance {
+                    report.compare(
                         id,
                         eng,
                         "L3",
-                        &format!("aliased `{n}` (R: NA)"),
-                        &true,
-                        &aliased.contains(n),
-                    ),
+                        "reported deviance vs recomputed",
+                        &[dd],
+                        &[d],
+                        (1e-12, 0.0),
+                    );
                 }
+                let r_dev = fx["fit"]["deviance"].as_f64().unwrap();
+                report.exact(
+                    id,
+                    eng,
+                    "L3",
+                    "deviance <= nnet's (within 1e-9 rel)",
+                    &true,
+                    &(d <= r_dev * (1.0 + 1e-9)),
+                );
+                report.compare(
+                    id,
+                    eng,
+                    "L3",
+                    "deviance",
+                    &[d],
+                    &[r_dev],
+                    tol.pair_eng(id, "multinom_deviance", eng),
+                );
             }
-            let coef_tol = tol.pair_eng(id, if is_reg { "ols_coef" } else { "logistic_coef" }, eng);
-            report.compare(id, eng, "L3", "coefficients", &our_vals, &r_vals, coef_tol);
 
             let pred_test = fitted.predict(&x_test).unwrap();
             // Level 5 support: dump this engine's outputs for the Python parity test.
             let mut dump = serde_json::json!({
                 "task": id, "engine": eng,
-                "coefficient_names": our_names,
-                "coefficients": all_ours,
+                "coefficient_names": std::iter::once("(Intercept)".to_string())
+                    .chain(coefs.terms.iter().map(|t| t.0.clone()))
+                    .collect::<Vec<_>>(),
+                "class_coefficients": if is_multi { Value::Object(class_dump.clone()) } else { Value::Null },
+                "coefficients": std::iter::once(coefs.intercept.unwrap())
+                    .chain(coefs.terms.iter().map(|t| t.1))
+                    .collect::<Vec<_>>(),
             });
             match &pred_test {
                 Prediction::Numeric(p) => dump["predicted_test"] = serde_json::json!(p),
@@ -573,6 +681,7 @@ fn differential_against_r_fixtures() {
                     probabilities,
                 } => {
                     dump["prob_event_test"] = serde_json::json!(probabilities.as_ref().unwrap().column(0));
+                    dump["prob_test"] = serde_json::json!(probabilities.as_ref().unwrap().to_row_major());
                     dump["class_test"] = serde_json::json!(codes
                         .iter()
                         .map(|c| levels[*c as usize].clone())
@@ -619,7 +728,18 @@ fn differential_against_r_fixtures() {
                         &format!("test prob `{lv}`"),
                         probs.column(j),
                         &theirs,
-                        (0.0, tol.get_eng(id, "logistic_prob_abs", eng)),
+                        (
+                            0.0,
+                            tol.get_eng(
+                                id,
+                                if is_multi {
+                                    "multinom_prob_abs"
+                                } else {
+                                    "logistic_prob_abs"
+                                },
+                                eng,
+                            ),
+                        ),
                     );
                 }
                 let our_classes: Vec<String> = codes.iter().map(|c| levels[*c as usize].clone()).collect();

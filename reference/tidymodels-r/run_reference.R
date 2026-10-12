@@ -82,7 +82,11 @@ run_task <- function(task) {
 
   f <- as.formula(paste(task$outcome, "~ ."))
   rec <- add_steps(recipe(f, data = train), task$steps)
-  model <- if (task$type == "regression") linear_reg() %>% set_engine("lm") else logistic_reg() %>% set_engine("glm")
+  n_lv <- if (task$type == "classification") nlevels(train[[task$outcome]]) else 0L
+  multi <- n_lv > 2
+  model <- if (task$type == "regression") linear_reg() %>% set_engine("lm") else
+           if (multi) multinom_reg() %>% set_engine("nnet", maxit = 10000, reltol = 1e-15, trace = FALSE) else
+           logistic_reg() %>% set_engine("glm")
   wf <- workflow() %>% add_recipe(rec) %>% add_model(model)
 
   # ---- Level 1: preprocessing ----
@@ -100,17 +104,28 @@ run_task <- function(task) {
   fit <- fit(wf, data = train)
   eng <- extract_fit_engine(fit)
   coefs <- coef(eng)
+  coef_list <- function(cf) {
+    if (is.matrix(cf)) lapply(setNames(seq_len(nrow(cf)), rownames(cf)), function(r) as.list(cf[r, ])) else as.list(cf)
+  }
+  nnet_default <- if (multi) {
+    wf2 <- workflow() %>% add_recipe(rec) %>% add_model(multinom_reg() %>% set_engine("nnet", trace = FALSE))
+    e2 <- extract_fit_engine(fit(wf2, data = train))
+    list(value = e2$value, convergence = e2$convergence, coefficients = coef_list(coef(e2)))
+  } else NULL
   fit_info <- list(
-    coefficients = as.list(coefs),
-    coefficient_names = names(coefs),
+    coefficients = coef_list(coefs),
+    coefficient_names = if (multi) colnames(coefs) else names(coefs),
+    coefficient_levels = if (multi) rownames(coefs) else NULL,
+    nnet_value = if (multi) eng$value else NULL,
+    nnet_default = nnet_default,
     fitted_train = if (task$type == "regression") as.numeric(predict(fit, train)$.pred)
                    else columns_as_list(predict(fit, train, type = "prob")),
     predicted_test = if (task$type == "regression") as.numeric(predict(fit, test)$.pred)
                      else columns_as_list(predict(fit, test, type = "prob")),
     class_test = if (task$type == "classification") as.character(predict(fit, test)$.pred_class) else NULL,
-    converged = if (task$type == "classification") eng$converged else NULL,
-    iterations = if (task$type == "classification") eng$iter else NULL,
-    deviance = if (task$type == "classification") eng$deviance else NULL,
+    converged = if (task$type == "classification") { if (multi) eng$convergence == 0 else eng$converged } else NULL,
+    iterations = if (task$type == "classification" && !multi) eng$iter else NULL,
+    deviance = if (task$type == "classification") { if (multi) 2 * eng$value else eng$deviance } else NULL,
     outcome_levels = if (task$type == "classification") levels(train[[task$outcome]]) else NULL,
     xtx_condition = {
       X <- as.matrix(baked_train[, pred_cols, drop = FALSE]); X <- cbind(1, X)
@@ -123,8 +138,13 @@ run_task <- function(task) {
       m <- ms(data.frame(truth = test[[task$outcome]], estimate = fit_info$predicted_test), truth = truth, estimate = estimate)
     } else {
       probs <- predict(fit, test, type = "prob"); cls <- predict(fit, test)$.pred_class
-      d <- data.frame(truth = test[[task$outcome]], estimate = cls, prob = probs[[1]])
-      m <- ms(d, truth = truth, estimate = estimate, prob)
+      if (multi) {
+        d <- cbind(data.frame(truth = test[[task$outcome]], estimate = cls), as.data.frame(probs))
+        m <- ms(d, truth = truth, estimate = estimate, tidyselect::starts_with(".pred_"))
+      } else {
+        d <- data.frame(truth = test[[task$outcome]], estimate = cls, prob = probs[[1]])
+        m <- ms(d, truth = truth, estimate = estimate, prob)
+      }
     }
     setNames(as.list(m$.estimate), m$.metric)
   }

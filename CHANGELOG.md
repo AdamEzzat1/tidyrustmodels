@@ -25,6 +25,11 @@ VERIFICATION.md; nothing is claimed beyond those records.
   verified on fixed arrays with ties and degenerate cases and on three reference tasks
   (VERIFICATION.md Phase 8b). `MetricSet::classification_defaults()` is now tune's
   `accuracy, roc_auc, brier_class`. Python: `class_metrics`, `conf_mat`.
+- `MultinomRegSpec` (`multinom_reg`, ADR-0010): multinomial regression with the first
+  level as baseline on all three engines (native Newton-Raphson with the exact Hessian;
+  linfa/smartcore softmax converted to baseline form), `FittedModel::class_coefficients`,
+  `Capability::MulticlassClassification`; two reference tasks against `nnet` (deviance
+  agrees to 2.4e-15, coefficients to nnet's 3.5e-7 residual). Python: `MultinomReg`.
 - Workflows: `fit`, `predict`, `fit_resamples` with per-fold prep and serial-identical
   parallel execution; versioned JSON round trip.
 - Tuning: `grid_regular`, `grid_random`, `tune_grid`, `show_best`.
@@ -47,6 +52,6 @@ VERIFICATION.md; nothing is claimed beyond those records.
   BENCHMARKS.md for what they show, including where tidyrustmodels is slower than R.
 
 ### Known limitations
-See LIMITATIONS.md. Highlights: binary classification models only (multiclass metrics exist);
+See LIMITATIONS.md. Highlights: no penalised paths, trees or case weights;
 general collinearity aliased by the native engine only; smartcore engine always fits an intercept and ignores optimizer settings;
 unseen categorical levels at bake time are an error.

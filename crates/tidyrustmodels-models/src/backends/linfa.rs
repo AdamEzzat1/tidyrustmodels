@@ -1,10 +1,11 @@
 //! Adapter for `linfa-linear` / `linfa-logistic` 0.8.1 (ndarray 0.16).
 
-use super::FitOutput;
+use super::{relative_to_baseline, FitOutput, MultiFitOutput};
 use crate::logistic::LogisticOptions;
+use crate::multinom::MultinomOptions;
 use linfa::prelude::*;
 use linfa_linear::LinearRegression;
-use linfa_logistic::LogisticRegression;
+use linfa_logistic::{LogisticRegression, MultiLogisticRegression};
 use ndarray16::{Array1, Array2, ShapeBuilder};
 use tidyrustmodels_core::{DesignMatrix, Error, FitDiagnostics, Result};
 
@@ -60,4 +61,42 @@ pub(crate) fn fit_logistic(x: &DesignMatrix, y: &[u32], opts: LogisticOptions) -
             ..Default::default()
         },
     })
+}
+
+/// Multinomial fit through linfa's symmetric softmax model, converted to the
+/// baseline-relative parametrisation.
+pub(crate) fn fit_multinom(
+    x: &DesignMatrix,
+    y: &[u32],
+    k: usize,
+    opts: MultinomOptions,
+) -> Result<MultiFitOutput> {
+    let targets: Array1<usize> = y.iter().map(|&c| c as usize).collect();
+    let ds = Dataset::new(records(x)?, targets);
+    let model = MultiLogisticRegression::default()
+        .alpha(opts.penalty)
+        .with_intercept(opts.intercept)
+        .max_iterations(opts.max_iterations)
+        .gradient_tolerance(opts.gradient_tolerance)
+        .fit(&ds)
+        .map_err(|e| Error::backend(ENGINE, e))?;
+    let classes = model.classes();
+    let params = model.params();
+    let mut intercepts = vec![0.0; k];
+    let mut coefs = vec![vec![0.0; x.ncols()]; k];
+    for c in 0..k {
+        let col = classes
+            .iter()
+            .position(|cl| *cl == c)
+            .ok_or_else(|| Error::Backend {
+                engine: ENGINE.into(),
+                message: format!("class {c} missing from the fitted model"),
+            })?;
+        intercepts[c] = model.intercept()[col];
+        coefs[c] = params.column(col).to_vec();
+    }
+    let mut out = relative_to_baseline(&intercepts, &coefs, opts.intercept);
+    out.diagnostics.note =
+        Some("linfa does not expose L-BFGS termination status; see final_gradient_norm".into());
+    Ok(out)
 }

@@ -1,7 +1,8 @@
 //! Adapter for `smartcore` 0.6.16 using its native `DenseMatrix` (no ndarray).
 
-use super::FitOutput;
+use super::{relative_to_baseline, FitOutput, MultiFitOutput};
 use crate::logistic::LogisticOptions;
+use crate::multinom::MultinomOptions;
 use smartcore::linalg::basic::arrays::Array;
 use smartcore::linalg::basic::matrix::DenseMatrix;
 use smartcore::linear::linear_regression::{LinearRegression, LinearRegressionParameters};
@@ -100,4 +101,74 @@ pub(crate) fn fit_logistic(x: &DesignMatrix, y: &[u32], opts: LogisticOptions) -
             ..Default::default()
         },
     })
+}
+
+/// Multinomial fit through smartcore's softmax model (`k x (p + 1)` weights),
+/// converted to the baseline-relative parametrisation.
+pub(crate) fn fit_multinom(
+    x: &DesignMatrix,
+    y: &[u32],
+    k: usize,
+    opts: MultinomOptions,
+) -> Result<MultiFitOutput> {
+    if !opts.intercept {
+        return Err(Error::Unsupported(
+            "engine `smartcore` always fits an intercept for multinom_reg".into(),
+        ));
+    }
+    if k == 2 {
+        // smartcore switches to its binary objective for two classes; reuse that path.
+        let b = fit_logistic(
+            x,
+            y,
+            LogisticOptions {
+                intercept: true,
+                penalty: opts.penalty,
+                max_iterations: opts.max_iterations,
+                gradient_tolerance: opts.gradient_tolerance,
+                irls_epsilon: 1e-8,
+                irls_max_iterations: 25,
+            },
+        )?;
+        return Ok(MultiFitOutput {
+            intercepts: Some(vec![b.intercept.unwrap_or(0.0)]),
+            coefs: vec![b.coefs],
+            diagnostics: b.diagnostics,
+        });
+    }
+    let xm = matrix(x)?;
+    let params = LogisticRegressionParameters::default().with_alpha(opts.penalty);
+    let model = LogisticRegression::fit(&xm, &y.to_vec(), params).map_err(|e| Error::backend(ENGINE, e))?;
+    let coef = model.coefficients();
+    let (r, c) = coef.shape();
+    if r != k || c != x.ncols() {
+        return Err(Error::Backend {
+            engine: ENGINE.into(),
+            message: format!(
+                "coefficient matrix is {r}x{c} for {k} classes and {} features",
+                x.ncols()
+            ),
+        });
+    }
+    let classes = model.classes();
+    let mut intercepts = vec![0.0; k];
+    let mut coefs = vec![vec![0.0; x.ncols()]; k];
+    for cl in 0..k {
+        let row = classes
+            .iter()
+            .position(|v| *v as usize == cl)
+            .ok_or_else(|| Error::Backend {
+                engine: ENGINE.into(),
+                message: format!("class {cl} missing from the fitted model"),
+            })?;
+        intercepts[cl] = *model.intercept().get((row, 0));
+        coefs[cl] = (0..x.ncols()).map(|j| *coef.get((row, j))).collect();
+    }
+    let mut out = relative_to_baseline(&intercepts, &coefs, true);
+    out.diagnostics.note = Some(
+        "smartcore L-BFGS uses fixed settings (g_atol=1e-8, max_iter=1000); \
+         max_iterations/gradient_tolerance are ignored on this engine"
+            .into(),
+    );
+    Ok(out)
 }

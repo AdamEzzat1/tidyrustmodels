@@ -235,6 +235,168 @@ impl FittedModel for FittedLogistic {
     }
 }
 
+/// A fitted multinomial regression (ADR-0010).
+///
+/// `levels[0]` is the baseline; `coefs[c - 1]` / `intercepts[c - 1]` give the log-odds
+/// of `levels[c]` against the baseline, as `coef(nnet::multinom)` reports them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FittedMultinom {
+    model: String,
+    format_version: u32,
+    /// Intercept per non-baseline level, if fitted.
+    pub intercepts: Option<Vec<f64>>,
+    /// Slopes per non-baseline level (each one coefficient per feature).
+    pub coefs: Vec<Vec<f64>>,
+    names: Vec<String>,
+    /// Outcome levels in training order.
+    pub levels: Vec<String>,
+    backend: BackendInfo,
+    diagnostics: FitDiagnostics,
+}
+
+impl FittedMultinom {
+    /// Assemble from backend output.
+    pub fn new(
+        intercepts: Option<Vec<f64>>,
+        coefs: Vec<Vec<f64>>,
+        names: Vec<String>,
+        levels: Vec<String>,
+        backend: BackendInfo,
+        diagnostics: FitDiagnostics,
+    ) -> Result<Self> {
+        if levels.len() < 2 {
+            return Err(Error::InvalidArgument(
+                "multinomial regression needs at least two levels".into(),
+            ));
+        }
+        if coefs.len() != levels.len() - 1 || intercepts.as_ref().is_some_and(|b| b.len() != levels.len() - 1)
+        {
+            return Err(Error::InvalidArgument(format!(
+                "{} coefficient sets for {} levels",
+                coefs.len(),
+                levels.len()
+            )));
+        }
+        for c in &coefs {
+            if c.len() != names.len() {
+                return Err(Error::InvalidArgument(format!(
+                    "{} coefficients for {} features",
+                    c.len(),
+                    names.len()
+                )));
+            }
+        }
+        if coefs
+            .iter()
+            .flatten()
+            .chain(intercepts.iter().flatten())
+            .any(|c| !c.is_finite())
+        {
+            return Err(Error::Backend {
+                engine: backend.engine.clone(),
+                message: "returned non-finite coefficients".into(),
+            });
+        }
+        Ok(FittedMultinom {
+            model: "multinom_reg".into(),
+            format_version: MODEL_FORMAT_VERSION,
+            intercepts,
+            coefs,
+            names,
+            levels,
+            backend,
+            diagnostics,
+        })
+    }
+
+    /// Probability matrix (`n × levels`), softmax over `eta_0 = 0` and the per-level
+    /// linear predictors, computed stably.
+    pub fn probabilities(&self, x: &DesignMatrix) -> Result<DesignMatrix> {
+        check_features(&self.names, x)?;
+        let n = x.nrows();
+        let k = self.levels.len();
+        let etas: Vec<Vec<f64>> = (0..k - 1)
+            .map(|c| linear_predictor(x, self.intercepts.as_ref().map(|b| b[c]), &self.coefs[c]))
+            .collect();
+        let mut data = vec![0.0; n * k];
+        for i in 0..n {
+            let m = etas.iter().map(|e| e[i]).fold(0.0f64, f64::max);
+            let mut s = (-m).exp();
+            data[i] = s;
+            for c in 1..k {
+                let e = (etas[c - 1][i] - m).exp();
+                data[c * n + i] = e;
+                s += e;
+            }
+            for c in 0..k {
+                data[c * n + i] /= s;
+            }
+        }
+        DesignMatrix::from_column_major(data, n, k, self.levels.clone())
+    }
+}
+
+impl FittedModel for FittedMultinom {
+    fn predict(&self, x: &DesignMatrix) -> Result<Prediction> {
+        let p = self.probabilities(x)?;
+        let (n, k) = (p.nrows(), p.ncols());
+        // parsnip/nnet: the level with the largest probability; ties go to the first.
+        let codes = (0..n)
+            .map(|i| {
+                let mut best = 0;
+                for c in 1..k {
+                    if p.get(i, c) > p.get(i, best) {
+                        best = c;
+                    }
+                }
+                best as u32
+            })
+            .collect();
+        Ok(Prediction::Class {
+            codes,
+            levels: self.levels.clone(),
+            probabilities: Some(p),
+        })
+    }
+
+    fn feature_names(&self) -> &[String] {
+        &self.names
+    }
+
+    fn class_coefficients(&self) -> Option<Vec<(String, Coefficients)>> {
+        Some(
+            (1..self.levels.len())
+                .map(|c| {
+                    (
+                        self.levels[c].clone(),
+                        Coefficients {
+                            intercept: self.intercepts.as_ref().map(|b| b[c - 1]),
+                            terms: self
+                                .names
+                                .iter()
+                                .cloned()
+                                .zip(self.coefs[c - 1].iter().copied())
+                                .collect(),
+                        },
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    fn diagnostics(&self) -> FitDiagnostics {
+        self.diagnostics.clone()
+    }
+
+    fn backend(&self) -> BackendInfo {
+        self.backend.clone()
+    }
+
+    fn state(&self) -> Result<serde_json::Value> {
+        serde_json::to_value(self).map_err(|e| Error::Serialization(e.to_string()))
+    }
+}
+
 /// Rebuild a fitted model from its `state()` JSON.
 pub fn fitted_model_from_state(value: &serde_json::Value) -> Result<Box<dyn FittedModel>> {
     let tag = value
@@ -251,6 +413,7 @@ pub fn fitted_model_from_state(value: &serde_json::Value) -> Result<Box<dyn Fitt
     Ok(match tag {
         "linear_reg" => Box::new(serde_json::from_value::<FittedLinear>(value.clone()).map_err(de)?),
         "logistic_reg" => Box::new(serde_json::from_value::<FittedLogistic>(value.clone()).map_err(de)?),
+        "multinom_reg" => Box::new(serde_json::from_value::<FittedMultinom>(value.clone()).map_err(de)?),
         other => return Err(Error::Serialization(format!("unknown model `{other}`"))),
     })
 }

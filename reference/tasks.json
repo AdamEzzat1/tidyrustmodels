@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "notes": "Single source of truth for the differential suite. R (reference/tidymodels-r/run_reference.R), Python (reference/fixtures/generate_splits.py) and Rust (crates/tidyrustmodels/tests/differential.rs) all read this file. Step vocabulary: impute_median_numeric, impute_mean_numeric, normalize_numeric, dummy_nominal, zv, nzv, corr_numeric (threshold 0.9), other_nominal (threshold 0.05), novel_nominal, unknown_nominal (recipes defaults). Splits: initial = 75/25 (stratified by outcome for classification), vfold5 = 5-fold (stratified by outcome for classification).",
+  "notes": "Single source of truth for the differential suite. R (reference/tidymodels-r/run_reference.R), Python (reference/fixtures/generate_splits.py) and Rust (crates/tidyrustmodels/tests/differential.rs) all read this file. Step vocabulary: impute_median_numeric, impute_mean_numeric, normalize_numeric, dummy_nominal, zv, nzv, corr_numeric (threshold 0.9), other_nominal (threshold 0.05), novel_nominal, unknown_nominal (recipes defaults). Splits: initial = 75/25 (stratified by outcome for classification), vfold5 = 5-fold (stratified by outcome for classification). Classification tasks whose outcome has more than two levels are fitted with multinom_reg (R: nnet with maxit = 10000, reltol = 1e-15; Rust: MultinomRegSpec) and use yardstick's multiclass estimator defaults.",
   "tasks": [
     {
       "id": "synth_reg",
@@ -222,6 +222,70 @@
         "rmse",
         "rsq",
         "mae"
+      ]
+    },
+    {
+      "id": "synth_multi",
+      "dataset": "synthetic_multi_small",
+      "type": "classification",
+      "outcome": "y",
+      "predictors": [
+        "x1",
+        "x2",
+        "x3",
+        "g"
+      ],
+      "steps": [
+        "normalize_numeric",
+        "dummy_nominal"
+      ],
+      "metrics": [
+        "accuracy",
+        "mn_log_loss",
+        "precision",
+        "recall",
+        "roc_auc",
+        "pr_auc",
+        "average_precision",
+        "f_meas",
+        "sens",
+        "spec",
+        "bal_accuracy",
+        "j_index",
+        "kap",
+        "mcc",
+        "brier_class"
+      ]
+    },
+    {
+      "id": "penguins_species",
+      "dataset": "penguins",
+      "type": "classification",
+      "outcome": "species",
+      "predictors": [
+        "bill_length_mm",
+        "body_mass_g"
+      ],
+      "steps": [
+        "impute_median_numeric",
+        "normalize_numeric"
+      ],
+      "metrics": [
+        "accuracy",
+        "mn_log_loss",
+        "precision",
+        "recall",
+        "roc_auc",
+        "pr_auc",
+        "average_precision",
+        "f_meas",
+        "sens",
+        "spec",
+        "bal_accuracy",
+        "j_index",
+        "kap",
+        "mcc",
+        "brier_class"
       ]
     }
   ]

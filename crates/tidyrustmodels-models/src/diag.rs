@@ -55,6 +55,54 @@ pub fn probabilities_saturated(x: &DesignMatrix, intercept: Option<f64>, coefs: 
     eta.iter().map(|z| sigmoid(*z)).any(|p| p < eps || p > 1.0 - eps)
 }
 
+/// Infinity norm of the gradient of the multinomial objective
+/// (`-log L + penalty/2 * ||slopes||^2`) at baseline-relative coefficients
+/// (`coefs[c - 1]` for level `c >= 1`), computed by the framework independently of the
+/// backend. Gradient entries are sums over rows, so compare against `tol * n`.
+pub fn multinom_gradient_norm(
+    x: &DesignMatrix,
+    y: &[u32],
+    k: usize,
+    intercepts: Option<&[f64]>,
+    coefs: &[Vec<f64>],
+    penalty: f64,
+) -> f64 {
+    let n = x.nrows();
+    // eta per non-baseline level, then softmax including the baseline's eta = 0.
+    let mut eta: Vec<Vec<f64>> = (0..k - 1)
+        .map(|c| vec![intercepts.map(|b| b[c]).unwrap_or(0.0); n])
+        .collect();
+    for (c, e) in eta.iter_mut().enumerate() {
+        for (j, b) in coefs[c].iter().enumerate() {
+            for (ei, v) in e.iter_mut().zip(x.column(j)) {
+                *ei += b * v;
+            }
+        }
+    }
+    let mut resid: Vec<Vec<f64>> = vec![vec![0.0; n]; k - 1];
+    for i in 0..n {
+        let m = eta.iter().map(|e| e[i]).fold(0.0f64, f64::max);
+        let mut s = (-m).exp();
+        let exps: Vec<f64> = eta.iter().map(|e| (e[i] - m).exp()).collect();
+        s += exps.iter().sum::<f64>();
+        for c in 0..k - 1 {
+            let yi = if y[i] as usize == c + 1 { 1.0 } else { 0.0 };
+            resid[c][i] = exps[c] / s - yi;
+        }
+    }
+    let mut norm = 0.0f64;
+    for c in 0..k - 1 {
+        if intercepts.is_some() {
+            norm = norm.max(resid[c].iter().sum::<f64>().abs());
+        }
+        for (j, b) in coefs[c].iter().enumerate() {
+            let g: f64 = resid[c].iter().zip(x.column(j)).map(|(r, v)| r * v).sum::<f64>() + penalty * b;
+            norm = norm.max(g.abs());
+        }
+    }
+    norm
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

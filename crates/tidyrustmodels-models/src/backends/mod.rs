@@ -7,6 +7,7 @@ pub mod linfa;
 pub mod smartcore;
 
 use crate::logistic::LogisticOptions;
+use crate::multinom::MultinomOptions;
 use serde::{Deserialize, Serialize};
 use tidyrustmodels_core::{BackendInfo, DesignMatrix, Error, FitDiagnostics, Result};
 
@@ -66,9 +67,49 @@ pub struct FitOutput {
     pub diagnostics: FitDiagnostics,
 }
 
+/// Output of a multinomial fit in the baseline-relative parametrisation (ADR-0010):
+/// one intercept and one slope vector per non-baseline level, in level order.
+#[derive(Clone, Debug)]
+pub struct MultiFitOutput {
+    /// Intercepts for levels `1..k`, if requested.
+    pub intercepts: Option<Vec<f64>>,
+    /// `k - 1` slope vectors, one per design-matrix column each.
+    pub coefs: Vec<Vec<f64>>,
+    /// Adapter-supplied diagnostics (the framework fills in the gradient check).
+    pub diagnostics: FitDiagnostics,
+}
+
+/// Convert symmetric softmax parameters (one vector per level, including the
+/// baseline) into the baseline-relative form: `theta_c - theta_0`.
+pub(crate) fn relative_to_baseline(
+    intercepts: &[f64],
+    coefs: &[Vec<f64>],
+    intercept: bool,
+) -> MultiFitOutput {
+    let k = coefs.len();
+    let b = if intercept {
+        Some((1..k).map(|c| intercepts[c] - intercepts[0]).collect())
+    } else {
+        None
+    };
+    let slopes = (1..k)
+        .map(|c| coefs[c].iter().zip(&coefs[0]).map(|(a, b)| a - b).collect())
+        .collect();
+    MultiFitOutput {
+        intercepts: b,
+        coefs: slopes,
+        diagnostics: FitDiagnostics::default(),
+    }
+}
+
 /// Backend facts for a model/engine pair.
 pub fn info(engine: Engine, model: &str) -> BackendInfo {
     match (engine, model) {
+        (Engine::Native, "multinom_reg") => BackendInfo {
+            engine: "native".into(),
+            crate_version: env!("CARGO_PKG_VERSION").into(),
+            solver: "Newton-Raphson with the exact multinomial Hessian (Cholesky), deviance criterion".into(),
+        },
         (Engine::Linfa, "linear_reg") => BackendInfo {
             engine: "linfa".into(),
             crate_version: "0.8.1".into(),
@@ -118,6 +159,25 @@ pub(crate) fn fit_linear(engine: Engine, x: &DesignMatrix, y: &[f64], intercept:
         #[cfg(feature = "smartcore")]
         Engine::Smartcore => smartcore::fit_linear(x, y, intercept),
         Engine::Native => crate::native::fit_linear(x, y, intercept),
+        #[allow(unreachable_patterns)]
+        other => Err(unavailable(other)),
+    }
+}
+
+/// Dispatch a multinomial fit. `y` holds codes `0..k`; the first level is the baseline.
+pub(crate) fn fit_multinom(
+    engine: Engine,
+    x: &DesignMatrix,
+    y: &[u32],
+    k: usize,
+    opts: MultinomOptions,
+) -> Result<MultiFitOutput> {
+    match engine {
+        #[cfg(feature = "linfa")]
+        Engine::Linfa => linfa::fit_multinom(x, y, k, opts),
+        #[cfg(feature = "smartcore")]
+        Engine::Smartcore => smartcore::fit_multinom(x, y, k, opts),
+        Engine::Native => crate::native::fit_multinom(x, y, k, opts),
         #[allow(unreachable_patterns)]
         other => Err(unavailable(other)),
     }

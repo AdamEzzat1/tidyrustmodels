@@ -8,9 +8,11 @@
 //! against the R sources it cites.
 
 pub mod irls;
+pub mod multinom;
 pub mod qr;
 
-use crate::backends::FitOutput;
+use crate::backends::{FitOutput, MultiFitOutput};
+use crate::multinom::MultinomOptions;
 use tidyrustmodels_core::{DesignMatrix, Error, FitDiagnostics, Result};
 
 const ENGINE: &str = "native";
@@ -120,6 +122,56 @@ pub(crate) fn fit_logistic(x: &DesignMatrix, y: &[u32], opts: NativeLogisticOpti
                 opts.maxit,
                 if fit.boundary { "; stopped at boundary" } else { "" }
             )),
+            ..Default::default()
+        },
+    })
+}
+
+/// Multinomial regression by Newton-Raphson (see `multinom`).
+pub(crate) fn fit_multinom(
+    x: &DesignMatrix,
+    y: &[u32],
+    k: usize,
+    opts: MultinomOptions,
+) -> Result<MultiFitOutput> {
+    let (buf, p) = design(x, opts.intercept);
+    let fit = multinom::fit(
+        &buf,
+        x.nrows(),
+        p,
+        y,
+        k,
+        multinom::MultinomOptions {
+            intercept: opts.intercept,
+            penalty: opts.penalty,
+            epsilon: opts.epsilon,
+            maxit: opts.newton_max_iterations,
+        },
+    )
+    .map_err(|e| Error::Backend {
+        engine: ENGINE.into(),
+        message: e.to_string(),
+    })?;
+    let aliased = aliased_names(x, opts.intercept, &fit.aliased);
+    let mut intercepts = opts.intercept.then(Vec::new);
+    let mut coefs = Vec::with_capacity(k - 1);
+    for c in 0..k - 1 {
+        let (b0, slopes) = split(fit.coef[c * p..(c + 1) * p].to_vec(), opts.intercept);
+        if let (Some(v), Some(b)) = (intercepts.as_mut(), b0) {
+            v.push(b);
+        }
+        coefs.push(slopes);
+    }
+    Ok(MultiFitOutput {
+        intercepts,
+        coefs,
+        diagnostics: FitDiagnostics {
+            converged: Some(fit.converged),
+            iterations: Some(fit.iter as u64),
+            deviance: Some(fit.deviance),
+            warnings: fit.warnings,
+            aliased,
+            note: Some("Newton-Raphson, exact Hessian, deviance criterion".into()),
             ..Default::default()
         },
     })

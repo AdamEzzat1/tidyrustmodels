@@ -75,8 +75,8 @@ an equivalent: (a) recipe filters and level steps — **done** (zv, nzv, corr, o
 novel, unknown; VERIFICATION.md Phase 8a); (b) classification metrics — **done**
 (roc_auc, pr_auc, average_precision, f_meas, sens/spec, bal_accuracy, kap, mcc, j_index,
 brier_class, conf_mat, with binary/macro/macro_weighted/micro/hand_till estimators;
-VERIFICATION.md Phase 8b); (c) multiclass outcomes (metrics ready; models, probability
-matrix contract and R fixtures via `multinom_reg` pending); (d) tree models via backends; (e) case weights; (f) bootstrap,
+VERIFICATION.md Phase 8b); (c) multiclass outcomes — **done** (`MultinomRegSpec` on
+three engines, ADR-0010, two reference tasks against nnet; VERIFICATION.md Phase 8c); (d) tree models via backends; (e) case weights; (f) bootstrap,
 repeated/grouped CV, time-series splits; (g) `select_best` / `finalize_workflow` /
 `last_fit`; (h) Arrow/Polars/sparse inputs; (i) workflowsets.
 

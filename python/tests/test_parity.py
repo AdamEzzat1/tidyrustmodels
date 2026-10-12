@@ -56,6 +56,18 @@ def _recipe(task: dict) -> trm.Recipe:
     return rec
 
 
+def _n_levels(data: trm.Table, outcome: str) -> int:
+    return len(set(data.column(outcome)) - {None})
+
+
+def _model(task, data, engine="native"):
+    if task["type"] == "regression":
+        return trm.LinearReg(engine=engine)
+    if _n_levels(data, task["outcome"]) > 2:
+        return trm.MultinomReg(engine=engine)
+    return trm.LogisticReg(engine=engine)
+
+
 def _load_task(task):
     data = _read_csv_table(
         ROOT / "reference" / "fixtures" / "datasets" / f"{task['dataset']}.csv",
@@ -78,20 +90,24 @@ def test_python_matches_rust_bitwise(task, engine):
     data, split, _ = _load_task(task)
     train = data.select_rows(split["initial"]["train"])
     test = data.select_rows(split["initial"]["test"])
-    model = trm.LinearReg(engine=engine) if task["type"] == "regression" else trm.LogisticReg(engine=engine)
+    model = _model(task, data, engine)
     fitted = trm.Workflow(_recipe(task), model).fit(train)
 
     coefs = fitted.coefficients()
-    assert list(coefs.keys()) == rust["coefficient_names"]
-    assert list(coefs.values()) == rust["coefficients"], "coefficients differ from Rust"
+    if rust["class_coefficients"] is not None:
+        assert coefs == rust["class_coefficients"], "class coefficients differ from Rust"
+    else:
+        assert list(coefs.keys()) == rust["coefficient_names"]
+        assert list(coefs.values()) == rust["coefficients"], "coefficients differ from Rust"
 
     if task["type"] == "regression":
         pred = fitted.predict(test)
         assert pred.tolist() == rust["predicted_test"]
     else:
         proba = fitted.predict_proba(test)
-        assert proba.shape == (test.nrows, 2)
+        assert proba.shape[0] == test.nrows
         assert proba[:, 0].tolist() == rust["prob_event_test"]
+        assert proba.flatten().tolist() == rust["prob_test"]
         assert fitted.predict(test) == rust["class_test"]
 
     folds = trm.Folds.from_assignments(split["vfold"]["fold_of_row"])
@@ -108,17 +124,21 @@ def test_python_matches_r_within_tolerance(task):
     data, split, fx = _load_task(task)
     train = data.select_rows(split["initial"]["train"])
     test = data.select_rows(split["initial"]["test"])
-    model = trm.LinearReg() if task["type"] == "regression" else trm.LogisticReg()
+    model = _model(task, data)
     fitted = trm.Workflow(_recipe(task), model).fit(train)
     assert fitted.feature_names() == fx["prep"]["predictor_names"]
     coefs = fitted.coefficients()
-    rel = 1e-8 if task["type"] == "regression" else 1e-7
-    for name in fx["fit"]["coefficient_names"]:
-        r = fx["fit"]["coefficients"][name]
-        if r is None:
-            assert name in fitted.diagnostics()["aliased"]
-            continue
-        assert math.isclose(coefs[name], r, rel_tol=rel, abs_tol=1e-9), name
+    multi = "coefficient_levels" in fx["fit"] and fx["fit"]["coefficient_levels"] is not None
+    # bounds from reference/fixtures/tolerances.toml (multinom: nnet's residual, Phase 8c)
+    rel = 1e-8 if task["type"] == "regression" else (1e-6 if multi else 1e-7)
+    sets = [(lv, coefs[lv], fx["fit"]["coefficients"][lv]) for lv in fx["fit"]["coefficient_levels"]] if multi         else [(None, coefs, fx["fit"]["coefficients"])]
+    for _, ours, theirs in sets:
+        for name in fx["fit"]["coefficient_names"]:
+            r = theirs[name]
+            if r is None:
+                assert name in fitted.diagnostics()["aliased"]
+                continue
+            assert math.isclose(ours[name], r, rel_tol=rel, abs_tol=1e-9), name
     if task["type"] == "classification":
         assert fitted.diagnostics()["converged"] is True
         proba = fitted.predict_proba(test)

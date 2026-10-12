@@ -43,7 +43,7 @@ pub mod prelude {
     pub use tidyrustmodels_metrics::{
         ConfusionMatrix, Estimator, KapWeighting, Metric, MetricSet, MetricValue,
     };
-    pub use tidyrustmodels_models::{Engine, LinearRegSpec, LogisticRegSpec};
+    pub use tidyrustmodels_models::{Engine, LinearRegSpec, LogisticRegSpec, MultinomRegSpec};
     pub use tidyrustmodels_recipes::{
         Recipe, Selector, StepCorr, StepDummy, StepImputeMean, StepImputeMedian, StepNormalize, StepNovel,
         StepNzv, StepOther, StepSelect, StepUnknown, StepZv,

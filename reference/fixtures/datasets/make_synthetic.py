@@ -60,6 +60,26 @@ def synthetic_clf_small():
     write_csv("synthetic_clf_small", ["x1", "x2", "g", "y"], rows)
 
 
+def synthetic_multi_small():
+    """Three overlapping classes (a 40%, b 35%, c 25%) with class-conditional means in
+    (x1, x2), a noise predictor x3 and a nominal predictor g whose frequency depends on
+    the class. The overlap keeps the multinomial MLE finite (no separation)."""
+    rng = random.Random(20261015)
+    means = {"a": (0.0, 0.0), "b": (1.5, 0.5), "c": (0.5, 1.8)}
+    p_q = {"a": 0.3, "b": 0.6, "c": 0.45}
+    rows = []
+    for i in range(180):
+        u = rng.random()
+        y = "a" if u < 0.40 else ("b" if u < 0.75 else "c")
+        mx, my = means[y]
+        x1 = rng.gauss(mx, 1.0)
+        x2 = rng.gauss(my, 1.0)
+        x3 = rng.uniform(-1.0, 1.0)
+        g = "q" if rng.random() < p_q[y] else "p"
+        rows.append([round(x1, 6), round(x2, 6), round(x3, 6), g, y])
+    write_csv("synthetic_multi_small", ["x1", "x2", "x3", "g", "y"], rows)
+
+
 def synthetic_filter_reg():
     """Designed so every filter/level step has something to do: x2 is ~0.98 correlated
     with x1 (step_corr), x3 is 96% zeros (step_nzv), x4 is constant and x5 all missing
@@ -97,3 +117,4 @@ if __name__ == "__main__":
     synthetic_reg_small()
     synthetic_clf_small()
     synthetic_filter_reg()
+    synthetic_multi_small()
