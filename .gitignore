@@ -13,3 +13,7 @@ __pycache__/
 /reference/fixtures/generated/.cache/
 *.Rhistory
 .RData
+/benchmarks/data/
+/benchmarks/results/
+/benchmarks/rust/target/
+/bindings/python/target/

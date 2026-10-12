@@ -1,0 +1,30 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "tidyrustmodels"
+version = "0.1.0.dev0"
+description = "tidymodels-inspired machine learning framework in Rust, with Python bindings"
+readme = "README.md"
+license = { text = "MIT OR Apache-2.0" }
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+
+[project.optional-dependencies]
+pandas = ["pandas>=2.0"]
+test = ["pytest>=7", "pandas>=2.0"]
+
+[tool.maturin]
+manifest-path = "bindings/python/Cargo.toml"
+python-source = "python"
+module-name = "tidyrustmodels._native"
+features = ["pyo3/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]

@@ -468,6 +468,26 @@ fn differential_against_r_fixtures() {
             report.compare(id, eng, "L3", "coefficients", &our_vals, &r_vals, coef_tol);
 
             let pred_test = fitted.predict(&x_test).unwrap();
+            // Level 5 support: dump this engine's outputs for the Python parity test.
+            let mut dump = serde_json::json!({
+                "task": id, "engine": eng,
+                "coefficient_names": our_names,
+                "coefficients": all_ours,
+            });
+            match &pred_test {
+                Prediction::Numeric(p) => dump["predicted_test"] = serde_json::json!(p),
+                Prediction::Class {
+                    codes,
+                    levels,
+                    probabilities,
+                } => {
+                    dump["prob_event_test"] = serde_json::json!(probabilities.as_ref().unwrap().column(0));
+                    dump["class_test"] = serde_json::json!(codes
+                        .iter()
+                        .map(|c| levels[*c as usize].clone())
+                        .collect::<Vec<_>>());
+                }
+            }
             if is_reg {
                 let ours = match &pred_test {
                     Prediction::Numeric(p) => p.clone(),
@@ -554,6 +574,25 @@ fn differential_against_r_fixtures() {
             let res = wf
                 .fit_resamples(&data, &folds, &metrics, Parallelism::threads(4))
                 .unwrap();
+            dump["per_fold"] = serde_json::json!(res
+                .per_fold
+                .iter()
+                .map(|f| {
+                    let mut m = serde_json::Map::new();
+                    m.insert("id".into(), serde_json::json!(f.id));
+                    for v in &f.metrics {
+                        m.insert(v.name.clone(), serde_json::json!(v.value));
+                    }
+                    serde_json::Value::Object(m)
+                })
+                .collect::<Vec<_>>());
+            let dump_dir = root().join("target/rust_outputs");
+            std::fs::create_dir_all(&dump_dir).unwrap();
+            std::fs::write(
+                dump_dir.join(format!("{id}_{eng}.json")),
+                serde_json::to_string(&dump).unwrap(),
+            )
+            .unwrap();
             for fold in &res.per_fold {
                 for m in &fold.metrics {
                     let theirs = fx["resample"]["per_fold"][&fold.id][&m.name].as_f64();

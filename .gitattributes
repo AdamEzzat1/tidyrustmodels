@@ -1,3 +1,5 @@
 * text=auto eol=lf
+# Fixture files are checksummed byte-for-byte; never normalise them.
+reference/fixtures/** -text
 *.png binary
 *.parquet binary

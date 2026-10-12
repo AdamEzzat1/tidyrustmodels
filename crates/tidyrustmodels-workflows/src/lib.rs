@@ -320,7 +320,10 @@ mod tests {
         );
         let fitted = wf.fit(&t).unwrap();
         let p = fitted.predict(&t).unwrap();
-        let back = FittedWorkflow::from_json(&fitted.to_json().unwrap()).unwrap();
+        // Round-trip through *text*, not just `Value`: float parsing fidelity depends on
+        // serde_json's `float_roundtrip` feature, which the workspace enables.
+        let text = serde_json::to_string(&fitted.to_json().unwrap()).unwrap();
+        let back = FittedWorkflow::from_json(&serde_json::from_str(&text).unwrap()).unwrap();
         assert_eq!(p, back.predict(&t).unwrap());
         assert_eq!(fitted.model().feature_names(), &["x", "g_b"]);
     }
