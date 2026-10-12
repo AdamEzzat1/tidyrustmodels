@@ -44,5 +44,8 @@ What is *not* controlled, and is therefore reported rather than hidden:
   are launchers whose work happens in a child); on POSIX a wrapper reports `ru_maxrss` of
   `RUSAGE_CHILDREN` (untested so far). `peak_rss_tree_mb` is the 1 ms-sampled sum over
   the tree and is a lower bound that misses processes shorter than a few samples.
+- Trials are interleaved across systems by default (`--blocked` runs each system's trials
+  back to back, the order used by runs A–C). Run C showed why: the machine slowed 1.3–4×
+  for half an hour, hitting whichever systems were scheduled then.
 - `--threads 4` for R means `future::plan(multisession, workers = 4)`, whose worker
   start-up (each worker loads tidymodels) is inside the timed `cv_s`/`tune_s`.

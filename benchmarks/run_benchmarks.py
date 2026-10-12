@@ -195,6 +195,7 @@ def environment() -> dict:
         "ram_gb": round(psutil.virtual_memory().total / 2**30, 1),
         "python": sys.version.split()[0],
         "git_commit": subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, cwd=ROOT).stdout.strip(),
+        "trial_order": "blocked" if "--blocked" in sys.argv else "interleaved",
         "peak_memory_method": "Windows PeakWorkingSetSize via retained handles, max over every process seen in the tree (exact per process)" if os.name == "nt"
                               else "POSIX ru_maxrss of RUSAGE_CHILDREN via wrapper (exact, largest descendant)",
     }
@@ -224,6 +225,7 @@ def main() -> None:
     ap.add_argument("--trials", type=int, default=5)
     ap.add_argument("--warm", type=int, default=10)
     ap.add_argument("--timeout", type=float, default=600.0)
+    ap.add_argument("--blocked", action="store_true", help="run each system's trials back to back instead of interleaving")
     a = ap.parse_args()
     systems = a.systems.split(",")
 
@@ -256,8 +258,15 @@ def main() -> None:
                 for system in ("rust", "python"):
                     if system in systems:
                         configs += [(system, e) for e in a.engines.split(",")]
-                for system, engine in configs:
-                    for trial in range(a.trials):
+                # Interleaved order (default): trial 0 of every system, then trial 1, ... so a drift
+                # in machine state during the run affects all systems alike. --blocked runs each
+                # system's trials back to back (the order used by runs A-C).
+                if a.blocked:
+                    order = [(system, engine, trial) for system, engine in configs for trial in range(a.trials)]
+                else:
+                    order = [(system, engine, trial) for trial in range(a.trials) for system, engine in configs]
+                for system, engine, trial in order:
+                    if True:
                         cmd = command(system, spec, engine, threads, a.warm)
                         res = run_trial(cmd, a.timeout)
                         row = {

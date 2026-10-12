@@ -58,7 +58,8 @@ Gate:
 - [x] Any optimization merged in this phase has a before/after benchmark: none merged; the run is the baseline.
 - [ ] Protocol as specified: ≥10 trials, ≥30 warm iterations, 10 folds, 20-point grid, 1e6-row point, allocation counts, power plan recorded. First run used 5/10/5/5, no 1e6, no A1.
 - [x] Rust peak memory captured for sub-150 ms processes (`PeakWorkingSetSize` via retained handles; run `…-b`, no missing cell).
-- [x] Python wrapper measured as a third system (run `…-b`, six tasks ≤ 10k rows; bitwise-identical CV results to the Rust binary).
+- [x] Python wrapper measured as a third system (runs `…-b` and `…-d`, all nine tasks incl. 100k rows; bitwise-identical CV results to the Rust binary).
+- [x] Trial interleaving across systems after run `…-c` showed machine-state drift (kept on record, labelled invalid for timing).
 - [ ] Run on a second platform (Linux CI runner at minimum).
 - [ ] Independent reviewer sign-off recorded.
 

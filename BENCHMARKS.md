@@ -1,6 +1,6 @@
 # Benchmarks
 
-Status: two runs recorded (`2026-10-12-win11-i7-11390H` and `…-b`, see Results). The
+Status: runs A, B, C and D recorded under `2026-10-12-win11-i7-11390H[-b|-c|-d]` (see Results; run C is invalid for timing). The
 methodology below is the target protocol; the Results section lists every point where
 the recorded run fell short of it. No number in this file was produced by anything other
 than `benchmarks/run_benchmarks.py` on the recorded machine.
@@ -39,6 +39,9 @@ phase so readers can see *where* time goes.
 ## Fairness controls
 
 - Same machine, same session, nothing else running; CPU governor/plan recorded.
+- Trials interleaved across systems (trial 0 of each system, then trial 1, ...) so that a
+  drift in machine state during a run affects every system alike; a canary (one Rust
+  trial of a reference task) before and after the run, compared against the previous run.
 - Rust: `--release`, `lto = "fat"`, `codegen-units = 1`, `target-cpu` recorded (default
   x86-64 baseline unless stated; both settings reported if `native` is used).
 - R: version, BLAS/LAPACK in use (`sessionInfo()`, `extSoftVersion()`), package versions.
@@ -297,11 +300,91 @@ R / Rust 33–70×.
 #### What run B adds to the record
 
 - The Python wrapper is faster than R tidymodels on every measured phase and task,
-  including cold start, and uses about one sixth of the memory. Not measured: the
-  wrapper at 100k rows, where run A showed the Rust binary itself is not faster than R
-  for logistic regression; the wrapper cannot be faster there either.
+  including cold start, and uses about one sixth of the memory. Run D extends this to
+  100k rows.
 - The Rust-vs-Python gap is a fixed ~0.6 s import plus tens of microseconds per call.
 - The run A memory gaps for the small tasks are closed; no cell in this run is
   "not captured".
 
 Raw data: `benchmarks/results/2026-10-12-win11-i7-11390H-b/{results.csv, env.json, report.md}`.
+
+### Run `2026-10-12-win11-i7-11390H-c`: 100k-row tasks with the Python wrapper — **unstable conditions, retained for the record only**
+
+Same machine, started immediately after run B. 2 tasks × {1, 4 threads} × 5 systems ×
+5 trials, 100 of 100 ok, Python and Rust CV summaries bitwise identical in all 8 groups.
+**Do not quote its timings.** The machine's state drifted during the run:
+
+- Configurations identical to run A came out 1.3–4× slower for the first ~30 minutes:
+  the Rust binary's pure-CPU model fit on synth_100000_reg took 48 ms (run A: 20 ms) and
+  its wall 12.5 s (run A: 3.1 s); R's wall was 50 s (run A: 15 s). Trial-to-trial swings
+  were 2–3× (Rust linfa walls 7.4–19 s). The slowdown faded mid-run: the Python linfa
+  trials on synth_100000_clf fell from 54 s to 32 s within five consecutive trials, and
+  the 4-thread rows measured afterwards are close to run A.
+- A canary run of the Rust binary after the run matched run A (fit 17–26 ms, CV 270–300
+  ms), and no foreign process was consuming CPU at that point. The cause during the run
+  was not identified (thermal throttling after 50 minutes of run B, or a background
+  task, are the candidates).
+- Runs A–C execute all trials of one system before the next system's, so a drift of this
+  kind biases *between-system* ratios, not just absolute numbers. The orchestrator now
+  interleaves trials across systems by default (`--blocked` restores the old order), and
+  run D repeats these tasks under that order.
+
+Raw data: `benchmarks/results/2026-10-12-win11-i7-11390H-c/`.
+
+### Run `2026-10-12-win11-i7-11390H-d`: 100k-row tasks, all three systems, interleaved trials
+
+Same machine, run after a canary confirmed run A conditions (Rust model fit 17–26 ms on
+synth_100000_reg). Trials interleaved across systems. 2 tasks × {1, 4 threads} ×
+{R, Rust linfa, Rust smartcore, Python linfa, Python smartcore} × 5 cold trials, 100 of
+100 ok. Stability check: every Rust and R phase that exists in both runs is within ±15%
+of run A (R `fit_s` is now model-only and therefore smaller by design). Python and Rust
+CV summaries bitwise identical in all 8 groups.
+
+Caveat on `wall`: the R and Rust drivers' warm loop runs a model-only fit *and* a
+workflow fit per iteration; the Python driver can only run the workflow fit. At 100k
+rows that is ~7 s less work in the Python process on the classification task, so wall
+is not comparable between the Python driver and the other two here. Compare phases.
+
+#### synth_100000_reg (100000 × 14, OLS, framework-overhead category), medians
+
+| phase | R `lm` | Python linfa | Rust linfa | R / Python | Python / Rust |
+|---|---|---|---|---|---|
+| library load / import | 2.64 s | 0.76 s | — | 3.5× | — |
+| CSV load → table | 752 ms | 152 ms | 199 ms | 4.9× | 0.76× |
+| workflow fit (1 thr) | 599 ms | 59.9 ms | 62.4 ms | 10.0× | 0.96× |
+| model-only fit (1 thr) | 223 ms | n/a | 26 ms | — | — |
+| 5-fold CV (1 thr) | 3.46 s | 0.322 s | 0.349 s | 10.7× | 0.92× |
+| 5-fold CV (4 thr) | 12.7 s (incl. worker start) | 0.215 s | 0.221 s | 59× | 0.97× |
+| predict (25k rows) | 234 ms | 3.8 ms | 0.47 ms | 61× | 8× |
+| peak memory (1 thr) | 605 MB | 128 MB | 81 MB | 4.7× | 1.6× |
+
+#### synth_100000_clf (100000 × 14, logistic, workflow-level category), medians
+
+| phase | R `glm` / glmnet | Python linfa | Rust linfa | R / Python | Python / Rust |
+|---|---|---|---|---|---|
+| library load / import | 2.62 s | 0.62 s | — | 4.2× | — |
+| workflow fit (1 thr) | 1.10 s | 0.751 s | 0.723 s | 1.46× | 0.96× |
+| model-only fit, cold (1 thr) | 708 ms | n/a | 684 ms | — | — |
+| model-only fit, warm (1 thr) | 526 ms | n/a | 657 ms | — (R 1.25× faster than Rust) | — |
+| workflow fit, warm (1 thr) | 659 ms | 736 ms | 670 ms | **0.90× (R faster)** | 0.91× |
+| 5-fold CV (1 thr) | 5.21 s | 3.37 s | 2.93 s | 1.55× | 0.87× |
+| tune, 5 penalties × 5 folds (1 thr) | 18.2 s (glmnet) | 18.8 s | 18.1 s | **0.97× (equal)** | 0.96× |
+| 5-fold CV (4 thr) | 14.2 s (incl. worker start) | 1.68 s | 1.82 s | 8.5× | 1.08× |
+| tune (4 thr) | 10.3 s (incl. worker start) | 8.34 s | 8.44 s | 1.24× | 1.01× |
+| peak memory (1 thr) | 744 MB | 132 MB | 83 MB | 5.6× | 1.6× |
+
+#### What run D adds to the record
+
+- At 100k rows the Python wrapper is still 10× faster than R for the OLS workflow and CV,
+  and 4–5× faster to start. The wrapper costs nothing measurable over the Rust binary
+  on fit and CV (0.9–1.0×); its only visible overheads are the ~0.6 s import, pandas CSV
+  parsing on small files, and a few milliseconds per `predict` for NumPy conversion.
+- For logistic regression at 100k rows the advantage is thin: workflow fit 1.5×, CV
+  1.5×, tuning equal to glmnet, and in steady state R's IRLS `glm` fits 1.1–1.25× faster
+  than L-BFGS. This holds for the Python wrapper and the Rust binary alike; the
+  bottleneck is the solver, not the framework or the wrapper. It is the measured case
+  for the IRLS solver in ROADMAP.md Phase 7.
+- Memory at 100k rows: R 605–744 MB, Python 128–132 MB, Rust 81–83 MB.
+
+Raw data: `benchmarks/results/2026-10-12-win11-i7-11390H-d/{results.csv, env.json, report.md}`.
+

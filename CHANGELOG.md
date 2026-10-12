@@ -26,10 +26,10 @@ VERIFICATION.md; nothing is claimed beyond those records.
 - Reference harness against R tidymodels 1.5.0 with committed fixtures, shared split ids,
   per-quantity tolerances, and a differential test (611 comparisons).
 - Benchmark harness (Rust and R drivers, orchestrator with peak-RSS sampling, report) and
-  two recorded runs (`benchmarks/results/2026-10-12-win11-i7-11390H` and `…-b`, the latter
-  with exact peak memory, a like-for-like workflow-fit phase and the Python wrapper as a
-  third system); see BENCHMARKS.md for what they show, including where tidyrustmodels is
-  slower than R.
+  four recorded runs (`benchmarks/results/2026-10-12-win11-i7-11390H` and `…-b`, `…-c`,
+  `…-d`: exact peak memory, a like-for-like workflow-fit phase, the Python wrapper as a
+  third system, interleaved trials; run C is labelled invalid for timing); see
+  BENCHMARKS.md for what they show, including where tidyrustmodels is slower than R.
 
 ### Known limitations
 See LIMITATIONS.md. Highlights: binary classification only; general collinearity not

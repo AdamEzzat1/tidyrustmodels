@@ -49,8 +49,10 @@
   re-measured in run B: Rust binary 5–13 MB, Python wrapper 63–69 MB, R 361–410 MB.
 - Python wrapper (run B, six tasks up to 10k rows): faster than R tidymodels on every
   phase, cold start 4–10× faster (0.6 s import vs 2.7–3.2 s tidymodels attach), and
-  within ~50 µs per call of the Rust binary. Not measured at 100k rows, where the Rust
-  binary itself is not faster than R for logistic regression.
+  within ~50 µs per call of the Rust binary. At 100k rows (run D) the wrapper matches
+  the Rust binary on fit and CV (0.9–1.0×); versus R it is 10× faster for OLS workflow
+  fit and CV, but only 1.5× for logistic fit/CV, equal to glmnet for tuning, and 0.9×
+  R's warm IRLS fit. The 100k logistic bottleneck is the solver, not the wrapper.
 - R's model-only `glm` fit is within 1.3× of L-BFGS already at 10k rows (run B).
 
 ## Risk register
@@ -67,6 +69,7 @@
 | R8 | Benchmarks mistaken for equivalent-algorithm comparisons (IRLS vs L-BFGS) | high | high | Category column in every result row; BENCHMARKS.md keeps the two categories in separate tables and states where Rust is slower |
 | R9 | Rayon oversubscription when backends are also threaded | low | medium | Scoped pool; backends are single-threaded |
 | R10 | Windows peak-RSS sampling misses short-lived peaks | **occurred, fixed** | low | 81/180 Rust rows not captured in run A. Harness now retains a handle per tree process and reads `PeakWorkingSetSize` after exit; run B has no missing cell. POSIX path (`ru_maxrss` wrapper) untested |
+| R14 | Machine-state drift during long benchmark runs (laptop) | **occurred** (run C) | high for between-system ratios | Interleaved trial order; canary trial before/after; invalid runs kept on record and labelled, never averaged in |
 | R13 | L-BFGS logistic solver loses to IRLS/glmnet at large n | **measured** | medium | 1e5 rows: Rust model-only warm fit is 0.76× the speed of R's warm workflow fit, tuning 0.69× glmnet. Mitigation is a native IRLS solver (Phase 7), gated on a before/after benchmark |
 | R11 | tidymodels semantics misread | was medium | high | **mitigated**: every row in COMPATIBILITY.md marked "tested" is backed by a fixture comparison |
 | R12 | Fixtures drift from the committed datasets | low | medium | `checksums.json`; regeneration is a reviewed change |

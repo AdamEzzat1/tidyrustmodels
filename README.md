@@ -21,8 +21,9 @@ What is verified today (VERIFICATION.md):
 What is measured today (BENCHMARKS.md, one Windows laptop, 5 trials): OLS workflows run
 8–240× faster per workflow fit and 5–57× faster end-to-end than R tidymodels with 8–50× less
 memory; logistic regression at 1e5 rows is *not* faster than R's IRLS and is slower
-than glmnet for tuning. The Python wrapper is faster than R on every measured phase up to
-10k rows and adds ~50 µs per call over the Rust binary. Read the deviations list there
+than glmnet for tuning. The Python wrapper adds nothing measurable over the Rust binary beyond
+a ~0.6 s import; it is 10× faster than R for OLS at 100k rows but only 1.5× for
+logistic regression, where tuning is equal to glmnet. Read the deviations list there
 before quoting any number.
 
 ## Quick start (Rust)
