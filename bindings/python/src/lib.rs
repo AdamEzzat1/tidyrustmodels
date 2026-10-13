@@ -336,7 +336,36 @@ impl PyDecisionTree {
     }
 }
 
+/// `parsnip::rand_forest()` with engine `ranger` semantics (native, ADR-0011):
+/// `mtry` (default `floor(sqrt(p))`), `trees` (500), `min_n` (5 regression / 10
+/// classification), `seed` for the per-tree streams. Stochastic: compare forests
+/// statistically, not tree by tree.
+#[pyclass(name = "RandForest", module = "tidyrustmodels._native", from_py_object)]
+#[derive(Clone)]
+struct PyRandForest {
+    inner: RandForestSpec,
+}
+
+#[pymethods]
+impl PyRandForest {
+    #[new]
+    #[pyo3(signature = (mtry = None, trees = 500, min_n = None, seed = 0))]
+    fn new(mtry: Option<usize>, trees: usize, min_n: Option<usize>, seed: u64) -> PyResult<Self> {
+        let mut s = RandForestSpec::new().trees(trees).seed(Seed(seed));
+        if let Some(m) = mtry {
+            s = s.mtry(m);
+        }
+        if let Some(m) = min_n {
+            s = s.min_n(m);
+        }
+        Ok(PyRandForest { inner: s })
+    }
+}
+
 fn model_from_py(model: &Bound<'_, PyAny>) -> PyResult<Box<dyn ModelSpec>> {
+    if let Ok(m) = model.extract::<PyRandForest>() {
+        return Ok(Box::new(m.inner));
+    }
     if let Ok(m) = model.extract::<PyDecisionTree>() {
         return Ok(Box::new(m.inner));
     }
@@ -349,7 +378,7 @@ fn model_from_py(model: &Bound<'_, PyAny>) -> PyResult<Box<dyn ModelSpec>> {
     if let Ok(m) = model.extract::<PyLogisticReg>() {
         return Ok(Box::new(m.inner));
     }
-    Err(InvalidArgumentError::new_err("model must be a LinearReg, LogisticReg, MultinomReg or DecisionTree"))
+    Err(InvalidArgumentError::new_err("model must be a LinearReg, LogisticReg, MultinomReg, DecisionTree or RandForest"))
 }
 
 // ---------------------------------------------------------------- Resampling
@@ -759,6 +788,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLogisticReg>()?;
     m.add_class::<PyMultinomReg>()?;
     m.add_class::<PyDecisionTree>()?;
+    m.add_class::<PyRandForest>()?;
     m.add_class::<PyFolds>()?;
     m.add_class::<PyWorkflow>()?;
     m.add_class::<PyFittedWorkflow>()?;

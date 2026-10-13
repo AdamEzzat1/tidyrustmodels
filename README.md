@@ -15,7 +15,8 @@ What is verified today (VERIFICATION.md):
   families with their multiclass estimators) and resampling match R tidymodels 1.5.0 to
   floating-point round-off on eight reference tasks; multinomial regression matches
   `nnet` to its own convergence residual (3.5e-7) on two more; rpart decision trees are
-  reproduced node for node on five tasks; logistic regression matches to ~1e-8 relative
+  reproduced node for node on five tasks; ranger-style random forests agree with R
+  within 4 standard errors over 10 seeds on five more; logistic regression matches to ~1e-8 relative
   (same objective, different optimizer).
 - All three engines (`linfa`, `smartcore`, `native`) reproduce exact analytic baselines
   that are independent of R. The default `native` engine ports R's own `lm.fit` and

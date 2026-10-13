@@ -7,6 +7,7 @@
 //! No external numerical dependency is involved; the code is small enough to read
 //! against the R sources it cites.
 
+pub mod forest;
 pub mod irls;
 pub mod multinom;
 pub mod qr;

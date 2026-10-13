@@ -36,6 +36,14 @@ VERIFICATION.md; nothing is claimed beyond those records.
   trees exact against R, 25 fold trees exact, predictions and metrics to round-off.
   Tasks can now name a `model` and `model_args`; fixtures carry 17 significant digits.
   Python: `DecisionTree`.
+- `RandForestSpec` (`rand_forest`, engine ranger; ADR-0011 Amendment A): ranger 0.18.0's
+  growing rules (bootstrap, `mtry`, variance / gini decrease, midpoint splits,
+  probability forests for classification) under per-tree ChaCha8 streams from the
+  framework's `Seed`. Verified statistically (differential level 5): on five tasks the
+  metric means of 10 R and 10 Rust seeds agree within 4 SE (largest ratio 0.48) and at
+  least 98 % of seed-averaged predictions row-wise; a 60-seed follow-up on penguins
+  reproduced a bimodal log loss at the same rate (7/60) on both sides. Python:
+  `RandForest`.
 - Workflows: `fit`, `predict`, `fit_resamples` with per-fold prep and serial-identical
   parallel execution; versioned JSON round trip.
 - Tuning: `grid_regular`, `grid_random`, `tune_grid`, `show_best`.

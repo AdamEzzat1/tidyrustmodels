@@ -8,7 +8,8 @@
 # generate_splits.py:
 #   Rscript reference/tidymodels-r/run_reference.R
 #
-# Everything here is deterministic given the shared split ids: no RNG is used.
+# Everything here is deterministic given the shared split ids; the only randomness is
+# ranger's, fixed per forest through set_engine(seed =) (Phase 8e).
 
 .libPaths(c(Sys.getenv("R_LIBS_USER"), .libPaths()))
 suppressPackageStartupMessages(suppressWarnings({
@@ -86,11 +87,17 @@ run_task <- function(task) {
   rec <- add_steps(recipe(f, data = train), task$steps)
   n_lv <- if (task$type == "classification") nlevels(train[[task$outcome]]) else 0L
   is_tree <- identical(task$model, "decision_tree")
-  multi <- n_lv > 2 && !is_tree
+  is_rf <- identical(task$model, "rand_forest")
+  multi <- n_lv > 2 && !is_tree && !is_rf
+  rf_seeds <- 1:10
+  rf_model <- function(seed) {
+    args <- if (is.null(task$model_args)) list() else task$model_args
+    do.call(rand_forest, args) %>% set_engine("ranger", seed = seed, num.threads = 1) %>% set_mode(task$type)
+  }
   model <- if (is_tree) {
     args <- if (is.null(task$model_args)) list() else task$model_args
     do.call(decision_tree, args) %>% set_engine("rpart") %>% set_mode(task$type)
-  } else if (task$type == "regression") linear_reg() %>% set_engine("lm") else
+  } else if (is_rf) rf_model(rf_seeds[1]) else if (task$type == "regression") linear_reg() %>% set_engine("lm") else
            if (multi) multinom_reg() %>% set_engine("nnet", maxit = 10000, reltol = 1e-15, trace = FALSE) else
            logistic_reg() %>% set_engine("glm")
   wf <- workflow() %>% add_recipe(rec) %>% add_model(model)
@@ -128,7 +135,26 @@ run_task <- function(task) {
          cptable = unname(eng$cptable[, c("CP", "nsplit", "rel error"), drop = FALSE]),
          control = eng$control[c("minsplit", "minbucket", "cp", "maxdepth")])
   } else NULL
-  coefs <- if (is_tree) NULL else coef(eng)
+  rf_info <- if (is_rf) {
+    ms <- do.call(metric_set, unname(metric_fns[unlist(task$metrics)]))
+    per_seed <- lapply(rf_seeds, function(s) {
+      fs <- fit(workflow() %>% add_recipe(rec) %>% add_model(rf_model(s)), data = train)
+      if (task$type == "regression") {
+        p <- as.numeric(predict(fs, test)$.pred)
+        m <- ms(data.frame(truth = test[[task$outcome]], estimate = p), truth = truth, estimate = estimate)
+        list(metrics = setNames(as.list(m$.estimate), m$.metric), predicted_test = p)
+      } else {
+        probs <- predict(fs, test, type = "prob"); cls <- predict(fs, test)$.pred_class
+        d <- cbind(data.frame(truth = test[[task$outcome]], estimate = cls), as.data.frame(probs))
+        m <- if (n_lv > 2) ms(d, truth = truth, estimate = estimate, tidyselect::starts_with(".pred_"))
+             else ms(d, truth = truth, estimate = estimate, !!rlang::sym(names(probs)[1]))
+        list(metrics = setNames(as.list(m$.estimate), m$.metric), prob_test = unname(as.matrix(probs)))
+      }
+    })
+    list(seeds = rf_seeds, treetype = eng$treetype, mtry = eng$mtry, min_node_size = eng$min.node.size,
+         num_trees = eng$num.trees, per_seed = per_seed)
+  } else NULL
+  coefs <- if (is_tree || is_rf) NULL else coef(eng)
   coef_list <- function(cf) {
     if (is.null(cf)) return(NULL)
     if (is.matrix(cf)) lapply(setNames(seq_len(nrow(cf)), rownames(cf)), function(r) as.list(cf[r, ])) else as.list(cf)
@@ -140,8 +166,9 @@ run_task <- function(task) {
   } else NULL
   fit_info <- list(
     tree = tree_info,
+    rf = rf_info,
     coefficients = coef_list(coefs),
-    coefficient_names = if (is_tree) NULL else if (multi) colnames(coefs) else names(coefs),
+    coefficient_names = if (is_tree || is_rf) NULL else if (multi) colnames(coefs) else names(coefs),
     coefficient_levels = if (multi) rownames(coefs) else NULL,
     nnet_value = if (multi) eng$value else NULL,
     nnet_default = nnet_default,
@@ -150,9 +177,9 @@ run_task <- function(task) {
     predicted_test = if (task$type == "regression") as.numeric(predict(fit, test)$.pred)
                      else columns_as_list(predict(fit, test, type = "prob")),
     class_test = if (task$type == "classification") as.character(predict(fit, test)$.pred_class) else NULL,
-    converged = if (task$type == "classification" && !is_tree) { if (multi) eng$convergence == 0 else eng$converged } else NULL,
-    iterations = if (task$type == "classification" && !multi && !is_tree) eng$iter else NULL,
-    deviance = if (task$type == "classification" && !is_tree) { if (multi) 2 * eng$value else eng$deviance } else NULL,
+    converged = if (task$type == "classification" && !is_tree && !is_rf) { if (multi) eng$convergence == 0 else eng$converged } else NULL,
+    iterations = if (task$type == "classification" && !multi && !is_tree && !is_rf) eng$iter else NULL,
+    deviance = if (task$type == "classification" && !is_tree && !is_rf) { if (multi) 2 * eng$value else eng$deviance } else NULL,
     outcome_levels = if (task$type == "classification") levels(train[[task$outcome]]) else NULL,
     xtx_condition = {
       X <- as.matrix(baked_train[, pred_cols, drop = FALSE]); X <- cbind(1, X)
@@ -176,7 +203,18 @@ run_task <- function(task) {
     setNames(as.list(m$.estimate), m$.metric)
   }
 
-  # ---- Level 4: resampling with shared folds ----
+  # ---- Level 4: resampling with shared folds (skipped for stochastic forests) ----
+  if (is_rf) {
+    out <- list(task = task, versions = versions, n_train = nrow(train), n_test = nrow(test),
+      prep = list(steps = step_states,
+                  baked_train = columns_as_list(baked_train[, pred_cols, drop = FALSE]),
+                  baked_test = columns_as_list(baked_test[, pred_cols, drop = FALSE]),
+                  predictor_names = pred_cols),
+      fit = fit_info, test_metrics = test_metrics, resample = NULL)
+    write_json(out, file.path(out_dir, paste0(task$id, ".json")), auto_unbox = TRUE, digits = I(17), na = "null", null = "null", pretty = FALSE)
+    cat("   wrote", file.path(out_dir, paste0(task$id, ".json")), "(forest: seed sweep, no resampling)\n")
+    return(invisible(NULL))
+  }
   fold_of_row <- split$vfold$fold_of_row
   v <- split$vfold$v
   splits <- lapply(seq_len(v) - 1, function(k) {

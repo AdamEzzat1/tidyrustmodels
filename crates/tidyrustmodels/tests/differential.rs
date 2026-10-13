@@ -291,6 +291,24 @@ fn task_table(task: &Value) -> Table {
 }
 
 fn model_for(task: &Value, engine: Engine, y: &Outcome) -> Box<dyn ModelSpec> {
+    model_for_seed(task, engine, y, 0)
+}
+
+fn model_for_seed(task: &Value, engine: Engine, y: &Outcome, seed: u64) -> Box<dyn ModelSpec> {
+    if task["model"] == "rand_forest" {
+        let a = &task["model_args"];
+        let mut s = RandForestSpec::new().engine(engine).seed(Seed(seed));
+        if let Some(v) = a["mtry"].as_u64() {
+            s = s.mtry(v as usize);
+        }
+        if let Some(v) = a["trees"].as_u64() {
+            s = s.trees(v as usize);
+        }
+        if let Some(v) = a["min_n"].as_u64() {
+            s = s.min_n(v as usize);
+        }
+        return Box::new(s);
+    }
     if task["model"] == "decision_tree" {
         let a = &task["model_args"];
         let mut s = DecisionTreeSpec::new().engine(engine);
@@ -539,13 +557,30 @@ fn differential_against_r_fixtures() {
         // ---- Level 3 + 4 per engine ----
         let metrics = MetricSet::from_names(&strs(&task["metrics"])).unwrap();
         let is_tree = task["model"] == "decision_tree";
-        let engines: Vec<Engine> = if is_tree {
+        let is_rf = task["model"] == "rand_forest";
+        let engines: Vec<Engine> = if is_tree || is_rf {
             vec![Engine::Native]
         } else {
             vec![Engine::Linfa, Engine::Smartcore, Engine::Native]
         };
         for engine in engines {
             let eng = engine.as_str();
+            if is_rf {
+                compare_forest(
+                    &mut report,
+                    &tol,
+                    id,
+                    eng,
+                    task,
+                    &x_train,
+                    &y_train,
+                    &x_test,
+                    &y_test,
+                    &metrics,
+                    &fx,
+                );
+                continue;
+            }
             let spec = model_for(task, engine, &y_train);
             let is_multi = spec.name() == "multinom_reg";
             let fitted = spec.fit(&x_train, &y_train).unwrap();
@@ -1493,6 +1528,181 @@ fn compare_tree(
             .collect();
         report.compare(id, eng, "L3", "tree class counts", &ours, &r_counts, b);
     }
+}
+
+/// Level 5: statistical comparison of a stochastic model. R fitted `S` seeds (fixture
+/// `fit.rf.per_seed`); we fit `S` seeds of our own and compare the seed means of every
+/// metric and the seed-averaged test predictions within `rf_z` standard errors.
+#[allow(clippy::too_many_arguments)]
+fn compare_forest(
+    report: &mut Report,
+    tol: &Tolerances,
+    id: &str,
+    eng: &str,
+    task: &Value,
+    x_train: &DesignMatrix,
+    y_train: &Outcome,
+    x_test: &DesignMatrix,
+    y_test: &Outcome,
+    metrics: &MetricSet,
+    fx: &Value,
+) {
+    let rf = &fx["fit"]["rf"];
+    let r_seeds = items(&rf["per_seed"]);
+    let s_n = r_seeds.len();
+    let z = tol.get("-", "rf_z");
+    let row_fraction = tol.get("-", "rf_row_fraction");
+    // resolved defaults must agree with ranger's
+    let probe = model_for_seed(task, Engine::Native, y_train, 0)
+        .fit(x_train, y_train)
+        .unwrap();
+    let note = probe.diagnostics().note.unwrap();
+    let our_mtry: u64 = note
+        .split("mtry ")
+        .nth(1)
+        .unwrap()
+        .split(',')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let our_min: u64 = note
+        .split("min.node.size ")
+        .nth(1)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    report.exact(
+        id,
+        eng,
+        "L5",
+        "ranger mtry default",
+        &our_mtry,
+        &rf["mtry"].as_u64().unwrap(),
+    );
+    report.exact(
+        id,
+        eng,
+        "L5",
+        "ranger min.node.size default",
+        &our_min,
+        &rf["min_node_size"].as_u64().unwrap(),
+    );
+    report.exact(
+        id,
+        eng,
+        "L5",
+        "ranger tree type",
+        &matches!(y_train, Outcome::Class { .. }),
+        &(rf["treetype"].as_str().unwrap() == "Probability estimation"),
+    );
+    // our S seeds
+    let mut ours: Vec<(Vec<MetricValue>, Vec<f64>)> = Vec::with_capacity(s_n);
+    for s in 0..s_n as u64 {
+        let fitted = model_for_seed(task, Engine::Native, y_train, s)
+            .fit(x_train, y_train)
+            .unwrap();
+        let pred = fitted.predict(x_test).unwrap();
+        let flat = match &pred {
+            Prediction::Numeric(p) => p.clone(),
+            Prediction::Class {
+                probabilities: Some(p),
+                ..
+            } => p.to_row_major(),
+            _ => unreachable!(),
+        };
+        ours.push((metrics.evaluate(y_test, &pred).unwrap(), flat));
+    }
+    // per-seed dump for diagnosis (target/rust_outputs/<task>_rf_seeds.json)
+    {
+        let dump: Vec<Value> = ours
+            .iter()
+            .map(|(mv, flat)| {
+                let m: serde_json::Map<String, Value> = metrics
+                    .metrics()
+                    .iter()
+                    .zip(mv)
+                    .map(|(m, v)| (m.name().to_string(), serde_json::json!(v.value)))
+                    .collect();
+                serde_json::json!({ "metrics": m, "pred": flat })
+            })
+            .collect();
+        let dir = root().join("target/rust_outputs");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{id}_rf_seeds.json")),
+            serde_json::to_string(&dump).unwrap(),
+        )
+        .unwrap();
+    }
+    let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+    let var = |v: &[f64]| {
+        let m = mean(v);
+        v.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / (v.len() as f64 - 1.0)
+    };
+    for (mi, m) in metrics.metrics().iter().enumerate() {
+        let r: Vec<f64> = r_seeds
+            .iter()
+            .map(|s| s["metrics"][m.name()].as_f64().unwrap())
+            .collect();
+        let o: Vec<f64> = ours.iter().map(|(mv, _)| mv[mi].value.unwrap()).collect();
+        let se = (var(&r) / s_n as f64 + var(&o) / s_n as f64).sqrt();
+        report.compare(
+            id,
+            eng,
+            "L5",
+            &format!(
+                "seed-mean {} (band {z} SE = {:.2e}; R sd {:.2e})",
+                m.name(),
+                z * se,
+                var(&r).sqrt()
+            ),
+            &[mean(&o)],
+            &[mean(&r)],
+            (0.0, z * se),
+        );
+    }
+    // seed-averaged predictions, row-wise bands
+    let key = if matches!(y_train, Outcome::Numeric(_)) {
+        "predicted_test"
+    } else {
+        "prob_test"
+    };
+    let r_rows: Vec<Vec<f64>> = r_seeds
+        .iter()
+        .map(|s| {
+            if key == "prob_test" {
+                items(&s[key]).into_iter().flat_map(f64s).collect()
+            } else {
+                f64s(&s[key])
+            }
+        })
+        .collect();
+    let width = r_rows[0].len();
+    let mut within = 0usize;
+    let mut max_std = 0.0f64;
+    for j in 0..width {
+        let r: Vec<f64> = r_rows.iter().map(|v| v[j]).collect();
+        let o: Vec<f64> = ours.iter().map(|(_, v)| v[j]).collect();
+        let se = (var(&r) / s_n as f64 + var(&o) / s_n as f64).sqrt();
+        let d = (mean(&r) - mean(&o)).abs();
+        if se > 0.0 {
+            max_std = max_std.max(d / se);
+        }
+        if d <= z * se || (se == 0.0 && d == 0.0) {
+            within += 1;
+        }
+    }
+    let frac = within as f64 / width as f64;
+    report.exact(
+        id,
+        eng,
+        "L5",
+        &format!("seed-averaged test predictions within {z} SE on >= {row_fraction} of {width} values (observed {frac:.3}, max {max_std:.2} SE)"),
+        &true,
+        &(frac >= row_fraction),
+    );
 }
 
 /// Per-fold tree check (L4): structure exact, split points / improvements / deviances

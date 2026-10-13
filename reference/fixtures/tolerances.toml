@@ -58,6 +58,15 @@ tree_pred_rel = 1e-13
 tree_pred_abs = 1e-13
 tree_prob_abs = 1e-13
 
+# Level 5: stochastic models (random forests). R and Rust each fit S seeds; a metric
+# passes when |mean_R - mean_Rust| <= rf_z * sqrt(var_R/S + var_Rust/S), and the
+# seed-averaged test predictions pass when at least rf_row_fraction of the rows are
+# within the same band row-wise. rf_z = 4 keeps the false-failure rate per comparison
+# near 6e-5 under the normal approximation; it is a detection threshold for a
+# systematic difference between the two implementations, not a round-off bound.
+rf_z = 4.0
+rf_row_fraction = 0.98
+
 # Level 4: per-fold metrics inherit the level-3 bound of the task; summary mean/std_err
 # are plain arithmetic over per-fold values.
 resample_metric_rel = 1e-7

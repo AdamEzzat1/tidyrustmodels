@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "notes": "Single source of truth for the differential suite. R (reference/tidymodels-r/run_reference.R), Python (reference/fixtures/generate_splits.py) and Rust (crates/tidyrustmodels/tests/differential.rs) all read this file. Step vocabulary: impute_median_numeric, impute_mean_numeric, normalize_numeric, dummy_nominal, zv, nzv, corr_numeric (threshold 0.9), other_nominal (threshold 0.05), novel_nominal, unknown_nominal (recipes defaults). Splits: initial = 75/25 (stratified by outcome for classification), vfold5 = 5-fold (stratified by outcome for classification). Classification tasks whose outcome has more than two levels are fitted with multinom_reg (R: nnet with maxit = 10000, reltol = 1e-15; Rust: MultinomRegSpec) and use yardstick's multiclass estimator defaults. A task's optional `model` (`decision_tree`; default: linear_reg / logistic_reg / multinom_reg by outcome) and `model_args` (parsnip argument names) select the estimator in all three systems. Tree tasks keep predictors on their raw scale: trees are invariant to monotone transforms, and normalising would make exact ties at split points depend on the last bit of the baked values, which differs between R and Rust.",
+  "notes": "Single source of truth for the differential suite. R (reference/tidymodels-r/run_reference.R), Python (reference/fixtures/generate_splits.py) and Rust (crates/tidyrustmodels/tests/differential.rs) all read this file. Step vocabulary: impute_median_numeric, impute_mean_numeric, normalize_numeric, dummy_nominal, zv, nzv, corr_numeric (threshold 0.9), other_nominal (threshold 0.05), novel_nominal, unknown_nominal (recipes defaults). Splits: initial = 75/25 (stratified by outcome for classification), vfold5 = 5-fold (stratified by outcome for classification). Classification tasks whose outcome has more than two levels are fitted with multinom_reg (R: nnet with maxit = 10000, reltol = 1e-15; Rust: MultinomRegSpec) and use yardstick's multiclass estimator defaults. A task's optional `model` (`decision_tree`; default: linear_reg / logistic_reg / multinom_reg by outcome) and `model_args` (parsnip argument names) select the estimator in all three systems. Tree tasks keep predictors on their raw scale: trees are invariant to monotone transforms, and normalising would make exact ties at split points depend on the last bit of the baked values, which differs between R and Rust. `rand_forest` tasks are stochastic: R fits ranger with seeds 1..10 and records per-seed test metrics and predictions; Rust does the same with its own streams and the suite compares the seed means statistically (level 5), not individual forests.",
   "tasks": [
     {
       "id": "synth_reg",
@@ -439,6 +439,126 @@
         "kap",
         "mcc",
         "brier_class"
+      ]
+    },
+    {
+      "id": "synth_reg_rf",
+      "dataset": "synthetic_reg_small",
+      "type": "regression",
+      "outcome": "y",
+      "predictors": [
+        "x1",
+        "x2",
+        "x3",
+        "g"
+      ],
+      "steps": [
+        "impute_median_numeric",
+        "dummy_nominal"
+      ],
+      "model": "rand_forest",
+      "metrics": [
+        "rmse",
+        "rsq",
+        "mae"
+      ]
+    },
+    {
+      "id": "ames_reg_rf",
+      "dataset": "ames",
+      "type": "regression",
+      "outcome": "Sale_Price",
+      "predictors": [
+        "Gr_Liv_Area",
+        "Year_Built",
+        "Total_Bsmt_SF",
+        "Bldg_Type",
+        "Neighborhood"
+      ],
+      "steps": [
+        "dummy_nominal"
+      ],
+      "model": "rand_forest",
+      "model_args": {
+        "trees": 300
+      },
+      "metrics": [
+        "rmse",
+        "rsq",
+        "mae"
+      ]
+    },
+    {
+      "id": "synth_clf_rf",
+      "dataset": "synthetic_clf_small",
+      "type": "classification",
+      "outcome": "y",
+      "predictors": [
+        "x1",
+        "x2",
+        "g"
+      ],
+      "steps": [
+        "dummy_nominal"
+      ],
+      "model": "rand_forest",
+      "metrics": [
+        "accuracy",
+        "mn_log_loss",
+        "roc_auc",
+        "brier_class",
+        "kap",
+        "f_meas"
+      ]
+    },
+    {
+      "id": "synth_multi_rf",
+      "dataset": "synthetic_multi_small",
+      "type": "classification",
+      "outcome": "y",
+      "predictors": [
+        "x1",
+        "x2",
+        "x3",
+        "g"
+      ],
+      "steps": [
+        "dummy_nominal"
+      ],
+      "model": "rand_forest",
+      "model_args": {
+        "mtry": 2,
+        "min_n": 5
+      },
+      "metrics": [
+        "accuracy",
+        "mn_log_loss",
+        "roc_auc",
+        "brier_class",
+        "kap",
+        "f_meas"
+      ]
+    },
+    {
+      "id": "penguins_species_rf",
+      "dataset": "penguins",
+      "type": "classification",
+      "outcome": "species",
+      "predictors": [
+        "bill_length_mm",
+        "body_mass_g"
+      ],
+      "steps": [
+        "impute_median_numeric"
+      ],
+      "model": "rand_forest",
+      "metrics": [
+        "accuracy",
+        "mn_log_loss",
+        "roc_auc",
+        "brier_class",
+        "kap",
+        "f_meas"
       ]
     }
   ]

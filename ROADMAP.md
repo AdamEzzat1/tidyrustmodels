@@ -78,7 +78,9 @@ brier_class, conf_mat, with binary/macro/macro_weighted/micro/hand_till estimato
 VERIFICATION.md Phase 8b); (c) multiclass outcomes — **done** (`MultinomRegSpec` on
 three engines, ADR-0010, two reference tasks against nnet; VERIFICATION.md Phase 8c);
 (d) tree models — decision tree **done** (rpart 4.1.23 port, five tasks exact against
-R, ADR-0011; VERIFICATION.md Phase 8d), random forest and boosted tree pending; (d) tree models via backends; (e) case weights; (f) bootstrap,
+R, ADR-0011; VERIFICATION.md Phase 8d), random forest **done** (ranger 0.18.0 rules under
+the framework's RNG, verified statistically on five tasks, ADR-0011 A; VERIFICATION.md
+Phase 8e), boosted tree pending; (d) tree models via backends; (e) case weights; (f) bootstrap,
 repeated/grouped CV, time-series splits; (g) `select_best` / `finalize_workflow` /
 `last_fit`; (h) Arrow/Polars/sparse inputs; (i) workflowsets.
 

@@ -304,7 +304,63 @@ rpart rule that a split must reduce the risk even at `cp = 0`, first-level tie-b
 `minsplit` / `maxdepth` stops, parameter validation, exact state round trip.
 
 Not covered: categorical splits, surrogates, non-default priors/loss, case weights
-(Phase 8e), the cp table and `xval`.
+(pending, priority 6), the cp table and `xval`.
+
+## Random forests (Phase 8e)
+
+Executed 2026-10-12. `RandForestSpec` grows trees with ranger 0.18.0's rules
+(ADR-0011, Amendment A) under the framework's own random streams, so it is verified
+statistically (level 5) against `parsnip::rand_forest() %>% set_engine("ranger")` on
+five new tasks; `ames_reg_rf` uses `trees = 300`, `synth_multi_rf` uses `mtry = 2,
+min_n = 5`, the others ranger's defaults. R fits seeds 1..10 (`set_engine(seed =)`),
+Rust fits seeds 0..9; both sides keep every seed's metrics and test predictions.
+
+| task | outcome | n test | largest ratio of mean difference to band | predictions within 4 SE | max row |
+|---|---|---|---|---|---|
+| `synth_reg_rf` | numeric | 10 | 0.31 (rsq) | 100 % | 3.69 SE |
+| `ames_reg_rf` (300 trees) | numeric | 733 | 0.19 (mae) | 99.3 % | 4.97 SE |
+| `synth_clf_rf` | binary | 16 | 0.38 (kap, f_meas) | 100 % | 3.95 SE |
+| `synth_multi_rf` (mtry 2, min_n 5) | 3 classes | 46 | 0.41 (brier) | 99.3 % | 4.96 SE |
+| `penguins_species_rf` | 3 classes | 86 | 0.48 (log loss) | 98.4 % | 6.31 SE |
+
+`mtry`, `min.node.size` and the tree type agree with ranger's resolved values on all
+five tasks. Every metric mean is inside the band; the largest ratio is 0.48 of the
+band (log loss on penguins). The band is a detection threshold: with 10 seeds a
+systematic bias below about 1.8 standard deviations of a metric's seed-to-seed
+spread would pass, e.g. 7e-4 of accuracy on penguins or 5e-2 of rmse on `ames_reg_rf`
+(0.2 % of the value).
+
+Two observations were followed up rather than accepted:
+
+1. **Bimodal log loss.** On penguins, three of ten Rust forests scored 0.265 where the
+   other seven and all ten R forests scored about 0.61: one test row has a true class
+   that gets probability exactly 0 unless some tree puts a same-class training row in
+   its leaf, and then `mn_log_loss`'s eps clamp contributes 0.40 to the mean. Three
+   of ten against none of ten has a one-sided Fisher p of 0.11, so it was re-run with
+   60 ranger seeds (101..160) and 60 Rust seeds: **7 of 60 forests on each side**
+   show the low mode (means 0.5732 R, 0.5735 Rust), i.e. the two growers agree on
+   how often that leaf is shared. The 60-seed fixture is not kept (it triples the R and
+   Rust time); `reference/tidymodels-r/rf_more_seeds.R <task> <from> <to>` regenerates
+   it for any forest task.
+2. **Rows beyond 4 SE.** With 10 seeds, 4 of 258 penguins values, 5 of 733 Ames
+   values and 1 of 138 `synth_multi` values lay outside the row band (the per-row
+   standard error from 10 seeds is itself noisy, and the bimodal rows are not
+   normal). With 60 seeds every one of the 258 penguins values is inside the band,
+   maximum 3.64 SE; the 0.98 row fraction stands as the 10-seed criterion.
+
+A line-by-line reading of ranger's `TreeProbability::findBestSplit*`,
+`TreeRegression::findBestSplit*`, `Tree::bootstrap` and `Tree::splitNode` against
+`native::forest` found no rule difference; the agreement above is the evidence that
+none was missed at the scale a 10-seed test can see.
+
+Independent baselines in `crates/tidyrustmodels-models/tests/forest.rs`: ranger's
+default resolution for both tree types, determinism per seed and difference across
+seeds, step-function recovery, probability rows summing to 1, parameter validation
+and tuning, exact state round trip, constant-outcome forests collapsing to one leaf.
+
+Not covered: variable importance, OOB error, `max.depth`, `sample.fraction`,
+sampling without replacement, case and class weights, `splitrule` variants,
+categorical splits, resampling (level 4) of forests.
 
 ## Test inventory
 
@@ -316,6 +372,7 @@ Not covered: categorical splits, surrogates, non-default priors/loss, case weigh
 | collinearity behaviour | `crates/tidyrustmodels-models/tests/collinear.rs` | yes | no |
 | multinomial baselines | `crates/tidyrustmodels-models/tests/multinom.rs` | yes | no |
 | decision-tree baselines | `crates/tidyrustmodels-models/tests/tree.rs` | yes | no |
+| random-forest baselines | `crates/tidyrustmodels-models/tests/forest.rs` | yes | no |
 | differential vs pinned R fixtures | `crates/tidyrustmodels/tests/differential.rs` | yes | no (fixtures committed) |
 | fixture regeneration | `reference/tidymodels-r/` | scheduled job only | yes |
 | Python parity | `python/tests/` | yes (python job) | no |

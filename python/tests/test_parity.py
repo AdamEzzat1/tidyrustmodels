@@ -63,6 +63,8 @@ def _n_levels(data: trm.Table, outcome: str) -> int:
 def _model(task, data, engine="native"):
     if task.get("model") == "decision_tree":
         return trm.DecisionTree(**task.get("model_args", {}))
+    if task.get("model") == "rand_forest":
+        return trm.RandForest(seed=0, **task.get("model_args", {}))
     if task["type"] == "regression":
         return trm.LinearReg(engine=engine)
     if _n_levels(data, task["outcome"]) > 2:
@@ -87,6 +89,8 @@ def test_python_matches_rust_bitwise(task, engine):
     """Same binary, same inputs: Python results must equal the Rust test's outputs exactly."""
     if task.get("model") == "decision_tree" and engine != "native":
         pytest.skip("decision_tree is implemented on the native engine only")
+    if task.get("model") == "rand_forest":
+        pytest.skip("rand_forest is stochastic; the Rust suite verifies it statistically (level 5)")
     rust_file = RUST_OUT / f"{task['id']}_{engine}.json"
     if not rust_file.exists():
         pytest.skip("run `cargo test -p tidyrustmodels --test differential` first")
@@ -136,6 +140,8 @@ def test_python_matches_r_within_tolerance(task):
     coefs = fitted.coefficients()
     multi = "coefficient_levels" in fx["fit"] and fx["fit"]["coefficient_levels"] is not None
     tree = fx["fit"].get("tree") is not None
+    if fx["fit"].get("rf") is not None:
+        return  # stochastic model: verified statistically in the Rust suite
     # bounds from reference/fixtures/tolerances.toml (multinom: nnet's residual, Phase 8c)
     rel = 1e-8 if task["type"] == "regression" else (1e-6 if multi else 1e-7)
     sets = ([] if tree else [(lv, coefs[lv], fx["fit"]["coefficients"][lv]) for lv in fx["fit"]["coefficient_levels"]] if multi else [(None, coefs, fx["fit"]["coefficients"])])

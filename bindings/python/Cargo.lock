@@ -911,6 +911,8 @@ dependencies = [
  "linfa-linear",
  "linfa-logistic",
  "ndarray 0.16.1",
+ "rand 0.10.3",
+ "rand_chacha 0.10.0",
  "serde",
  "serde_json",
  "smartcore",
