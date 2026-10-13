@@ -144,5 +144,8 @@ is tested from Python.
 
 - No custom linear algebra engine. Backends own their solvers.
 - No global registries. Engines are enum variants, selected explicitly.
+- Sparse data is a flag on dense numeric columns and design matrices (ADR-0015):
+  it reproduces what tidymodels' sparse vectors change (xgboost's missing rule), not
+  the storage.
 - No DataFrame library in core. Polars/Arrow interop is an optional feature of the
   facade and bindings (ADR-0003).

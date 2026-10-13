@@ -126,6 +126,33 @@ impl PyTable {
         Ok(PyTable { inner: self.inner.select_rows(&rows).py()? })
     }
 
+    /// Flag numeric columns as sparse vectors (`sparsevctrs::as_sparse_double`, ADR-0015):
+    /// values stay dense here, but a design built from any sparse column reaches xgboost
+    /// as a sparse matrix, i.e. with every exact zero treated as missing. Other engines
+    /// are unaffected (R densifies for lm/glm/rpart/nnet; ranger reads zeros as values).
+    fn with_sparse(&self, names: Vec<String>) -> PyResult<Self> {
+        let mut cols = Vec::with_capacity(self.inner.ncols());
+        for (name, col) in self.inner.iter() {
+            let flag = names.iter().any(|n| n == name);
+            if flag && col.as_numeric().is_none() {
+                return Err(InvalidArgumentError::new_err(format!("column `{name}` is categorical and cannot be sparse")));
+            }
+            cols.push((name.to_string(), col.clone().with_sparse(flag)));
+        }
+        for n in &names {
+            if self.inner.column(n).is_none() {
+                return Err(SchemaError::new_err(format!("no column `{n}`")));
+            }
+        }
+        Ok(PyTable { inner: Table::new(cols).py()? })
+    }
+
+    /// Names of the columns flagged as sparse vectors.
+    #[getter]
+    fn sparse_columns(&self) -> Vec<String> {
+        self.inner.iter().filter(|(_, c)| c.is_sparse()).map(|(n, _)| n.to_string()).collect()
+    }
+
     /// Column as a float64 array (NaN for missing) or list of `str | None`.
     fn column<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
         let col = self.inner.column(name).ok_or_else(|| SchemaError::new_err(format!("no column `{name}`")))?;
@@ -193,9 +220,27 @@ impl PyRecipe {
         Ok(PyRecipe { inner: self.inner.clone().step(StepImputeMedian::new(parse_selector(selector)?)) })
     }
 
-    #[pyo3(signature = (selector, one_hot = false))]
-    fn step_dummy(&self, selector: &Bound<'_, PyAny>, one_hot: bool) -> PyResult<Self> {
-        Ok(PyRecipe { inner: self.inner.clone().step(StepDummy::new(parse_selector(selector)?).one_hot(one_hot)) })
+    /// `sparse` is recipes' `sparse = "auto" | "yes" | "no"` (ADR-0015): "yes" flags the
+    /// indicator columns as sparse vectors (the design is then sparse for xgboost, i.e.
+    /// zeros are missing); "auto" leaves it to the workflow's sparse-data decision.
+    #[pyo3(signature = (selector, one_hot = false, sparse = "auto"))]
+    fn step_dummy(&self, selector: &Bound<'_, PyAny>, one_hot: bool, sparse: &str) -> PyResult<Self> {
+        let sparse = match sparse {
+            "auto" => SparseOutput::Auto,
+            "yes" => SparseOutput::Yes,
+            "no" => SparseOutput::No,
+            other => {
+                return Err(InvalidArgumentError::new_err(format!(
+                    "sparse must be \"auto\", \"yes\" or \"no\" (got \"{other}\")"
+                )))
+            }
+        };
+        Ok(PyRecipe {
+            inner: self
+                .inner
+                .clone()
+                .step(StepDummy::new(parse_selector(selector)?).one_hot(one_hot).sparse(sparse)),
+        })
     }
 
     fn step_select(&self, selector: &Bound<'_, PyAny>) -> PyResult<Self> {
@@ -365,8 +410,10 @@ impl PyRandForest {
 /// `parsnip::boost_tree()` with engine `xgboost` semantics (native port of xgboost
 /// 3.2.1's hist booster, ADR-0011): `trees` (15), `tree_depth` (6), `learn_rate`
 /// (0.3), `min_n` (1), `loss_reduction` (0), `lambda` (1), `alpha` (0);
-/// `zeros_as_missing` None = decide as workflows does from the recipe's sparsity
-/// (inside a Workflow; a standalone fit is dense), True/False to force it.
+/// `zeros_as_missing` None = tidymodels' behaviour (a Workflow applies workflows'
+/// sparse-data toggle to the recipe's dummy step, and zeros are missing exactly when
+/// the design is sparse, at fit and at predict); True = always missing; False = never
+/// toggle (a sparse design still reads zeros as missing).
 #[pyclass(name = "BoostTree", module = "tidyrustmodels._native", from_py_object)]
 #[derive(Clone)]
 struct PyBoostTree {

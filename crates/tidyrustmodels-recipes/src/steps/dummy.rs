@@ -13,10 +13,29 @@ use tidyrustmodels_core::{Column, ColumnKind, Error, Field, FittedStep, Result, 
 /// Missing categorical values propagate as missing indicator values (recipes yields
 /// `NA`). An unseen level at bake time is an error (recipes warns and yields `NA`);
 /// see COMPATIBILITY.md.
+///
+/// `sparse` is recipes' `sparse = "auto" | "yes" | "no"` argument (ADR-0015): with
+/// `Yes` the indicator columns are flagged as sparse vectors, which makes the design
+/// sparse for xgboost (zeros become missing values); `Auto` (the default) bakes dense
+/// columns unless a `Workflow::fit` toggles it, as `workflows:::toggle_sparsity` does.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StepDummy {
     selector: Selector,
     one_hot: bool,
+    #[serde(default)]
+    sparse: SparseOutput,
+}
+
+/// recipes' `sparse` argument of `step_dummy()`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SparseOutput {
+    /// Dense unless a workflow's sparse-data decision toggles it.
+    #[default]
+    Auto,
+    /// Indicator columns are sparse vectors.
+    Yes,
+    /// Indicator columns are dense.
+    No,
 }
 
 impl StepDummy {
@@ -25,6 +44,7 @@ impl StepDummy {
         StepDummy {
             selector,
             one_hot: false,
+            sparse: SparseOutput::Auto,
         }
     }
 
@@ -33,6 +53,17 @@ impl StepDummy {
         self.one_hot = one_hot;
         self
     }
+
+    /// Set recipes' `sparse` argument (see [`SparseOutput`]).
+    pub fn sparse(mut self, sparse: SparseOutput) -> Self {
+        self.sparse = sparse;
+        self
+    }
+
+    /// The `sparse` setting.
+    pub fn sparse_output(&self) -> SparseOutput {
+        self.sparse
+    }
 }
 
 /// Fitted state of [`StepDummy`].
@@ -40,6 +71,9 @@ impl StepDummy {
 pub struct FittedDummy {
     step: String,
     one_hot: bool,
+    /// Whether the indicator columns are flagged as sparse vectors.
+    #[serde(default)]
+    pub sparse: bool,
     /// `(source column, training levels, output column names)`.
     pub encodings: Vec<(String, Vec<String>, Vec<String>)>,
     schema: Schema,
@@ -66,6 +100,17 @@ impl Step for StepDummy {
                 )
             })
             .collect()
+    }
+
+    fn toggle_sparse(&self, choice: bool) -> Option<Box<dyn Step>> {
+        match self.sparse {
+            SparseOutput::Auto => Some(Box::new(self.clone().sparse(if choice {
+                SparseOutput::Yes
+            } else {
+                SparseOutput::No
+            }))),
+            _ => None,
+        }
     }
 
     fn prep(&self, training: &Table, schema: &Schema) -> Result<Box<dyn FittedStep>> {
@@ -117,6 +162,7 @@ impl Step for StepDummy {
         Ok(Box::new(FittedDummy {
             step: "dummy".into(),
             one_hot: self.one_hot,
+            sparse: self.sparse == SparseOutput::Yes,
             encodings,
             schema: Schema { fields },
         }))
@@ -174,6 +220,9 @@ impl FittedStep for FittedDummy {
                     Column::Numeric {
                         values,
                         valid: valid.map(|v| v.to_vec()),
+                        // sparse = "yes" emits sparse vectors (recipes 1.3.2); "auto" and
+                        // "no" bake dense indicators
+                        sparse: self.sparse,
                     },
                 )?;
             }
@@ -222,6 +271,49 @@ mod tests {
         );
         let names: Vec<&str> = f.output_schema().fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, vec!["y", "species_b", "species_c"]);
+    }
+
+    #[test]
+    fn sparse_output_is_toggled_like_recipes_and_flags_the_indicators() {
+        let (t, s) = table();
+        let auto = StepDummy::new(Selector::AllNominalPredictors);
+        // "auto" bakes dense columns; the toggle sets "yes" / "no"
+        assert!(!auto
+            .prep(&t, &s)
+            .unwrap()
+            .bake(&t)
+            .unwrap()
+            .column("species_b")
+            .unwrap()
+            .is_sparse());
+        let yes = auto.toggle_sparse(true).unwrap();
+        let b = yes.prep(&t, &s).unwrap().bake(&t).unwrap();
+        assert!(b.column("species_b").unwrap().is_sparse() && b.column("species_c").unwrap().is_sparse());
+        assert!(!b.column("y").unwrap().is_sparse());
+        let no = auto.toggle_sparse(false).unwrap();
+        assert!(!no
+            .prep(&t, &s)
+            .unwrap()
+            .bake(&t)
+            .unwrap()
+            .column("species_b")
+            .unwrap()
+            .is_sparse());
+        // an explicit setting is left alone (.recipes_toggle_sparse_args)
+        assert!(auto
+            .clone()
+            .sparse(SparseOutput::No)
+            .toggle_sparse(true)
+            .is_none());
+        assert!(auto
+            .clone()
+            .sparse(SparseOutput::Yes)
+            .toggle_sparse(false)
+            .is_none());
+        // the fitted state round-trips the flag
+        let state = yes.prep(&t, &s).unwrap().state().unwrap();
+        let f: FittedDummy = serde_json::from_value(state).unwrap();
+        assert!(f.sparse);
     }
 
     #[test]

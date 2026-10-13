@@ -39,8 +39,8 @@ All licenses are compatible with the project license (MIT OR Apache-2.0).
 
 | crate            | version | reason |
 |------------------|---------|--------|
-| polars           | 0.55.2  | Deferred to optional interop feature (ADR-0003): build size, monthly breaking majors |
-| arrow            | 60.0.0  | Same as polars; optional feature later |
+| arrow-array, arrow-schema | 60 | Optional (`tidyrustmodels` feature `arrow`): `RecordBatch` <-> `Table`, column-wise (ADR-0015) |
+| polars (Rust)    | 0.55.2  | Not a dependency: Polars frames convert through Arrow (ADR-0003) |
 | nalgebra         | 0.35.0  | Not needed: backends own their linear algebra |
 | faer             | 0.24.4  | Candidate for Phase 7 native solvers only |
 | ndarray-linalg   | 0.18.1  | Requires LAPACK (openblas/MKL) build; pure-Rust path suffices for v0.1 |

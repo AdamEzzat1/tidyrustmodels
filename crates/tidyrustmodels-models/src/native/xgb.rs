@@ -170,10 +170,16 @@ impl Booster {
     /// Raw margins (`output_margin = TRUE`): base score plus the leaves, accumulated in
     /// `f32` tree by tree as the predictor does.
     pub fn margin(&self, x: impl Fn(usize) -> f32) -> Vec<f32> {
+        self.margin_with(x, self.zero_as_missing)
+    }
+
+    /// [`Booster::margin`] with an explicit missing-value rule for this row: `true`
+    /// when the prediction data is a sparse matrix (ADR-0015), else the fitted rule.
+    pub fn margin_with(&self, x: impl Fn(usize) -> f32, zero_as_missing: bool) -> Vec<f32> {
         let k = self.objective.groups();
         let mut m = base_margin(self.objective, &self.base_score);
         for (t, tree) in self.trees.iter().enumerate() {
-            m[t % k] += tree.predict(&x, self.zero_as_missing);
+            m[t % k] += tree.predict(&x, zero_as_missing);
         }
         m
     }
@@ -181,7 +187,12 @@ impl Booster {
     /// Transformed predictions: the value, the event probability, or the class
     /// probabilities (`PredTransform`).
     pub fn predict(&self, x: impl Fn(usize) -> f32) -> Vec<f32> {
-        let mut m = self.margin(x);
+        self.predict_with(x, self.zero_as_missing)
+    }
+
+    /// [`Booster::predict`] with an explicit missing-value rule (see `margin_with`).
+    pub fn predict_with(&self, x: impl Fn(usize) -> f32, zero_as_missing: bool) -> Vec<f32> {
+        let mut m = self.margin_with(x, zero_as_missing);
         match self.objective {
             Objective::SquaredError => {}
             Objective::Logistic => m[0] = sigmoid(m[0]),

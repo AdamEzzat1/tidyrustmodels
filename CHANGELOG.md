@@ -35,6 +35,20 @@ VERIFICATION.md; nothing is claimed beyond those records.
   predictions, metrics }`), `fit_best`. Python: `TuneResults` object from `tune_grid`
   with the same methods, `Workflow.finalize`, `Workflow.last_fit`. Verified on four
   tuning tasks with explicit shared grids (VERIFICATION.md Phase 8i).
+- Sparse input and interop (ADR-0015): `Column::sparse_numeric` / `with_sparse` /
+  `is_sparse` and `DesignMatrix::is_sparse` reproduce sparsevctrs semantics (recipes'
+  propagation rules; xgboost reads zeros as missing iff the design it is given is
+  sparse, at fit and again at predict; other models unaffected). workflows' sparse-
+  data toggle now acts on the recipe as in R: `StepDummy::sparse(SparseOutput)`,
+  `Recipe::toggle_sparse`, `Step::toggle_sparse` and `ModelSpec::sparse_engine`
+  (**breaking**: replaces `resolve_sparsity`; `BoostTreeSpec::zeros_as_missing`
+  keeps forcing the rule). Verified on nine tasks, including the decision "yes"
+  without a dummy step (dense in R) and sparse fits predicting densified data
+  (VERIFICATION.md Phase 8j).
+  Rust `tidyrustmodels::arrow` (feature `arrow`) converts `RecordBatch` <-> `Table`.
+  Python: `from_arrow`, `to_arrow`, `from_polars`, `to_polars`, `to_pandas`,
+  `from_scipy_sparse`, `Table.with_sparse`, `Table.sparse_columns`; `from_pandas`
+  flags `SparseDtype` columns.
 - Metrics: rmse, mae, rsq (squared correlation, as yardstick), rsq_trad, accuracy, precision,
   recall, mn_log_loss (eps-clamped, as yardstick); `MetricSet`.
 - Classification metrics with yardstick 1.4.0 semantics: `ConfusionMatrix` (sens, spec,

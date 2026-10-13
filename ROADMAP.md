@@ -92,7 +92,11 @@ permutations, ADR-0013; VERIFICATION.md Phase 8h); (g) `select_best` /
 `finalize_workflow` / `last_fit` — **done** (tune 2.1.0 selection rules incl.
 `select_by_one_std_err` / `select_by_pct_loss`, `Workflow::finalize`, `last_fit` on
 tune's fold path, `fit_best`; four tuning tasks with shared explicit grids, ADR-0014;
-VERIFICATION.md Phase 8i); (h) Arrow/Polars/sparse inputs; (i) workflowsets.
+VERIFICATION.md Phase 8i); (h) Arrow/Polars/sparse inputs — **done** (sparse
+vectors as a column flag with recipes' propagation rules and parsnip's sparse-matrix
+hand-off to xgboost, six tasks against R; Arrow interop behind the `arrow` feature;
+Python `from_arrow` / `from_polars` / `from_scipy_sparse` and exports, ADR-0015;
+VERIFICATION.md Phase 8j); (i) workflowsets.
 
 ## Phase 7 — Native algorithms (2026-10-12) — first two solvers complete, pending review
 

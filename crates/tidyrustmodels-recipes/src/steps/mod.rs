@@ -7,7 +7,7 @@ mod levels;
 mod normalize;
 mod select;
 
-pub use dummy::{FittedDummy, StepDummy};
+pub use dummy::{FittedDummy, SparseOutput, StepDummy};
 pub use filter::{FittedCorr, FittedRemoveCols, StepCorr, StepNzv, StepZv};
 pub use impute::{FittedImpute, ImputeStat, StepImputeMean, StepImputeMedian};
 pub use levels::{FittedLevelAdd, FittedOther, OtherObject, StepNovel, StepOther, StepUnknown};

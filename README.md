@@ -65,6 +65,7 @@ data = trm.from_pandas(df)
 wf = trm.Workflow(trm.Recipe("sex").step_normalize("all_numeric_predictors")
                                     .step_dummy("all_nominal_predictors"),
                   trm.LogisticReg())
+# also trm.from_arrow(pa_table), trm.from_polars(pl_df), trm.from_scipy_sparse(csr, names)
 folds = trm.vfold_cv(data.nrows, 5, seed=7, strata=list(df["sex"]))
 cv = wf.fit_resamples(data, folds, ["accuracy", "mn_log_loss"], threads=4)
 ```

@@ -167,6 +167,59 @@ def synthetic_ts():
     write_csv("synthetic_ts", ["t", "day", "x1", "x2", "y"], rows)
 
 
+def synthetic_sparse_reg():
+    """Regression data with three sparse predictors (s1, s2, s3 are exactly zero for
+    75-90 % of the rows and Gaussian otherwise), two dense ones and a nominal one. Used
+    with `sparse_columns` to exercise sparsevctrs-style sparse input (ADR-0015): the
+    zeros matter for xgboost, which treats them as missing on a sparse design."""
+    rng = random.Random(20261018)
+    rows = []
+    for i in range(90):
+        x1 = rng.gauss(0.0, 1.0)
+        x2 = rng.uniform(-1.0, 1.0)
+        s1 = 0.0 if rng.random() < 0.75 else round(rng.gauss(1.0, 0.5), 6)
+        s2 = 0.0 if rng.random() < 0.85 else round(rng.gauss(-1.0, 0.7), 6)
+        s3 = 0.0 if rng.random() < 0.90 else round(rng.uniform(0.5, 3.0), 6)
+        g = "b" if rng.random() < 0.4 else "a"
+        y = 0.5 + 1.2 * x1 - 0.8 * x2 + 1.5 * s1 - 1.0 * s2 + 0.7 * s3 + (1.0 if g == "b" else 0.0) + rng.gauss(0.0, 0.4)
+        rows.append([round(x1, 6), round(x2, 6), s1, s2, s3, g, round(y, 6)])
+    for i in [7, 33, 61]:
+        rows[i][0] = None   # a few missing dense values for the imputation step
+    for i in [12, 48]:
+        rows[i][2] = None   # and missing sparse values (stored as NA in a sparse vector)
+    write_csv("synthetic_sparse_reg", ["x1", "x2", "s1", "s2", "s3", "g", "y"], rows)
+
+
+def synthetic_sparse_clf():
+    """Binary outcome from the same kind of design (two sparse predictors)."""
+    rng = random.Random(20261019)
+    rows = []
+    for i in range(100):
+        x1 = rng.gauss(0.0, 1.0)
+        s1 = 0.0 if rng.random() < 0.7 else round(rng.gauss(0.0, 1.0), 6)
+        s2 = 0.0 if rng.random() < 0.85 else round(rng.gauss(0.5, 1.0), 6)
+        logit = -0.2 + 1.0 * x1 + 1.5 * s1 - 1.2 * s2
+        p = 1.0 / (1.0 + math.exp(-logit))
+        y = "yes" if rng.random() < p else "no"
+        rows.append([round(x1, 6), s1, s2, y])
+    write_csv("synthetic_sparse_clf", ["x1", "s1", "s2", "y"], rows)
+
+
+def synthetic_vsparse_reg():
+    """Very sparse numeric predictors (about 96 % zeros) so that workflows' sparse-data
+    decision says "yes" (ADR-0015): with no dummy step the design stays dense in R;
+    with one, the indicators become sparse vectors and so does the design."""
+    rng = random.Random(20261027)
+    rows = []
+    effects = {"a": 0.0, "b": 0.5, "c": -0.5}
+    for i in range(200):
+        s = [0.0 if rng.random() < 0.96 else round(rng.gauss(0.0, 1.0), 6) for _ in range(6)]
+        g = rng.choice(["a", "b", "c"])
+        y = 1.0 + 1.0 * s[0] - 2.0 * s[1] + 0.5 * s[2] + 1.0 * s[3] + 2.0 * s[5] + effects[g] + rng.gauss(0.0, 0.1)
+        rows.append([*s, g, round(y, 6)])
+    write_csv("synthetic_vsparse_reg", ["s1", "s2", "s3", "s4", "s5", "s6", "g", "y"], rows)
+
+
 if __name__ == "__main__":
     synthetic_reg_small()
     synthetic_clf_small()
@@ -174,3 +227,6 @@ if __name__ == "__main__":
     synthetic_multi_small()
     synthetic_group_reg()
     synthetic_ts()
+    synthetic_sparse_reg()
+    synthetic_sparse_clf()
+    synthetic_vsparse_reg()

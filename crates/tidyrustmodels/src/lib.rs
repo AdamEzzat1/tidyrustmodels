@@ -24,6 +24,10 @@
 
 pub mod io;
 
+/// Arrow interop (`RecordBatch` <-> `Table`), enabled by the `arrow` feature (ADR-0003).
+#[cfg(feature = "arrow")]
+pub mod arrow;
+
 pub use tidyrustmodels_core as core;
 pub use tidyrustmodels_metrics as metrics;
 pub use tidyrustmodels_models as models;
@@ -49,8 +53,8 @@ pub mod prelude {
         RandForestSpec,
     };
     pub use tidyrustmodels_recipes::{
-        Recipe, Selector, StepCorr, StepDummy, StepImputeMean, StepImputeMedian, StepNormalize, StepNovel,
-        StepNzv, StepOther, StepSelect, StepUnknown, StepZv,
+        Recipe, Selector, SparseOutput, StepCorr, StepDummy, StepImputeMean, StepImputeMedian, StepNormalize,
+        StepNovel, StepNzv, StepOther, StepSelect, StepUnknown, StepZv,
     };
     pub use tidyrustmodels_resample::{
         balance_observations, balance_prop, bootstraps, freq_table, group_bootstraps, group_initial_split,

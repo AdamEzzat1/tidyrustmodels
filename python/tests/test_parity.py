@@ -22,10 +22,11 @@ TASKS = json.loads((ROOT / "reference" / "tasks.json").read_text())["tasks"]
 RUST_OUT = ROOT / "target" / "rust_outputs"
 
 
-def _read_csv_table(path: Path, outcome: str, predictors: list[str], extra: list[str] = ()) -> trm.Table:
+def _read_csv_table(path: Path, outcome: str, predictors: list[str], extra: list[str] = (), sparse: list[str] = ()) -> trm.Table:
     pd = pytest.importorskip("pandas")
     df = pd.read_csv(path, keep_default_na=False, na_values=[""])
-    return trm.from_pandas(df[[outcome, *predictors, *extra]])
+    t = trm.from_pandas(df[[outcome, *predictors, *extra]])
+    return t.with_sparse(list(sparse)) if sparse else t
 
 
 def _workflow(task: dict, model) -> trm.Workflow:
@@ -89,6 +90,7 @@ def _load_task(task):
         task["outcome"],
         task["predictors"],
         [cw["column"]] if cw else [],
+        task.get("sparse_columns", []),
     )
     split = json.loads((ROOT / "reference" / "fixtures" / "splits" / f"{task['id']}.json").read_text())
     fx = json.loads((ROOT / "reference" / "fixtures" / "r" / f"{task['id']}.json").read_text())

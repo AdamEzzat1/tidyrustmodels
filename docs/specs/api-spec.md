@@ -9,11 +9,14 @@ ADR changes them.
 pub enum Role { Predictor, Outcome, Id, Ignored }
 pub enum ColumnKind { Numeric, Categorical }
 
-pub struct Column { /* Numeric{values, valid} | Categorical{codes, levels, valid} */ }
+pub struct Column { /* Numeric{values, valid, sparse} | Categorical{codes, levels, valid} */ }
+// sparse: a sparsevctrs-style flag on dense storage (ADR-0015): Column::sparse_numeric / with_sparse / is_sparse
 pub struct Table   { columns: Vec<(String, Column)> }      // equal-length, unique names
 pub struct Schema  { fields: Vec<Field { name, kind, role }> }
 
-pub struct DesignMatrix { data: Vec<f64> /* column-major */, nrows, ncols, names: Vec<String> }
+pub struct DesignMatrix { data: Vec<f64> /* column-major */, nrows, ncols, names: Vec<String>, sparse: bool }
+// sparse: set by bake_matrix when any predictor column is sparse (parsnip's maybe_sparse_matrix);
+// BoostTreeSpec then reads zeros as missing at fit, and at predict iff the new design is sparse; with_sparse / is_sparse
 pub enum Outcome { Numeric(Vec<f64>), Class { codes: Vec<u32>, levels: Vec<String> } }
 
 pub enum Error { SchemaMismatch{..}, InvalidValue{..}, Unsupported{..},
@@ -58,6 +61,9 @@ StepSelect::columns(&[..]) / StepSelect::all_numeric_predictors()
 StepImputeMean::new(selector) / StepImputeMedian::new(selector)
 StepNormalize::new(selector)          // (x - mean) / sd, sd with n-1, na.rm
 StepDummy::new(selector).one_hot(bool) // default false (drop first level)
+    .sparse(SparseOutput::{Auto, Yes, No}) // recipes' `sparse`; Yes flags the indicators as sparse vectors (ADR-0015)
+Recipe::toggle_sparse(choice: bool) -> Recipe // .recipes_toggle_sparse_args: Auto -> Yes / No; Workflow::fit applies
+                                              // should_use_sparsity for models with ModelSpec::sparse_engine()
 ```
 
 Semantics: `prep` computes statistics on training rows only. `bake` on data with an
@@ -71,6 +77,16 @@ pub enum Engine { Linfa, Smartcore }
 pub struct LinearRegSpec  { engine: Engine, intercept: bool }
 pub struct LogisticRegSpec { engine: Engine, intercept: bool, penalty: f64 /* L2 alpha, 0 = MLE */,
                              max_iterations: u64, gradient_tolerance: f64 }
+```
+
+## tidyrustmodels (facade) — feature `arrow`
+
+```rust
+pub mod arrow {   // ADR-0003 / ADR-0015: column-wise copies, never zero-copy
+    pub fn table_from_record_batch(batch: &RecordBatch) -> Result<Table>;   // ints/floats -> f64 (nulls missing); Utf8 / LargeUtf8 / dictionary / Boolean -> categorical
+    pub fn record_batch_from_table(table: &Table) -> Result<RecordBatch>;   // Float64 / Utf8 with nulls
+    pub fn column_from_arrow(a: &ArrayRef) -> Result<Column>;
+}
 ```
 
 ## tidyrustmodels-resample

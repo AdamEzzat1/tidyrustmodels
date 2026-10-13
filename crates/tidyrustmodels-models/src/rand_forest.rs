@@ -96,6 +96,12 @@ impl RandForestSpec {
 }
 
 impl ModelSpec for RandForestSpec {
+    /// ranger accepts sparse matrices, so workflows runs its toggle (whose rule
+    /// always says "no" for ranger); the fit is the same either way.
+    fn sparse_engine(&self) -> Option<&'static str> {
+        Some("ranger")
+    }
+
     fn name(&self) -> &'static str {
         "rand_forest"
     }

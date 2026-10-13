@@ -149,9 +149,11 @@ impl FittedStep for FittedImpute {
                     .collect();
                 out.insert(
                     name.clone(),
+                    // recipes keeps a sparse vector sparse through imputation
                     Column::Numeric {
                         values: filled,
                         valid: None,
+                        sparse: col.is_sparse(),
                     },
                 )?;
             }

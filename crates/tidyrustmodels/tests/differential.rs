@@ -9,6 +9,7 @@
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use tidyrustmodels::core::sparsity::should_use_sparsity;
 use tidyrustmodels::io::read_csv;
 use tidyrustmodels::prelude::*;
 
@@ -303,6 +304,17 @@ fn full_table(task: &Value) -> Table {
 /// Compare a prediction with R's `{pred}` / `{class, prob}` dump: numeric predictions
 /// under the model's prediction bound, probabilities under its absolute bound, classes
 /// exactly.
+/// The same table with every sparse-vector flag cleared (R: the sparse columns
+/// materialised before `predict()`).
+fn densify(t: &Table) -> Table {
+    Table::new(
+        t.iter()
+            .map(|(n, c)| (n.to_string(), c.clone().with_sparse(false)))
+            .collect(),
+    )
+    .unwrap()
+}
+
 fn compare_prediction(
     report: &mut Report,
     tol: &Tolerances,
@@ -627,6 +639,13 @@ fn task_table(task: &Value) -> Table {
     }
     if let Some((col, _)) = case_weights_spec(task) {
         cols.push((col.to_string(), full.column(col).unwrap().clone()));
+    }
+    // sparse input (ADR-0015): the task's `sparse_columns` are sparse vectors in R
+    let sparse = strs(&task["sparse_columns"]);
+    for (name, col) in cols.iter_mut() {
+        if sparse.contains(name) {
+            *col = col.clone().with_sparse(true);
+        }
     }
     Table::new(cols).unwrap()
 }
@@ -997,12 +1016,27 @@ fn differential_against_r_fixtures() {
             }
             let spec = model_for(task, engine, &y_train);
             let is_multi = spec.name() == "multinom_reg";
-            // the full-data fit goes through the same sparse-data decision as a workflow
-            let est_sparsity = build_recipe(task).estimate_sparsity(&train);
-            let fit_spec = spec
-                .resolve_sparsity(est_sparsity, train.nrows())
-                .unwrap_or_else(|| spec.clone_box());
-            let fitted = fit_spec
+            // the full-data fit goes through the same sparse-data toggle as a workflow
+            // (ADR-0015): the decision sets step_dummy's sparse output, and the booster
+            // reads zeros as missing iff the baked design is sparse
+            let input_sparse = x_train.is_sparse();
+            let toggled = is_boost.then(|| {
+                let est = build_recipe(task).estimate_sparsity(&train);
+                let choice = should_use_sparsity(est, "xgboost", train.nrows());
+                let prepped = build_recipe(task)
+                    .toggle_sparse(choice)
+                    .prep_with_weights(&train, cw_spec)
+                    .unwrap();
+                (est, choice, prepped)
+            });
+            let (x_train, x_test) = match &toggled {
+                Some((_, _, prepped)) => (
+                    prepped.bake_matrix(&train).unwrap().0,
+                    prepped.bake_matrix(&test).unwrap().0,
+                ),
+                None => (x_train.clone(), x_test.clone()),
+            };
+            let fitted = spec
                 .fit_maybe_weighted(&x_train, &y_train, w_train.as_ref())
                 .unwrap();
             if let Some(w) = &w_train {
@@ -1019,15 +1053,22 @@ fn differential_against_r_fixtures() {
                     &true,
                 );
             }
-            if is_boost {
+            if let Some((est_sparsity, choice, prepped_t)) = &toggled {
                 let r_est = fx["fit"]["sparsity"]["estimate"].as_f64().unwrap();
                 let r_dec = fx["fit"]["sparsity"]["decision"].as_str().unwrap() == "yes";
+                // ADR-0015: xgboost gets a dgCMatrix when sparse input columns survive the
+                // recipe as written (input_sparse) or when the toggle made step_dummy emit
+                // sparse indicators (design_sparse: the recipe the fitted workflow keeps)
+                let r_input_sparse = fx["fit"]["sparsity"]["input_sparse"].as_bool().unwrap_or(false);
+                let r_design_sparse = fx["fit"]["sparsity"]["design_sparse"]
+                    .as_bool()
+                    .expect("design_sparse recorded by the R runner");
                 report.compare(
                     id,
                     eng,
                     "L3",
                     "recipe sparsity estimate (R samples 1000 rows; all rows here)",
-                    &[est_sparsity],
+                    &[*est_sparsity],
                     &[r_est],
                     (0.0, tol.get("-", "sparsity_estimate_abs")),
                 );
@@ -1035,14 +1076,81 @@ fn differential_against_r_fixtures() {
                     id,
                     eng,
                     "L3",
-                    "sparse-data decision (zeros become missing)",
+                    "sparse-data decision (should_use_sparsity)",
+                    choice,
+                    &r_dec,
+                );
+                report.exact(
+                    id,
+                    eng,
+                    "L3",
+                    "sparse input reaches xgboost as a sparse matrix",
+                    &input_sparse,
+                    &r_input_sparse,
+                );
+                report.exact(
+                    id,
+                    eng,
+                    "L3",
+                    "design sparse after the toggle (sparse input or sparse indicators)",
+                    &x_train.is_sparse(),
+                    &r_design_sparse,
+                );
+                report.exact(
+                    id,
+                    eng,
+                    "L3",
+                    "zeros become missing iff the design is sparse",
                     &fitted
                         .diagnostics()
                         .note
                         .unwrap()
                         .contains("zeros as missing: true"),
-                    &r_dec,
+                    &r_design_sparse,
                 );
+                // a model fitted on sparse input predicts densified new data with zeros as
+                // values (parsnip converts the baked new data again)
+                let r_dense = &fx["fit"]["predicted_test_dense_input"];
+                if !r_dense.is_null() {
+                    let (xd, _) = prepped_t.bake_matrix(&densify(&test)).unwrap();
+                    report.exact(
+                        id,
+                        eng,
+                        "L3",
+                        "densified test design is dense",
+                        &xd.is_sparse(),
+                        &false,
+                    );
+                    match fitted.predict(&xd).unwrap() {
+                        Prediction::Numeric(p) => report.compare(
+                            id,
+                            eng,
+                            "L3",
+                            "test predictions on densified input",
+                            &p,
+                            &f64s(r_dense),
+                            tol.pair_eng(id, "xgb_pred", eng),
+                        ),
+                        Prediction::Class {
+                            levels,
+                            probabilities: Some(probs),
+                            ..
+                        } => {
+                            for (j, lv) in levels.iter().enumerate() {
+                                report.compare(
+                                    id,
+                                    eng,
+                                    "L3",
+                                    &format!("test prob `{lv}` on densified input"),
+                                    probs.column(j),
+                                    &f64s(&r_dense[format!(".pred_{lv}")]),
+                                    (0.0, tol.get_eng(id, "xgb_prob_abs", eng)),
+                                );
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                }
             }
             let r_names = strs(&fx["fit"]["coefficient_names"]);
             let aliased = fitted.diagnostics().aliased;

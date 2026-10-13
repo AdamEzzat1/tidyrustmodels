@@ -16,7 +16,13 @@ tidyrustmodels-resample = { workspace = true }
 tidyrustmodels-metrics = { workspace = true }
 tidyrustmodels-workflows = { workspace = true }
 tidyrustmodels-tune = { workspace = true }
+arrow-array = { version = "60", optional = true }
+arrow-schema = { version = "60", optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
 approx = { workspace = true }
+
+[features]
+# Arrow interop (ADR-0003 / ADR-0015): `tidyrustmodels::arrow` converts RecordBatch <-> Table column-wise
+arrow = ["dep:arrow-array", "dep:arrow-schema"]

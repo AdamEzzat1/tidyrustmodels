@@ -14,9 +14,26 @@ pub struct DesignMatrix {
     nrows: usize,
     ncols: usize,
     names: Vec<String>,
+    /// Whether any source column was a sparse vector (ADR-0015): parsnip then hands
+    /// the engine a sparse matrix (`maybe_sparse_matrix`), which xgboost reads with
+    /// every exact zero missing. The storage here stays dense.
+    #[serde(default)]
+    sparse: bool,
 }
 
 impl DesignMatrix {
+    /// Mark the matrix as sparse (see the field doc); `from_columns` and the other
+    /// constructors build dense matrices.
+    pub fn with_sparse(mut self, sparse: bool) -> Self {
+        self.sparse = sparse;
+        self
+    }
+
+    /// Whether the matrix stands for a sparse matrix in R (ADR-0015).
+    pub fn is_sparse(&self) -> bool {
+        self.sparse
+    }
+
     /// Build from named columns of equal length. Rejects non-finite values.
     pub fn from_columns(columns: Vec<(String, Vec<f64>)>) -> Result<Self> {
         let ncols = columns.len();
@@ -46,6 +63,7 @@ impl DesignMatrix {
             nrows,
             ncols,
             names,
+            sparse: false,
         })
     }
 
@@ -82,6 +100,7 @@ impl DesignMatrix {
             nrows,
             ncols,
             names,
+            sparse: false,
         })
     }
 
@@ -112,6 +131,7 @@ impl DesignMatrix {
             nrows,
             ncols,
             names,
+            sparse: false,
         })
     }
 
@@ -185,6 +205,7 @@ impl DesignMatrix {
             nrows: rows.len(),
             ncols: self.ncols,
             names: self.names.clone(),
+            sparse: false,
         })
     }
 
@@ -205,6 +226,7 @@ impl DesignMatrix {
             nrows: self.nrows,
             ncols: cols.len(),
             names: cols.iter().map(|&c| self.names[c].clone()).collect(),
+            sparse: false,
         })
     }
 

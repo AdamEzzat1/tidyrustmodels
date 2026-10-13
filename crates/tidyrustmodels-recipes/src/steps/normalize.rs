@@ -116,6 +116,8 @@ impl FittedStep for FittedNormalize {
                 Column::Numeric {
                     values: scaled,
                     valid,
+                    // centring materialises a sparse vector in recipes
+                    sparse: false,
                 },
             )?;
         }

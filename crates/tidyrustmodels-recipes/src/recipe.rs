@@ -44,8 +44,9 @@ impl Recipe {
     /// recipes' `.recipes_estimate_sparsity()` (recipes 1.3.2): the share of exact
     /// zeros in the numeric columns of the template (all columns, outcome included),
     /// adjusted for the columns that sparse-capable steps (`step_dummy`) will create.
-    /// workflows feeds this to `ModelSpec::resolve_sparsity`. R samples 1000 rows for
-    /// the zero count when the template is larger; this counts every row.
+    /// `Workflow::fit` feeds this to `core::sparsity::should_use_sparsity` for models
+    /// with a `ModelSpec::sparse_engine`. R samples 1000 rows for the zero count when
+    /// the template is larger; this counts every row.
     pub fn estimate_sparsity(&self, template: &Table) -> f64 {
         let n_rows = template.nrows();
         if n_rows == 0 {
@@ -75,6 +76,21 @@ impl Recipe {
             }
         }
         zeroes / (n_rows_f * n_cols)
+    }
+
+    /// recipes' `.recipes_toggle_sparse_args()`: the same recipe with every step whose
+    /// `sparse` argument is `"auto"` set to `"yes"` (`choice = true`) or `"no"`
+    /// (`Step::toggle_sparse`; `StepDummy` here). `Workflow::fit` calls this with
+    /// workflows' sparse-data decision (ADR-0015).
+    pub fn toggle_sparse(&self, choice: bool) -> Recipe {
+        Recipe {
+            outcome: self.outcome.clone(),
+            steps: self
+                .steps
+                .iter()
+                .map(|s| s.toggle_sparse(choice).unwrap_or_else(|| s.clone_box()))
+                .collect(),
+        }
     }
 
     /// Estimate every step on `training` in sequence (each step sees the output of the
@@ -155,6 +171,7 @@ impl FittedRecipe {
     pub fn bake_matrix(&self, data: &Table) -> Result<(DesignMatrix, Option<Outcome>)> {
         let baked = self.bake(data)?;
         let mut cols = Vec::new();
+        let mut any_sparse = false;
         for f in &self.output_schema.fields {
             if f.role != Role::Predictor {
                 continue;
@@ -175,12 +192,15 @@ impl FittedRecipe {
                     col.n_missing()
                 )));
             }
+            any_sparse |= col.is_sparse();
             cols.push((f.name.clone(), col.as_numeric().expect("numeric").to_vec()));
         }
+        // parsnip's `maybe_sparse_matrix()`: one sparse column makes the whole design
+        // a sparse matrix for engines that accept one (ADR-0015)
         let x = if cols.is_empty() {
             DesignMatrix::from_column_major(Vec::new(), baked.nrows(), 0, Vec::new())?
         } else {
-            DesignMatrix::from_columns(cols)?
+            DesignMatrix::from_columns(cols)?.with_sparse(any_sparse)
         };
         let y = match baked.column(&self.outcome) {
             Some(c) => Some(Outcome::from_column(c)?),

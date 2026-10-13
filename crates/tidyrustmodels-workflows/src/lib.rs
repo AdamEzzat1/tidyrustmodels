@@ -5,6 +5,7 @@
 #![warn(missing_docs, rust_2018_idioms)]
 
 use serde::{Deserialize, Serialize};
+use tidyrustmodels_core::sparsity::should_use_sparsity;
 use tidyrustmodels_core::{
     Capability, CaseWeights, Error, FittedModel, ModelSpec, Outcome, Parallelism, Prediction, Result, Table,
     WeightKind,
@@ -94,15 +95,30 @@ impl Workflow {
 
     /// Prep the recipe on `training`, then fit the model on the baked design matrix.
     /// Like `workflows::fit()`, this applies the sparse-data decision
-    /// (`ModelSpec::resolve_sparsity`); `fit_resamples` does not, like tune.
+    /// (`workflows:::toggle_sparsity`: for a model with a `ModelSpec::sparse_engine`,
+    /// `core::sparsity::should_use_sparsity` on the recipe's sparsity estimate sets
+    /// `step_dummy`'s sparse output, ADR-0015); `fit_resamples` does not, like tune.
     pub fn fit(&self, training: &Table) -> Result<FittedWorkflow> {
         self.fit_with(training, true)
     }
 
-    fn fit_with(&self, training: &Table, resolve_sparsity: bool) -> Result<FittedWorkflow> {
-        let recipe = self
-            .recipe
-            .prep_with_weights(training, self.case_weights_spec())?;
+    fn fit_with(&self, training: &Table, toggle_sparsity: bool) -> Result<FittedWorkflow> {
+        // workflows::toggle_sparsity: engines that take sparse input decide from the
+        // recipe's sparsity estimate whether sparse-capable steps emit sparse columns;
+        // the toggled recipe is what the fitted workflow keeps, so prediction bakes
+        // new data the same way
+        let toggled;
+        let recipe_spec = match self.model.sparse_engine() {
+            Some(engine) if toggle_sparsity => {
+                let est = self.recipe.estimate_sparsity(training);
+                toggled = self
+                    .recipe
+                    .toggle_sparse(should_use_sparsity(est, engine, training.nrows()));
+                &toggled
+            }
+            _ => &self.recipe,
+        };
+        let recipe = recipe_spec.prep_with_weights(training, self.case_weights_spec())?;
         let weights = self.case_weights_of(training)?;
         let (x, y) = recipe.bake_matrix(training)?;
         let y = y.ok_or_else(|| {
@@ -112,17 +128,7 @@ impl Workflow {
             ))
         })?;
         check_capabilities(self.model.as_ref(), &y)?;
-        // workflows::toggle_sparsity: models whose engine takes sparse input decide
-        // from the recipe's sparsity estimate (see ModelSpec::resolve_sparsity)
-        let spec = if resolve_sparsity {
-            let est = self.recipe.estimate_sparsity(training);
-            self.model
-                .resolve_sparsity(est, training.nrows())
-                .unwrap_or_else(|| self.model.clone_box())
-        } else {
-            self.model.clone_box()
-        };
-        let model = spec.fit_maybe_weighted(&x, &y, weights.as_ref())?;
+        let model = self.model.fit_maybe_weighted(&x, &y, weights.as_ref())?;
         Ok(FittedWorkflow { recipe, model })
     }
 

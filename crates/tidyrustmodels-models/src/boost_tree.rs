@@ -5,7 +5,6 @@
 use crate::backends::Engine;
 use crate::native::xgb::{self, Booster, Objective, Params};
 use serde::{Deserialize, Serialize};
-use tidyrustmodels_core::sparsity::should_use_sparsity;
 use tidyrustmodels_core::traits::check_features;
 use tidyrustmodels_core::{
     BackendInfo, Capability, CaseWeights, DesignMatrix, Error, FitDiagnostics, FittedModel, ModelSpec,
@@ -40,15 +39,19 @@ pub struct BoostTreeSpec {
     sparse: SparsePolicy,
 }
 
-/// How exact zeros in the design matrix are treated.
+/// How exact zeros in the design matrix are treated (ADR-0011 B, ADR-0015). Whatever
+/// the policy, a *sparse* design (any sparse column, `DesignMatrix::is_sparse`) is a
+/// `dgCMatrix` to xgboost and its zeros are missing, at fit and at predict.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SparsePolicy {
-    /// Decide as `workflows::toggle_sparsity` does when fitted through a workflow;
-    /// dense otherwise.
+    /// tidymodels' behaviour: a `Workflow::fit` applies `workflows:::toggle_sparsity`
+    /// (the recipe's `step_dummy` emits sparse indicators when the decision says so);
+    /// a standalone fit or a resampling fit reads the design as given.
     Auto,
-    /// Zeros are values.
+    /// Never toggle the recipe: zeros are values unless the design is sparse.
     Dense,
-    /// Zeros are missing values with learned default directions.
+    /// Zeros are always missing values with learned default directions, at fit and
+    /// at predict, whatever the design.
     ZerosMissing,
 }
 
@@ -123,8 +126,9 @@ impl BoostTreeSpec {
         self
     }
 
-    /// Force zeros to be missing values (`true`) or ordinary values (`false`) instead
-    /// of the workflow decision.
+    /// Force zeros to be missing values (`true`, [`SparsePolicy::ZerosMissing`]) or
+    /// skip the workflow decision (`false`, [`SparsePolicy::Dense`]); a sparse design
+    /// still reads zeros as missing in both cases.
     pub fn zeros_as_missing(mut self, yes: bool) -> Self {
         self.sparse = if yes {
             SparsePolicy::ZerosMissing
@@ -238,17 +242,10 @@ impl ModelSpec for BoostTreeSpec {
         Ok(Box::new(s))
     }
 
-    fn resolve_sparsity(&self, estimated_sparsity: f64, n_rows: usize) -> Option<Box<dyn ModelSpec>> {
-        if self.sparse != SparsePolicy::Auto {
-            return None;
-        }
-        let mut s = self.clone();
-        s.sparse = if should_use_sparsity(estimated_sparsity, "xgboost", n_rows) {
-            SparsePolicy::ZerosMissing
-        } else {
-            SparsePolicy::Dense
-        };
-        Some(Box::new(s))
+    /// `Auto` lets a workflow toggle the recipe (`workflows:::toggle_sparsity` with
+    /// engine `"xgboost"`); a forced policy does not.
+    fn sparse_engine(&self) -> Option<&'static str> {
+        (self.sparse == SparsePolicy::Auto).then_some("xgboost")
     }
 
     fn clone_box(&self) -> Box<dyn ModelSpec> {
@@ -323,7 +320,10 @@ impl BoostTreeSpec {
             alpha: self.alpha as f32,
             max_bin: 256,
         };
-        let zero_as_missing = self.sparse == SparsePolicy::ZerosMissing;
+        // zeros are missing when the design is sparse (parsnip's maybe_sparse_matrix
+        // hands xgboost a dgCMatrix: sparse input columns, or sparse step_dummy
+        // indicators after workflows' toggle; ADR-0015) or when the policy forces it
+        let zero_as_missing = self.sparse == SparsePolicy::ZerosMissing || x.is_sparse();
         crate::linear::check_weights(weights, n)?;
         let booster = xgb::fit_weighted(
             x.data(),
@@ -339,6 +339,7 @@ impl BoostTreeSpec {
             model: "boost_tree".into(),
             format_version: crate::fitted::MODEL_FORMAT_VERSION,
             booster,
+            forced_zeros_missing: Some(self.sparse == SparsePolicy::ZerosMissing),
             names: x.names().to_vec(),
             levels,
             backend: self.backend(),
@@ -369,6 +370,11 @@ pub struct FittedBoostTree {
     format_version: u32,
     /// The booster.
     pub booster: Booster,
+    /// `Some(true)` when the policy forced zeros to be missing: prediction then reads
+    /// zeros as missing on any design. `Some(false)`: the new data decides. `None`
+    /// (states written before ADR-0015): the fitted rule applies to dense new data.
+    #[serde(default)]
+    forced_zeros_missing: Option<bool>,
     names: Vec<String>,
     /// Outcome levels for classification, `None` for regression.
     pub levels: Option<Vec<String>>,
@@ -382,10 +388,16 @@ impl FittedModel for FittedBoostTree {
         let n = x.nrows();
         // xgb.DMatrix stores the predictors as float
         let row = |i: usize| move |f: usize| x.get(i, f) as f32;
+        // at prediction the new data decides (parsnip bakes it and calls
+        // maybe_sparse_matrix again): a sparse design is a dgCMatrix whatever the fit
+        // saw, and a dense design reads zeros as values even after a sparse fit
+        // (measured in R, VERIFICATION.md Phase 8j), unless the policy forced the rule
+        let forced = self.forced_zeros_missing.unwrap_or(self.booster.zero_as_missing);
+        let zam = forced || x.is_sparse();
         match &self.levels {
             None => Ok(Prediction::Numeric(
                 (0..n)
-                    .map(|i| f64::from(self.booster.predict(row(i))[0]))
+                    .map(|i| f64::from(self.booster.predict_with(row(i), zam)[0]))
                     .collect(),
             )),
             Some(levels) => {
@@ -393,7 +405,7 @@ impl FittedModel for FittedBoostTree {
                 let mut codes = Vec::with_capacity(n);
                 let mut probs = vec![0.0; n * k];
                 for i in 0..n {
-                    let out = self.booster.predict(row(i));
+                    let out = self.booster.predict_with(row(i), zam);
                     if k == 2 {
                         // parsnip: .pred_<first> = p, .pred_<second> = 1 - p (in double);
                         // class = first level when p >= 0.5

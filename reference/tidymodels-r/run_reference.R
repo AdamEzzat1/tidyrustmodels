@@ -16,6 +16,7 @@
 suppressPackageStartupMessages(suppressWarnings({
   library(tidymodels)
   library(jsonlite)
+  library(sparsevctrs)
 }))
 Sys.setlocale("LC_COLLATE", "C")
 options(warn = 1)
@@ -50,6 +51,10 @@ read_dataset <- function(name, task) {
       df[[nm]] <- as.double(df[[nm]])
     }
   }
+  # sparse input (ADR-0015): the task's `sparse_columns` become sparsevctrs sparse
+  # vectors (NA stays a stored value); parsnip then hands engines that accept sparse
+  # matrices (xgboost, ranger, glmnet) a dgCMatrix and densifies for the others
+  for (sc in unlist(task$sparse_columns)) df[[sc]] <- sparsevctrs::as_sparse_double(df[[sc]])
   # case weights get hardhat's classes; recipe() then assigns the `case_weights` role
   if (!is.null(task$case_weights)) {
     cw <- task$case_weights$column
@@ -235,7 +240,25 @@ run_task <- function(task) {
     boost = boost_info,
     sparsity = if (is_boost) {
       est <- recipes::.recipes_estimate_sparsity(rec)
-      list(estimate = est, decision = workflows:::should_use_sparsity(est, "xgboost", nrow(train)))
+      # input_sparse: whether the baked predictors of the recipe as written still hold
+      # sparse vectors; design_sparse: the same for the recipe the fitted workflow keeps
+      # (after workflows' toggle set step_dummy(sparse = "yes") or not), i.e. whether
+      # parsnip's maybe_sparse_matrix() handed xgboost a dgCMatrix (ADR-0015)
+      list(estimate = est, decision = workflows:::should_use_sparsity(est, "xgboost", nrow(train)),
+           input_sparse = sparsevctrs::has_sparse_elements(hardhat::mold(rec, train)$predictors),
+           design_sparse = sparsevctrs::has_sparse_elements(
+             bake(extract_recipe(fit), new_data = train, all_predictors())))
+    } else NULL,
+    # the same model predicting the test rows with the sparse columns materialised:
+    # parsnip then hands xgboost a dense matrix and zeros are values (ADR-0015)
+    predicted_test_dense_input = if (is_boost && length(task$sparse_columns) > 0) {
+      td <- test
+      for (sc in unlist(task$sparse_columns)) {
+        td[[sc]] <- td[[sc]] + 0
+        stopifnot(!sparsevctrs::is_sparse_vector(td[[sc]]))
+      }
+      if (task$type == "regression") as.numeric(predict(fit, td)$.pred)
+      else columns_as_list(predict(fit, td, type = "prob"))
     } else NULL,
     margin_test = if (is_boost) boost_margin(fit, test) else NULL,
     coefficients = coef_list(coefs),

@@ -186,3 +186,20 @@ resample_metric_rel = 1e-6
 resample_metric_abs = 1e-6
 native_resample_metric_rel = 1e-6
 native_resample_metric_abs = 1e-6
+
+[tasks.synth_sparse_clf_xgb]
+# sparse input (ADR-0015): same float32 rounding class as the other xgboost
+# classification tasks (one ulp in a fold's margins); measured maxima on the first
+# run: probabilities 3.0e-8 abs / 1.0e-7 rel, resampling metrics 1.1e-8 rel (Phase 8j)
+xgb_pred_rel = 2e-7
+xgb_pred_abs = 1e-6
+xgb_prob_abs = 1e-6
+resample_metric_rel = 1e-6
+resample_metric_abs = 1e-6
+native_resample_metric_rel = 1e-6
+native_resample_metric_abs = 1e-6
+# the summaries inherit that ulp (measured 9.6e-9 rel on the first run)
+summary_rel = 1e-6
+summary_abs = 1e-6
+native_summary_rel = 1e-6
+native_summary_abs = 1e-6

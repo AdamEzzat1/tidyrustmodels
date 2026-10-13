@@ -132,7 +132,8 @@ fn parameters_validate_tune_and_round_trip() {
         .unwrap();
     assert_eq!(
         tuned.tunable(),
-        &["trees", "tree_depth", "learn_rate", "min_n", "loss_reduction"]
+        // parsnip's argument order (tune's .config numbering, ADR-0014)
+        &["trees", "min_n", "tree_depth", "learn_rate", "loss_reduction"]
     );
     let f = tuned.fit(&x, &y).unwrap();
     assert_eq!(
@@ -163,45 +164,59 @@ fn constant_outcome_gives_single_leaf_trees_predicting_the_mean() {
 }
 
 #[test]
-fn sparse_policy_is_resolved_like_workflows_and_can_be_forced() {
-    let (x, y) = step_data(20);
+fn sparse_rule_follows_the_design_and_can_be_forced() {
+    // zeros only in the upper step: read as values they sit left of every other x and
+    // need their own leaf; read as missing they join the upper leaf by default direction
+    let n = 20;
+    let xv: Vec<f64> = (0..n)
+        .map(|i| {
+            if i >= n / 2 && i % 2 == 0 {
+                0.0
+            } else {
+                (i + 1) as f64
+            }
+        })
+        .collect();
+    let noise: Vec<f64> = (0..n).map(|i| ((i * 7) % 5 + 1) as f64).collect();
+    let x = DesignMatrix::from_columns(vec![("x".into(), xv), ("noise".into(), noise)]).unwrap();
+    let y = Outcome::Numeric((0..n).map(|i| if i < n / 2 { 0.0 } else { 10.0 }).collect());
     let spec = BoostTreeSpec::new();
-    // dense design, few rows: workflows says "no"
-    let dense = spec.resolve_sparsity(0.2, 20).unwrap();
-    assert!(dense
-        .fit(&x, &y)
-        .unwrap()
-        .diagnostics()
-        .note
-        .unwrap()
-        .ends_with("zeros as missing: false"));
-    // a very sparse design: "yes"
-    let sparse = spec.resolve_sparsity(0.95, 2000).unwrap();
-    assert!(sparse
-        .fit(&x, &y)
-        .unwrap()
-        .diagnostics()
-        .note
-        .unwrap()
-        .ends_with("zeros as missing: true"));
-    // forced policies are left alone by the hook
-    assert!(BoostTreeSpec::new()
-        .zeros_as_missing(true)
-        .resolve_sparsity(0.0, 10)
-        .is_none());
-    assert!(BoostTreeSpec::new()
-        .zeros_as_missing(false)
-        .resolve_sparsity(0.99, 5000)
-        .is_none());
-    let state: FittedBoostTree = serde_json::from_value(
-        BoostTreeSpec::new()
-            .zeros_as_missing(true)
-            .trees(1)
-            .fit(&x, &y)
-            .unwrap()
-            .state()
-            .unwrap(),
-    )
-    .unwrap();
+    // Auto lets a workflow toggle the recipe for xgboost; a forced policy does not
+    assert_eq!(spec.sparse_engine(), Some("xgboost"));
+    assert_eq!(spec.clone().zeros_as_missing(true).sparse_engine(), None);
+    assert_eq!(spec.clone().zeros_as_missing(false).sparse_engine(), None);
+    let note = |f: &dyn tidyrustmodels_core::FittedModel| f.diagnostics().note.unwrap();
+    // a dense design: zeros are values; a sparse design (dgCMatrix in R): missing
+    let dense = spec.fit(&x, &y).unwrap();
+    assert!(note(dense.as_ref()).ends_with("zeros as missing: false"));
+    let xs = x.clone().with_sparse(true);
+    let sparse = spec.fit(&xs, &y).unwrap();
+    assert!(note(sparse.as_ref()).ends_with("zeros as missing: true"));
+    assert_ne!(dense.predict(&x).unwrap(), sparse.predict(&xs).unwrap());
+    // at prediction the new data decides (parsnip converts the baked new data again):
+    // the sparse fit reads a dense design with zeros as values, a sparse one as missing
+    let state: FittedBoostTree = serde_json::from_value(sparse.state().unwrap()).unwrap();
     assert!(state.booster.zero_as_missing);
+    let manual = |zam: bool| -> Prediction {
+        Prediction::Numeric(
+            (0..x.nrows())
+                .map(|i| f64::from(state.booster.predict_with(|f| x.get(i, f) as f32, zam)[0]))
+                .collect(),
+        )
+    };
+    assert_eq!(sparse.predict(&x).unwrap(), manual(false));
+    assert_eq!(sparse.predict(&xs).unwrap(), manual(true));
+    assert_ne!(manual(false), manual(true));
+    // forced: zeros are missing on any design, at fit and at predict
+    let forced = spec.clone().zeros_as_missing(true).fit(&x, &y).unwrap();
+    assert!(note(forced.as_ref()).ends_with("zeros as missing: true"));
+    assert_eq!(forced.predict(&x).unwrap(), forced.predict(&xs).unwrap());
+    // Dense only skips the toggle: a sparse design is still a dgCMatrix
+    let no_toggle = spec.clone().zeros_as_missing(false).fit(&xs, &y).unwrap();
+    assert!(note(no_toggle.as_ref()).ends_with("zeros as missing: true"));
+    // a state written before ADR-0015 (no `forced_zeros_missing`) keeps its fitted rule
+    let mut old = sparse.state().unwrap();
+    old.as_object_mut().unwrap().remove("forced_zeros_missing");
+    let old = fitted_model_from_state(&old).unwrap();
+    assert_eq!(old.predict(&x).unwrap(), manual(true));
 }

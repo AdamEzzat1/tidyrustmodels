@@ -41,6 +41,13 @@ pub enum Column {
         values: Vec<f64>,
         /// `Some(mask)` where `mask[i] == false` means missing.
         valid: Option<Vec<bool>>,
+        /// A sparse vector in the sense of R's sparsevctrs (ADR-0015): the values are
+        /// stored densely here, but the flag travels through the recipe steps that
+        /// keep R's sparse vectors sparse, and a design matrix with any sparse column
+        /// is what parsnip hands an engine as a sparse matrix (xgboost then treats
+        /// every exact zero as missing).
+        #[serde(default)]
+        sparse: bool,
     },
     /// Categorical codes into `levels`, with an optional validity mask.
     Categorical {
@@ -61,14 +68,22 @@ impl Column {
                 "numeric column contains a non-finite value at row {i}; use `numeric_with_missing` for missing data"
             )));
         }
-        Ok(Column::Numeric { values, valid: None })
+        Ok(Column::Numeric {
+            values,
+            valid: None,
+            sparse: false,
+        })
     }
 
     /// A numeric column that permits `NaN`/infinite entries (they are *values*, not
     /// missing). Preprocessing steps still reject non-finite inputs where their
     /// mathematics requires it.
     pub fn numeric_allow_nonfinite(values: Vec<f64>) -> Self {
-        Column::Numeric { values, valid: None }
+        Column::Numeric {
+            values,
+            valid: None,
+            sparse: false,
+        }
     }
 
     /// A numeric column from optional values; `None` becomes missing.
@@ -97,7 +112,28 @@ impl Column {
         Ok(Column::Numeric {
             values: out,
             valid: if any_missing { Some(valid) } else { None },
+            sparse: false,
         })
+    }
+
+    /// A numeric column flagged as a sparse vector (`sparsevctrs::as_sparse_double`):
+    /// `None` is missing (sparsevctrs stores `NA` explicitly), exact zeros are the
+    /// implicit default. See [`Column::with_sparse`] for what the flag changes.
+    pub fn sparse_numeric(values: Vec<Option<f64>>) -> Result<Self> {
+        Ok(Self::numeric_with_missing(values)?.with_sparse(true))
+    }
+
+    /// Set or clear the sparse-vector flag (a categorical column is unchanged).
+    pub fn with_sparse(mut self, sparse: bool) -> Self {
+        if let Column::Numeric { sparse: s, .. } = &mut self {
+            *s = sparse;
+        }
+        self
+    }
+
+    /// Whether this is a sparse numeric column (ADR-0015).
+    pub fn is_sparse(&self) -> bool {
+        matches!(self, Column::Numeric { sparse: true, .. })
     }
 
     /// A categorical column whose levels are the distinct labels sorted bytewise.
@@ -230,9 +266,14 @@ impl Column {
         let sub_valid =
             |valid: &Option<Vec<bool>>| valid.as_ref().map(|v| rows.iter().map(|&r| v[r]).collect());
         Ok(match self {
-            Column::Numeric { values, valid } => Column::Numeric {
+            Column::Numeric {
+                values,
+                valid,
+                sparse,
+            } => Column::Numeric {
                 values: rows.iter().map(|&r| values[r]).collect(),
                 valid: sub_valid(valid),
+                sparse: *sparse,
             },
             Column::Categorical { codes, levels, valid } => Column::Categorical {
                 codes: rows.iter().map(|&r| codes[r]).collect(),

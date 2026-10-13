@@ -130,7 +130,10 @@ its trees are different trees. The same recipe and model fitted on a data frame
    `alpha` (0) are exposed as engine arguments. `mtry`, `sample_size` and
    `stop_iter` are not offered: the first two draw from xgboost's generator, the
    third needs a validation split.
-3. **Sparse-data decision.** `ModelSpec::resolve_sparsity` is a new hook that a
+3. **Sparse-data decision** (superseded by ADR-0015: the decision now toggles the
+   recipe's `step_dummy` through `ModelSpec::sparse_engine` / `Recipe::toggle_sparse`,
+   and the booster reads zeros as missing iff the design it is given is sparse).
+   Original text: `ModelSpec::resolve_sparsity` is a new hook that a
    `Workflow` calls with the recipe's sparsity estimate (`Recipe::estimate_sparsity`,
    a port of recipes' estimate; `Step::sparse_adjustments` lets `StepDummy` report
    the columns it will create) and the row count. `BoostTreeSpec`'s default policy

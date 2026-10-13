@@ -642,6 +642,107 @@ Not covered: recipe-parameter tuning, `tune_bayes` / racing, `save_pred`
 predictions across resamples, the `zero` metric direction, `last_fit()` on an
 `initial_validation_split`.
 
+## Sparse input and interop (Phase 8j)
+
+Executed 2026-10-13. tidymodels' sparse-data semantics (sparsevctrs sparse vectors)
+were measured in R first (`target/sparse_probe*.log`, 2026-10-13): a sparse tibble
+leaves `.recipes_estimate_sparsity()` and `should_use_sparsity()` unchanged, keeps
+its vectors sparse through `step_impute_mean` / `_median` / `step_zv` / `step_nzv` /
+`step_corr` / `step_dummy` and loses them in `step_normalize`; `parsnip:::maybe_sparse_matrix()`
+hands xgboost a `dgCMatrix` when any baked column is sparse (329 stored of 1200
+entries on the probe design), densifies for lm / rpart (warning) and ranger / glmnet
+accept it; xgboost's fit then differs from the dense fit (max |Δpred| 0.085 on the
+probe, 2.4 when the fitted model predicts dense data) while lm, rpart, ranger and
+glmnet are identical (0, 0, 0, 1.8e-15). ADR-0015 ports this as a column flag.
+
+Two datasets (`synthetic_sparse_reg`: three sparse predictors at 68-89 % zeros, one
+with missing values; `synthetic_sparse_clf`) and six tasks with `sparse_columns`
+were added; the R runner converts those columns with `as_sparse_double()` before
+anything else and records `fit.sparsity.input_sparse` (whether the baked predictors
+still hold sparse vectors).
+
+| task | model | steps | R: xgboost input sparse | Rust design sparse / zeros missing (exact) | L3 | L4 metrics (max rel) |
+|---|---|---|---|---|---|---|
+| `synth_sparse_reg` | lm | impute, dummy | (densified) | n/a | coefficients <= 6.3e-15 rel | 9.9e-15 |
+| `synth_sparse_xgb` | xgboost | impute, dummy | **yes** | yes / yes | booster and predictions **exact (0)** with zeros as missing | 3.9e-15 |
+| `synth_sparse_tree` | rpart | impute, dummy | (densified) | n/a | tree exact | 2.1e-15 |
+| `synth_sparse_xgb_dense` | xgboost | impute, **normalize**, dummy | no (materialised) | no / no | booster exact, zeros as values | 6.7e-15 |
+| `synth_sparse_clf_xgb` | xgboost | (none) | **yes** | yes / yes | booster exact, probabilities exact on the full fit | 1.0e-7 (one float32 ulp in one fold's margins; bounds 1e-6 as the other xgboost classification tasks, measured 3.0e-8 abs / 9.6e-9 rel on the summaries) |
+| `synth_sparse_clf` | glm | normalize | (densified) | n/a | coefficients <= 4.5e-8 rel (IRLS; native exact) | 1.5e-8 |
+
+Differential suite after the first pass of this phase: 16342 comparisons, 0
+failures, 64 tasks (second pass below: 16771 / 0 / 67).
+Interop is verified by round trips rather than against R (no R semantics are
+involved): Rust `tidyrustmodels::arrow` round-trips numeric, string,
+dictionary-encoded and boolean columns (`cargo test --features arrow`); Python
+`from_arrow` (Table, RecordBatch, dictionary strings, booleans), `from_polars`
+(incl. Categorical), `from_pandas` (incl. `SparseDtype`) and `from_scipy_sparse`
+produce the same Table bit for bit as `Table.from_dict`, the exports round-trip, and a
+booster fitted from a SciPy CSR matrix equals the flagged-dense fit and differs from
+the dense one (`python/tests/test_interop.py`).
+
+Findings:
+
+1. **Sparse input changes the xgboost model in tidymodels, independently of the
+   workflows toggle.** The toggle only decides whether `step_dummy()` emits sparse
+   indicators; sparse *input* columns make the design sparse on their own, and the
+   missing rule follows the storage of whatever data is predicted. Modelling the
+   toggle alone (ADR-0011 B) would have reproduced `synth_sparse_xgb` with zeros as
+   values; the first Rust run under the old rule is not recorded because the port
+   was written from the R measurements above, but the R-vs-R difference (0.085) shows
+   the size of the effect.
+2. **One float32 ulp on a sparse classification fold.** `synth_sparse_clf_xgb` Fold5
+   differs by 3.0e-8 abs in the assessment probabilities with an identical tree
+   structure, the same class of difference the other xgboost classification tasks
+   carry (Phase 8f); its bounds follow theirs and the measured maxima are recorded in
+   `tolerances.toml`.
+
+### Second pass: the toggle is a recipe operation (2026-10-13)
+
+A failing Python interop test (a binding bug: `Table.with_sparse([])` did not clear
+the flags) led to a closer look at how workflows' toggle reaches xgboost. Probed in
+R (`workflows:::toggle_sparsity`, `recipes:::.recipes_toggle_sparse_args`,
+`parsnip:::maybe_sparse_matrix`, and a 200-row design with 93 % zeros):
+
+| R fact | measurement |
+|---|---|
+| the toggle only sets `sparse = "yes"` on steps whose argument is `"auto"`; the design is a `dgCMatrix` iff the baked predictors hold sparse vectors | a numeric-only recipe with decision "yes" fits **dense**: equal to `fit_xy()` on the dense matrix (0), max abs diff 0.038 from the sparse-input fit |
+| at prediction parsnip bakes the new data and converts it again | a sparse-input fit predicting the *dense* data: max abs diff 0.87 from its sparse-data predictions, 0.86 from the dense fit (zeros read as values) |
+
+The first port (ADR-0011 B's model policy, kept in ADR-0015's first draft) got
+both cases wrong: it would have read zeros as missing on a toggled numeric-only
+recipe and on dense new data after a sparse fit. ADR-0015 was amended: `StepDummy`
+carries recipes' `sparse` argument, `Workflow::fit` toggles the recipe
+(`ModelSpec::sparse_engine` + `Recipe::toggle_sparse`) and keeps the toggled recipe,
+and the booster reads zeros as missing iff the design in front of it is sparse
+(`forced_zeros_missing` only for the explicit policy).
+
+Verification was extended rather than re-derived: the R runner now records
+`fit.sparsity.design_sparse` (sparse vectors in the predictors baked by the recipe
+the fitted workflow keeps) and, for sparse-input tasks, `predicted_test_dense_input`
+(predictions on the test rows with the sparse columns materialised); the harness
+checks the decision, the input and design sparsity and the booster's rule exactly
+and compares the densified-input predictions. A third dataset (`synthetic_vsparse_reg`,
+200 × 8, six predictors at 96 % zeros, one factor) carries the three cases:
+
+| task | steps | R decision | R design sparse | Rust (exact) | L3 booster | predictions | densified input | L4 metrics (max rel) |
+|---|---|---|---|---|---|---|---|---|
+| `synth_vsparse_xgb_toggle` | (none) | **yes** | **no** (nothing to toggle) | decision, input, design, rule all match | 285 nodes exact; values <= 5.6e-8 rel | **exact (0)**, zeros as values | n/a | 3.0e-15 |
+| `synth_vsparse_xgb_toggle_dummy` | dummy | **yes** | **yes** (sparse indicators) | match | 321 nodes exact; values <= 6.4e-8 abs | **exact (0)**, zeros as missing | n/a | 9.6e-16 |
+| `synth_vsparse_xgb_input` | (none), sparse input | yes | **yes** (input) | match | 271 nodes exact | **exact (0)** | **exact (0)** (zeros as values) | 5.9e-16 |
+
+The three earlier sparse xgboost tasks keep their results (`synth_sparse_xgb` and
+`synth_sparse_xgb_dense`: densified-input predictions exact; `synth_sparse_clf_xgb`:
+probabilities within 1e-6), and `ames_reg_xgb` (decision "yes" through
+`step_dummy`) is unchanged. All fourteen boost fixtures were regenerated for the
+new fields. Differential suite after the second pass: 16771 comparisons, 0
+failures, 67 tasks. Python: `step_dummy(sparse=)` and the densified-prediction rule
+are covered in `python/tests/test_interop.py`.
+
+Not covered: sparse storage, ranger / glmnet with sparse input (identical in R;
+ranger is level 5 here), Arrow types beyond integers, floats, strings, dictionaries
+and booleans, zero-copy.
+
 ## Test inventory
 
 | suite | location | runs in CI | needs R |
@@ -657,5 +758,6 @@ predictions across resamples, the `zero` metric direction, `last_fit()` on an
 | differential vs pinned R fixtures | `crates/tidyrustmodels/tests/differential.rs` | yes | no (fixtures committed) |
 | grouped balance rules vs rsample (Phase 8h) | `crates/tidyrustmodels/tests/differential.rs::group_balance_rules_match_rsample` | yes | no (`group_balance.json` committed) |
 | fixture regeneration | `reference/tidymodels-r/` | scheduled job only | yes |
-| Python parity | `python/tests/` | yes (python job) | no |
+| Python parity, resampling, tuning, interop | `python/tests/` | yes (python job; pyarrow / polars / scipy optional) | no |
+| Arrow interop | `crates/tidyrustmodels/src/arrow.rs` (`--features arrow`) | yes | no |
 | benchmarks | `benchmarks/` | manual / dedicated machine | yes |

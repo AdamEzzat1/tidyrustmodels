@@ -23,6 +23,15 @@ pub trait Step: Debug + Send + Sync {
         Vec::new()
     }
 
+    /// recipes' `.recipes_toggle_sparse_args`: a step whose `sparse` argument is
+    /// `"auto"` returns a copy with it set to `"yes"` (`choice = true`) or `"no"`;
+    /// every other step (no such argument, or one set explicitly) returns `None`.
+    /// `Workflow::fit` applies workflows' sparse-data decision through this hook
+    /// (ADR-0015).
+    fn toggle_sparse(&self, _choice: bool) -> Option<Box<dyn Step>> {
+        None
+    }
+
     /// Clone into a boxed trait object.
     fn clone_box(&self) -> Box<dyn Step>;
 }
@@ -141,12 +150,13 @@ pub trait ModelSpec: Debug + Send + Sync {
         )))
     }
 
-    /// workflows' sparse-data hook: given the estimated sparsity of the baked design
-    /// and the number of training rows (`workflows:::toggle_sparsity`), return the
-    /// specification to fit instead, or `None` to fit `self` unchanged. Only models
-    /// whose R engine accepts sparse matrices (`allow_sparse_x`) and whose behaviour
-    /// depends on it override this.
-    fn resolve_sparsity(&self, _estimated_sparsity: f64, _n_rows: usize) -> Option<Box<dyn ModelSpec>> {
+    /// The R engine name when it accepts sparse matrices (parsnip's `allow_sparse_x`:
+    /// xgboost, ranger, glmnet, LiblineaR) and the specification lets a workflow
+    /// decide (`workflows:::toggle_sparsity`): `Workflow::fit` then feeds the recipe's
+    /// sparsity estimate and the row count to `core::sparsity::should_use_sparsity`
+    /// and toggles the recipe's sparse-capable steps (`Step::toggle_sparse`,
+    /// ADR-0015). `None` (the default) skips the toggle.
+    fn sparse_engine(&self) -> Option<&'static str> {
         None
     }
 
