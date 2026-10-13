@@ -578,6 +578,70 @@ refusal of `loo_cv`, `make_strata` pooling on a reference task (unit-tested only
 `initial_validation_split` against R (unit-tested sizes only: 8 rows, (0.5, 0.25) →
 4/2/2 as the R probe).
 
+## Tuning selection, `last_fit` and `fit_best` (Phase 8i)
+
+Executed 2026-10-13. tune 2.1.0's post-tuning steps were ported (ADR-0014):
+`show_best` / `select_best` / `select_by_one_std_err` / `select_by_pct_loss`,
+`finalize_workflow`, `last_fit` (tune's resample fit path) and `fit_best` (`fit()`).
+Five reference tasks carry a `tuning` field with an **explicit grid shared verbatim**
+by R and Rust (no `dials` grid generation on either side), run on the task's shared
+rset. R records, per grid row, tune's `.config` label, the `tune_grid()` per-resample
+and summary metrics, the same candidate evaluated on its own with `fit_resamples()`
+(`direct`), the `show_best` order and the three selections as grid-row indices, and
+the `last_fit` / `fit_best` metrics, predictions and models.
+
+| task | model / rset | grid | metric, sort | configs, show_best, 3 selections | candidate metrics (max rel, Rust vs direct / vs tune_grid) | last_fit | fit_best |
+|---|---|---|---|---|---|---|---|
+| `synth_reg_tree_tune` | rpart, 5-fold × 2 repeats | cost_complexity × min_n (9) | rmse, `desc(cost_complexity), desc(min_n)` | exact | 8.9e-15 / 8.9e-15 (468 values) | tree exact, metrics <= 1.3e-16 | tree + predictions exact |
+| `synth_clf_tree_tune` | rpart, 6 bootstraps | cost_complexity × tree_depth (9) | roc_auc, `desc(cost_complexity), tree_depth` | exact (4 exact ties resolved in config order) | 1.5e-15 (1215) | tree exact, 15 metrics exact | exact |
+| `synth_reg_xgb_tune` | xgboost, 5-fold | learn_rate × tree_depth (4) | rmse, `desc(learn_rate), tree_depth` | exact | 1.7e-15 | booster structure exact, values <= 5.4e-8 rel (JSON printing), metrics exact | <= 5.2e-8 rel |
+| `synth_reg_xgb_trees` | xgboost, 5-fold | trees × learn_rate (4, 2 sub-models) | rmse, `trees` | exact | 6.3e-15 vs direct; sub-model candidates: tune_grid = Rust `trees + 1` to 6.0e-15 (64 values) | <= 5.8e-8 rel | <= 5.8e-8 rel |
+| `penguins_species_tree_tune` | rpart multiclass, 5-fold | min_n (4) | accuracy, `desc(min_n)` | exact | 4.2e-15 (480) | tree exact, 15 metrics <= 8.3e-16 | exact |
+
+Differential suite after this phase: 15575 comparisons, 0 failures, 6118 of them on
+the tuning tasks; all under the default tolerances (no bound added or relaxed).
+Python: `TuneResults` (`show_best`, `select_best`, `select_by_one_std_err`,
+`select_by_pct_loss`, `fit_best`, `configs`), `Workflow.finalize`, `Workflow.last_fit`
+(`python/tests/test_tuning.py`); parity suite 170 passed, 76 skipped. Unit tests pin
+the rules on hand-built summaries (`selection_rules_follow_tune`,
+`configs_follow_tune_numbering`).
+
+Findings, each of which failed a comparison before it was understood:
+
+1. **tune's `.config` order is not grid order.** `make_config_labs()` arranges the
+   distinct model-parameter rows by the parameters in parsnip's argument order
+   (`cost_complexity, tree_depth, min_n`; `trees` before `learn_rate`) and numbers
+   them, and every later `arrange()` (the stable mean sort of `show_best`, the
+   simplicity sort of `select_by_*`) starts from that order. On `synth_clf_tree_tune`
+   four candidates tie exactly (cp and depth do not bind) and the first run ordered
+   them by grid row. `ModelSpec::tunable()` now lists parameters in parsnip's order
+   and `TuneResults::configs()` reproduces the numbering, which the suite compares
+   exactly on all five tasks.
+2. **parsnip 1.5.0 scores xgboost sub-models with one tree too many.** For
+   `boost_tree(trees = tune())` tune fits the largest `trees` and predicts the
+   smaller candidates with `multi_predict()`; `xgb_by_tree()` passes
+   `iterationrange = c(1, trees + 1)` to xgboost 3.2.1, whose range is 1-based and
+   inclusive at both ends. The first run showed R's `trees = 10` metrics differing
+   from the 10-tree booster by up to 5 % rel; they equal this crate's 11-tree
+   booster to 6e-15 (now measured by the suite on `synth_reg_xgb_trees`; the
+   maximal candidate, predicted with `nrow(evaluation_log)` trees, is unaffected).
+   This crate fits every candidate on its own. Recorded as a difference in
+   COMPATIBILITY.md; the other booster task tunes `learn_rate × tree_depth` so the
+   selection rules are verified without the quirk.
+3. **recipes rounds imputed statistics on integer columns.** `prep.step_impute_median`
+   / `_mean` pass the statistic through `cast()`, which is `as.integer(round(x))`
+   when the column is integer; `read.csv` makes `body_mass_g` integer and the new
+   penguins split had an even number of training rows with middle values 3975 and
+   4000, so R filled 3988 where the median is 3987.5. The earlier penguins tasks had
+   passed only because their medians were whole numbers. This framework has only
+   double columns, so the R runner now reads whole-number columns as doubles (the
+   pre-existing fixtures are unchanged apart from their timestamps) and the rounding
+   is recorded as a difference for integer columns in R.
+
+Not covered: recipe-parameter tuning, `tune_bayes` / racing, `save_pred`
+predictions across resamples, the `zero` metric direction, `last_fit()` on an
+`initial_validation_split`.
+
 ## Test inventory
 
 | suite | location | runs in CI | needs R |

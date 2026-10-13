@@ -43,6 +43,11 @@ read_dataset <- function(name, task) {
   for (nm in names(df)) {
     if (is.character(df[[nm]])) {
       df[[nm]] <- factor(df[[nm]], levels = sort(unique(stats::na.omit(df[[nm]]))))
+    } else if (is.integer(df[[nm]])) {
+      # the framework has only double columns; recipes casts imputed statistics to
+      # the column type (`cast()`: integer columns get round()ed means / medians),
+      # so whole-number columns are read as doubles on both sides (ADR-0014 finding)
+      df[[nm]] <- as.double(df[[nm]])
     }
   }
   # case weights get hardhat's classes; recipe() then assigns the `case_weights` role
@@ -368,6 +373,84 @@ run_task <- function(task) {
   summ <- collect_metrics(res)
   summary_list <- lapply(seq_len(nrow(summ)), function(i) list(metric = summ$.metric[i], mean = summ$mean[i], std_err = summ$std_err[i], n = summ$n[i]))
 
+  # ---- tuning (ADR-0014): tune_grid on the shared rset with an explicit grid, the
+  # selection rules, finalize_workflow + last_fit on the initial split, fit_best ----
+  tuning_info <- if (!is.null(task$tuning)) {
+    tg <- task$tuning
+    pnames <- names(tg$grid[[1]])
+    grid <- tibble::as_tibble(setNames(lapply(pnames, function(nm) sapply(tg$grid, function(g) as.numeric(g[[nm]]))), pnames))
+    for (nm in intersect(pnames, c("min_n", "tree_depth", "trees", "mtry"))) grid[[nm]] <- as.integer(grid[[nm]])
+    fixed <- if (is.null(task$model_args)) list() else task$model_args[setdiff(names(task$model_args), pnames)]
+    targs <- c(setNames(lapply(pnames, function(x) tune()), pnames), fixed)
+    model_t <- if (is_tree) do.call(decision_tree, targs) %>% set_engine("rpart") %>% set_mode(task$type) else
+               if (is_boost) do.call(boost_tree, targs) %>% set_engine("xgboost") %>% set_mode(task$type) else
+               stop("tuning tasks need a decision_tree or boost_tree model")
+    wf_t <- make_wf(model_t)
+    # a *named* metric set: show_best()/select_best() look the metric up by name
+    ms_t <- do.call(metric_set, metric_fns[unlist(task$metrics)])
+    tres <- tune_grid(wf_t, resamples = rset, grid = grid, metrics = ms_t, control = control_grid(save_workflow = TRUE))
+    cm <- collect_metrics(tres)
+    raw <- collect_metrics(tres, summarize = FALSE)
+    key <- dplyr::distinct(cm[, c(pnames, ".config")])
+    row_cfg <- dplyr::left_join(dplyr::mutate(grid, .row = dplyr::row_number()), key, by = pnames)
+    stopifnot(!anyNA(row_cfg$.config), nrow(row_cfg) == nrow(grid), !anyDuplicated(row_cfg$.config))
+    candidates <- lapply(seq_len(nrow(grid)), function(i) {
+      cfg <- row_cfg$.config[i]
+      sm <- cm[cm$.config == cfg, ]
+      pf <- raw[raw$.config == cfg, ]
+      list(config = cfg, params = as.list(grid[i, pnames]),
+           summary = lapply(split(sm, sm$.metric), function(d) list(mean = d$mean, n = d$n, std_err = d$std_err)),
+           per_fold = lapply(split(pf, pf$id), function(d) setNames(as.list(d$.estimate), d$.metric)))
+    })
+    # the same candidates evaluated one by one (fit_resamples on the finalized
+    # workflow): what tune_grid computes unless it predicts sub-models from a larger
+    # fit (boost_tree `trees`), where parsnip 1.5.0's xgb_by_tree() passes
+    # iterationrange = c(1, trees + 1) to xgboost >= 2.0, whose range is inclusive at
+    # both ends, i.e. one tree too many for every non-maximal `trees` candidate
+    is_sub <- if (is_boost && "trees" %in% pnames) {
+      others <- setdiff(pnames, "trees")
+      key <- if (length(others)) do.call(paste, c(grid[others], sep = "|")) else rep("", nrow(grid))
+      grid$trees < stats::ave(grid$trees, key, FUN = max)
+    } else rep(FALSE, nrow(grid))
+    direct <- lapply(seq_len(nrow(grid)), function(i) {
+      wf_i <- finalize_workflow(wf_t, grid[i, pnames])
+      r_i <- fit_resamples(wf_i, resamples = rset, metrics = ms_t)
+      pf <- collect_metrics(r_i, summarize = FALSE); sm <- collect_metrics(r_i)
+      list(summary = lapply(split(sm, sm$.metric), function(d) list(mean = d$mean, n = d$n, std_err = d$std_err)),
+           per_fold = lapply(split(pf, pf$id), function(d) setNames(as.list(d$.estimate), d$.metric)))
+    })
+    for (i in seq_along(candidates)) { candidates[[i]]$direct <- direct[[i]]; candidates[[i]]$submodel <- is_sub[i] }
+    cfg_index <- function(sel) match(sel$.config, row_cfg$.config) - 1L
+    sorts <- lapply(unlist(tg$sort), function(sv) {
+      m <- regmatches(sv, regexec("^desc[(](.*)[)]$", sv))[[1]]
+      if (length(m)) rlang::quo(dplyr::desc(!!rlang::sym(m[2]))) else rlang::quo(!!rlang::sym(sv))
+    })
+    limit <- if (is.null(tg$limit)) 2 else tg$limit
+    sb <- show_best(tres, metric = tg$metric, n = nrow(grid))
+    best <- select_best(tres, metric = tg$metric)
+    one_se <- select_by_one_std_err(tres, !!!sorts, metric = tg$metric)
+    pct <- select_by_pct_loss(tres, !!!sorts, metric = tg$metric, limit = limit)
+    final_wf <- finalize_workflow(wf_t, best)
+    rs_init <- make_splits(list(analysis = as.integer(split$initial$train) + 1L, assessment = as.integer(split$initial$test) + 1L), data = df)
+    lf <- last_fit(final_wf, split = rs_init, metrics = ms_t)
+    lf_m <- collect_metrics(lf)
+    lf_p <- collect_predictions(lf); lf_p <- lf_p[order(lf_p$.row), ]
+    prob_cols <- function(d) setdiff(grep("^[.]pred_", names(d), value = TRUE), ".pred_class")
+    pred_dump <- function(d) if (task$type == "regression") list(pred = as.numeric(d$.pred)) else
+      list(class = as.character(d$.pred_class), prob = unname(as.matrix(d[, prob_cols(d), drop = FALSE])))
+    model_dump <- function(f) if (is_tree) tree_frame(extract_fit_engine(f)) else boost_dump(extract_fit_engine(f))
+    fb <- fit_best(tres, metric = tg$metric)
+    fb_pred <- if (task$type == "regression") predict(fb, test) else cbind(predict(fb, test), predict(fb, test, type = "prob"))
+    list(grid = lapply(seq_len(nrow(grid)), function(i) as.list(grid[i, pnames])), configs = row_cfg$.config, candidates = candidates,
+         show_best = cfg_index(sb),
+         select_best = list(index = cfg_index(best), params = as.list(best[pnames])),
+         select_by_one_std_err = list(index = cfg_index(one_se), params = as.list(one_se[pnames])),
+         select_by_pct_loss = list(index = cfg_index(pct), params = as.list(pct[pnames])),
+         last_fit = list(metrics = setNames(as.list(lf_m$.estimate), lf_m$.metric), rows = as.integer(lf_p$.row) - 1L,
+                         predictions = pred_dump(lf_p), model = model_dump(lf$.workflow[[1]])),
+         fit_best = list(predictions = pred_dump(fb_pred), model = model_dump(fb)))
+  } else NULL
+
   out <- list(
     task = task,
     versions = versions,
@@ -380,7 +463,8 @@ run_task <- function(task) {
     test_metrics = test_metrics,
     test_metrics_weighted = test_metrics_weighted,
     resample = list(ids = names(per_fold_list), per_fold = per_fold_list, summary = summary_list, fold_trees = fold_trees, fold_boosts = fold_boosts,
-                    rsample_native = rsample_native)
+                    rsample_native = rsample_native),
+    tuning = tuning_info
   )
   write_json(out, file.path(out_dir, paste0(task$id, ".json")), auto_unbox = TRUE, digits = I(17), na = "null", null = "null", pretty = FALSE)
   cat("   wrote", file.path(out_dir, paste0(task$id, ".json")), "\n")

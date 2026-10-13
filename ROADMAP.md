@@ -89,7 +89,10 @@ repeated/grouped CV, time-series splits — **done** (rsample 1.3.2 generators a
 algorithms, rsplit semantics for `Split`/`Folds`, 17 reference tasks on shared rsets,
 exact memberships for the deterministic schemes and exact balance rules on R's
 permutations, ADR-0013; VERIFICATION.md Phase 8h); (g) `select_best` /
-`finalize_workflow` / `last_fit`; (h) Arrow/Polars/sparse inputs; (i) workflowsets.
+`finalize_workflow` / `last_fit` — **done** (tune 2.1.0 selection rules incl.
+`select_by_one_std_err` / `select_by_pct_loss`, `Workflow::finalize`, `last_fit` on
+tune's fold path, `fit_best`; four tuning tasks with shared explicit grids, ADR-0014;
+VERIFICATION.md Phase 8i); (h) Arrow/Polars/sparse inputs; (i) workflowsets.
 
 ## Phase 7 — Native algorithms (2026-10-12) — first two solvers complete, pending review
 

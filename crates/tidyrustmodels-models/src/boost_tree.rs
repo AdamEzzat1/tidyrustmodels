@@ -210,8 +210,10 @@ impl ModelSpec for BoostTreeSpec {
         self.fit_impl(x, y, Some(weights))
     }
 
+    /// In parsnip's argument order (`boost_tree(mtry, trees, min_n, tree_depth,
+    /// learn_rate, loss_reduction, ...)`), which tune uses to number its `.config`s.
     fn tunable(&self) -> &'static [&'static str] {
-        &["trees", "tree_depth", "learn_rate", "min_n", "loss_reduction"]
+        &["trees", "min_n", "tree_depth", "learn_rate", "loss_reduction"]
     }
 
     fn with_param(&self, name: &str, value: f64) -> Result<Box<dyn ModelSpec>> {

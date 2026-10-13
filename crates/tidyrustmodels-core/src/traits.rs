@@ -126,7 +126,9 @@ pub trait ModelSpec: Debug + Send + Sync {
         }
     }
 
-    /// Names of parameters that `with_param` accepts (used by tuning).
+    /// Names of parameters that `with_param` accepts (used by tuning), in parsnip's
+    /// argument order: tune numbers its `.config`s by sorting the grid on the
+    /// parameters in this order (ADR-0014).
     fn tunable(&self) -> &'static [&'static str] {
         &[]
     }

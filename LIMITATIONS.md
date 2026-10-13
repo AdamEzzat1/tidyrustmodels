@@ -34,6 +34,14 @@
   data (rpart counts observations for `minsplit`/`minbucket`). `step_nzv()` with
   frequency weights and a column with missing values runs here but errors in
   recipes 1.3.2.
+- Tuning: grid search only (`tune_grid` with regular, random or explicit grids);
+  no Bayesian or racing search, no recipe-parameter tuning, no saved per-resample
+  predictions. `select_by_one_std_err` with a single resample is an error where tune
+  returns an empty result. `tune_grid` fits every candidate itself: tune's sub-model
+  shortcut for `boost_tree(trees)` is not used, so a `trees` candidate is scored with
+  exactly that many trees (tune 2.1.0 + parsnip 1.5.0 score it with one more).
+- Columns are doubles only; recipes' rounding of imputed statistics on integer
+  columns is not reproduced.
 - Python: NumPy and pandas input. Arrow/Polars input deferred.
 - Unseen categorical levels at `bake` time are an error, not NA (stricter than recipes).
 - Rank deficiency: only identically-zero columns and (with an intercept) constant

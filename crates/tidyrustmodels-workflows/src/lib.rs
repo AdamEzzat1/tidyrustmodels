@@ -12,10 +12,23 @@ use tidyrustmodels_core::{
 use tidyrustmodels_metrics::{MetricSet, MetricValue};
 use tidyrustmodels_models::fitted_model_from_state;
 use tidyrustmodels_recipes::{FittedRecipe, Recipe};
-use tidyrustmodels_resample::Folds;
+use tidyrustmodels_resample::{Folds, Split};
 
 /// Serialization format version for fitted workflows.
 pub const WORKFLOW_FORMAT_VERSION: u32 = 1;
+
+/// What `tune::last_fit()` returns: the workflow fitted on the analysis rows, its
+/// predictions for the assessment rows (in the split's assessment order) and the
+/// metrics on them.
+#[derive(Debug)]
+pub struct LastFit {
+    /// The fitted workflow (`extract_workflow()`).
+    pub workflow: FittedWorkflow,
+    /// Predictions for the assessment rows (`collect_predictions()`).
+    pub predictions: Prediction,
+    /// Metrics on the assessment rows (`collect_metrics()`).
+    pub metrics: Vec<MetricValue>,
+}
 
 /// An unfitted workflow.
 #[derive(Clone, Debug)]
@@ -113,11 +126,32 @@ impl Workflow {
         Ok(FittedWorkflow { recipe, model })
     }
 
+    /// `tune::finalize_workflow()`: the same workflow with the tuning parameters
+    /// `params` (`(name, value)` pairs understood by `ModelSpec::with_param`) set on
+    /// the model specification; an unknown parameter is an error.
+    pub fn finalize(&self, params: &[(String, f64)]) -> Result<Workflow> {
+        let mut spec = self.model.clone_box();
+        for (name, value) in params {
+            spec = spec.with_param(name, *value)?;
+        }
+        Ok(Workflow {
+            recipe: self.recipe.clone(),
+            model: spec,
+            case_weights: self.case_weights.clone(),
+        })
+    }
+
     /// One resampling fold as tune 2.1.0 runs it: fit on `train` through
     /// `.fit_pre` / `.fit_model` (no sparse-data toggle), predict `test`, and evaluate
     /// `metrics`, weighted by the assessment rows' case weights when those are
     /// frequency weights (`.use_case_weights_with_yardstick()`).
     pub fn fit_fold(&self, train: &Table, test: &Table, metrics: &MetricSet) -> Result<Vec<MetricValue>> {
+        Ok(self.fit_fold_full(train, test, metrics)?.metrics)
+    }
+
+    /// [`Workflow::fit_fold`] keeping the fitted workflow and the assessment
+    /// predictions (what `tune::last_fit()` returns).
+    pub fn fit_fold_full(&self, train: &Table, test: &Table, metrics: &MetricSet) -> Result<LastFit> {
         if test.nrows() == 0 {
             // rsample warns when a bootstrap or grouped resample has no assessment rows
             // and tune cannot score it; refuse instead of returning empty metrics
@@ -129,12 +163,29 @@ impl Workflow {
         let (x_test, y_test) = fitted.recipe.bake_matrix(test)?;
         let y_test =
             y_test.ok_or_else(|| Error::SchemaMismatch("assessment rows lack the outcome".into()))?;
-        let pred = fitted.model.predict(&x_test)?;
+        let predictions = fitted.model.predict(&x_test)?;
         let w_test = match self.case_weights_of(test)? {
             Some(w) if w.used_by_metrics() => Some(w),
             _ => None,
         };
-        metrics.evaluate_weighted(&y_test, &pred, w_test.as_ref().map(|w| w.values()))
+        let metrics =
+            metrics.evaluate_weighted(&y_test, &predictions, w_test.as_ref().map(|w| w.values()))?;
+        Ok(LastFit {
+            workflow: fitted,
+            predictions,
+            metrics,
+        })
+    }
+
+    /// `tune::last_fit()`: fit on the analysis rows of `split` exactly as a resample
+    /// is fitted (tune's `.fit_pre` / `.fit_model` path: no sparse-data toggle;
+    /// frequency case weights reach the metrics), then predict and score the
+    /// assessment rows. The fitted workflow is kept (`collect_predictions()` /
+    /// `extract_workflow()` in tune).
+    pub fn last_fit(&self, data: &Table, split: &Split, metrics: &MetricSet) -> Result<LastFit> {
+        let train = data.select_rows(&split.train)?;
+        let test = data.select_rows(&split.test)?;
+        self.fit_fold_full(&train, &test, metrics)
     }
 
     /// Fit on each fold's analysis rows (prep included), predict the assessment rows,

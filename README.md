@@ -50,6 +50,8 @@ let folds = vfold_cv(data.nrows(), 5, None, Seed(7))?;
 // or bootstraps(n, 25, None, seed), group_vfold_cv(&groups, Some(4), 1, GroupBalance::Groups, seed),
 // rolling_origin(n, 60, 12, true, 11, 0) ... (rsample 1.3.2 semantics, ADR-0013)
 let cv = wf.fit_resamples(&data, &folds, &MetricSet::classification_defaults(), Parallelism::threads(4))?;
+// tuning: tune_grid(..) then .select_best(m) / .select_by_one_std_err(m, &[SortKey::desc("penalty")]),
+// wf.finalize(&sel.params).last_fit(&data, &split, &metrics), fit_best(..) (ADR-0014)
 ```
 
 See `crates/tidyrustmodels/examples/penguins_workflow.rs` for the full example

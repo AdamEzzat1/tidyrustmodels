@@ -157,11 +157,23 @@ pub fn grid_regular(ranges: &[(name, lo, hi)], levels: usize) -> Grid;
 pub fn grid_random(ranges, size, seed) -> Grid;
 pub fn tune_grid(workflow: &Workflow, data: &Table, folds: &Folds, grid: &Grid,
                  metrics: &MetricSet, par: Parallelism) -> Result<TuneResults>;
-impl TuneResults { pub fn show_best(&self, metric: &str, maximize: bool, n: usize) -> Vec<(ParamSet, f64, f64)>; }
+// tune 2.1.0 selection rules (ADR-0014); `index` is the grid position (tune's .config)
+pub struct BestRow { pub index: usize, pub params: ParamSet, pub mean: Option<f64>, pub std_err: Option<f64>, pub n: usize }
+pub struct Selection { pub index: usize, pub params: ParamSet }
+pub struct SortKey { pub param: String, pub descending: bool }   // SortKey::asc / desc / parse("desc(param)")
+impl TuneResults {
+    pub fn show_best(&self, metric: Metric, n: usize) -> Vec<BestRow>;          // stable sort, undefined means last
+    pub fn select_best(&self, metric: Metric) -> Result<Selection>;
+    pub fn select_by_one_std_err(&self, metric: Metric, sort: &[SortKey]) -> Result<Selection>;
+    pub fn select_by_pct_loss(&self, metric: Metric, sort: &[SortKey], limit: f64) -> Result<Selection>;
+}
+pub fn fit_best(results: &TuneResults, workflow: &Workflow, data: &Table, metric: Metric) -> Result<FittedWorkflow>;
+// workflows: Workflow::finalize(&params) (finalize_workflow), Workflow::last_fit(data, &Split, metrics) -> LastFit
 ```
 
-The tunable parameters in v0.1 are `penalty` for `LogisticRegSpec` (so tuning is
-exercised end-to-end) and `intercept` (boolean, encoded 0/1).
+Tunable parameters: `penalty` (`LogisticRegSpec`, `MultinomRegSpec`), `cost_complexity` /
+`tree_depth` / `min_n` (`DecisionTreeSpec`), `mtry` / `trees` / `min_n` (`RandForestSpec`),
+`trees` / `tree_depth` / `learn_rate` / `min_n` / `loss_reduction` (`BoostTreeSpec`).
 
 ## Python (`tidyrustmodels`)
 

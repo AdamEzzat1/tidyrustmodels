@@ -742,6 +742,39 @@ impl PyWorkflow {
         Ok(PyFittedWorkflow { inner: self.inner.fit(&data.inner).py()? })
     }
 
+    /// `tune::finalize_workflow()`: the workflow with the tuning parameters `params`
+    /// (`{name: value}`) set on the model.
+    fn finalize(&self, params: &Bound<'_, PyDict>) -> PyResult<PyWorkflow> {
+        let ps = param_set(params)?;
+        Ok(PyWorkflow { inner: self.inner.finalize(&ps).py()? })
+    }
+
+    /// `tune::last_fit()`: fit on `train_rows` exactly as a resample is fitted (no
+    /// sparse-data toggle; frequency case weights reach the metrics), predict and score
+    /// `test_rows`. Returns `{"workflow": FittedWorkflow, "metrics": {name: value},
+    /// "predictions": array (regression) | {"class": [...], "prob": array}}`.
+    fn last_fit<'py>(
+        &self,
+        py: Python<'py>,
+        data: &PyTable,
+        train_rows: Vec<usize>,
+        test_rows: Vec<usize>,
+        metrics: Vec<String>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let set = MetricSet::from_names(&metrics).py()?;
+        let split = Split::new(train_rows, test_rows, data.inner.nrows()).py()?;
+        let lf = self.inner.last_fit(&data.inner, &split, &set).py()?;
+        let d = PyDict::new(py);
+        d.set_item("workflow", PyFittedWorkflow { inner: lf.workflow }.into_pyobject(py)?)?;
+        let m = PyDict::new(py);
+        for v in &lf.metrics {
+            m.set_item(&v.name, v.value)?;
+        }
+        d.set_item("metrics", m)?;
+        d.set_item("predictions", prediction_to_py(py, &lf.predictions)?)?;
+        Ok(d)
+    }
+
     /// Fit on each fold (prep inside the fold) and evaluate `metrics` (yardstick names).
     /// Returns `{"per_fold": [{"id", metrics...}], "summary": [{"metric","mean","std_err","n"}]}`.
     #[pyo3(signature = (data, folds, metrics, threads = None))]
@@ -904,17 +937,140 @@ impl PyFittedWorkflow {
 // ---------------------------------------------------------------- Tuning
 
 /// Evaluate a grid of `{param: value}` dicts with `fit_resamples` per candidate.
+fn param_set(params: &Bound<'_, PyDict>) -> PyResult<Vec<(String, f64)>> {
+    params.iter().map(|(k, v)| Ok((k.extract::<String>()?, v.extract::<f64>()?))).collect()
+}
+
+fn param_set_to_py<'py>(py: Python<'py>, params: &[(String, f64)]) -> PyResult<Bound<'py, PyDict>> {
+    let p = PyDict::new(py);
+    for (k, v) in params {
+        p.set_item(k, v)?;
+    }
+    Ok(p)
+}
+
+fn prediction_to_py<'py>(py: Python<'py>, pred: &Prediction) -> PyResult<Bound<'py, PyAny>> {
+    Ok(match pred {
+        Prediction::Numeric(v) => v.clone().into_pyarray(py).into_any(),
+        Prediction::Class {
+            codes,
+            levels,
+            probabilities,
+        } => {
+            let d = PyDict::new(py);
+            d.set_item("class", codes.iter().map(|c| levels[*c as usize].clone()).collect::<Vec<_>>())?;
+            match probabilities {
+                Some(p) => {
+                    let (n, k) = (p.nrows(), p.ncols());
+                    d.set_item("prob", PyArray1::from_vec(py, p.to_row_major()).reshape([n, k])?)?;
+                }
+                None => d.set_item("prob", py.None())?,
+            }
+            d.into_any()
+        }
+    })
+}
+
+fn sort_keys(sort: &[String]) -> PyResult<Vec<SortKey>> {
+    sort.iter().map(|k| SortKey::parse(k).py()).collect()
+}
+
+fn selection_to_py<'py>(py: Python<'py>, sel: &Selection) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    d.set_item("index", sel.index)?;
+    d.set_item("config", sel.config)?;
+    d.set_item("params", param_set_to_py(py, &sel.params)?)?;
+    Ok(d)
+}
+
+/// Results of `tune_grid`: one entry per grid candidate (`len()`, indexing gives
+/// `{"params", "results"}`), plus tune's selection rules.
+#[pyclass(name = "TuneResults", module = "tidyrustmodels._native")]
+struct PyTuneResults {
+    inner: TuneResults,
+}
+
+#[pymethods]
+impl PyTuneResults {
+    fn __len__(&self) -> usize {
+        self.inner.candidates.len()
+    }
+
+    /// tune's `.config` number of every candidate (grid sorted on the parameters in
+    /// parsnip's argument order; identical candidates share a number).
+    fn configs(&self) -> Vec<usize> {
+        self.inner.configs()
+    }
+
+    fn __getitem__<'py>(&self, py: Python<'py>, i: usize) -> PyResult<Bound<'py, PyDict>> {
+        let (params, r) = self
+            .inner
+            .candidates
+            .get(i)
+            .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("candidate index out of range"))?;
+        let d = PyDict::new(py);
+        d.set_item("params", param_set_to_py(py, params)?)?;
+        d.set_item("results", resample_results_to_py(py, r)?)?;
+        Ok(d)
+    }
+
+    /// `tune::show_best()`: the top `n` candidates for `metric` as
+    /// `{"index", "params", "mean", "std_err", "n"}`, best first (ties in grid order).
+    #[pyo3(signature = (metric, n = 5))]
+    fn show_best<'py>(&self, py: Python<'py>, metric: &str, n: usize) -> PyResult<Bound<'py, PyList>> {
+        let m = Metric::from_name(metric).py()?;
+        let out = PyList::empty(py);
+        for b in self.inner.show_best(m, n) {
+            let d = PyDict::new(py);
+            d.set_item("index", b.index)?;
+            d.set_item("config", b.config)?;
+            d.set_item("params", param_set_to_py(py, &b.params)?)?;
+            d.set_item("mean", b.mean)?;
+            d.set_item("std_err", b.std_err)?;
+            d.set_item("n", b.n)?;
+            out.append(d)?;
+        }
+        Ok(out)
+    }
+
+    /// `tune::select_best()`: `{"index", "params"}` of the best candidate.
+    fn select_best<'py>(&self, py: Python<'py>, metric: &str) -> PyResult<Bound<'py, PyDict>> {
+        let m = Metric::from_name(metric).py()?;
+        selection_to_py(py, &self.inner.select_best(m).py()?)
+    }
+
+    /// `tune::select_by_one_std_err(x, ..., metric)`: `sort` lists the `...`
+    /// (`"param"` or `"desc(param)"`, simplest model first).
+    fn select_by_one_std_err<'py>(&self, py: Python<'py>, metric: &str, sort: Vec<String>) -> PyResult<Bound<'py, PyDict>> {
+        let m = Metric::from_name(metric).py()?;
+        selection_to_py(py, &self.inner.select_by_one_std_err(m, &sort_keys(&sort)?).py()?)
+    }
+
+    /// `tune::select_by_pct_loss(x, ..., metric, limit)`.
+    #[pyo3(signature = (metric, sort, limit = 2.0))]
+    fn select_by_pct_loss<'py>(&self, py: Python<'py>, metric: &str, sort: Vec<String>, limit: f64) -> PyResult<Bound<'py, PyDict>> {
+        let m = Metric::from_name(metric).py()?;
+        selection_to_py(py, &self.inner.select_by_pct_loss(m, &sort_keys(&sort)?, limit).py()?)
+    }
+
+    /// `tune::fit_best()`: the best candidate for `metric` refitted on all of `data`
+    /// with `Workflow.fit` (sparse-data decision applied, as parsnip's `fit()`).
+    fn fit_best(&self, workflow: &PyWorkflow, data: &PyTable, metric: &str) -> PyResult<PyFittedWorkflow> {
+        let m = Metric::from_name(metric).py()?;
+        Ok(PyFittedWorkflow { inner: fit_best(&self.inner, &workflow.inner, &data.inner, m).py()? })
+    }
+}
+
 #[pyfunction]
 #[pyo3(signature = (workflow, data, folds, grid, metrics, threads = None))]
 fn py_tune_grid<'py>(
-    py: Python<'py>,
     workflow: &PyWorkflow,
     data: &PyTable,
     folds: &PyFolds,
     grid: Vec<Bound<'py, PyDict>>,
     metrics: Vec<String>,
     threads: Option<usize>,
-) -> PyResult<Bound<'py, PyList>> {
+) -> PyResult<PyTuneResults> {
     let points = grid
         .iter()
         .map(|d| {
@@ -928,18 +1084,7 @@ fn py_tune_grid<'py>(
         None => Parallelism::SERIAL,
     };
     let res = tune_grid(&workflow.inner, &data.inner, &folds.inner, &g, &set, par).py()?;
-    let out = PyList::empty(py);
-    for (params, r) in &res.candidates {
-        let d = PyDict::new(py);
-        let p = PyDict::new(py);
-        for (k, v) in params {
-            p.set_item(k, v)?;
-        }
-        d.set_item("params", p)?;
-        d.set_item("results", resample_results_to_py(py, r)?)?;
-        out.append(d)?;
-    }
-    Ok(out)
+    Ok(PyTuneResults { inner: res })
 }
 
 /// yardstick metrics on class labels and, for probability metrics, a probability matrix
@@ -1064,6 +1209,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRandForest>()?;
     m.add_class::<PyBoostTree>()?;
     m.add_class::<PyFolds>()?;
+    m.add_class::<PyTuneResults>()?;
     m.add_class::<PyWorkflow>()?;
     m.add_class::<PyFittedWorkflow>()?;
     m.add_function(wrap_pyfunction!(py_vfold_cv, m)?)?;

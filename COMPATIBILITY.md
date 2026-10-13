@@ -50,7 +50,15 @@ yardstick 1.4.0, tune 2.1.0.
 | `rsample::make_splits()` + `manual_rset()` | `Split::new`, `Folds::from_splits` | analysis order kept, repeats allowed, assessment sorted, may be empty | tested (L4, every task) |
 | `fit_resamples()` | `Workflow::fit_resamples` | prep inside each resample; empty assessment set is an error (rsample warns, tune fails) | tested (L4, 53 tasks) |
 | `collect_metrics()` | `ResampleResults::summary` | mean, `sd/sqrt(n)`, n over defined resamples (repeats pooled) | tested (L4) |
-| `tune_grid()` + `grid_regular()`/`grid_random()` | `tune_grid`, `grid_regular`, `grid_random` | same search semantics; different random points | intended |
+| `tune_grid()` + `grid_regular()`/`grid_random()` | `tune_grid`, `grid_regular`, `grid_random` | same search semantics; different random points | tested with explicit shared grids (L4, 4 tasks, Phase 8i); dials grids intended |
+| `show_best()`, `select_best()` | `TuneResults::show_best` (`BestRow`), `select_best` (`Selection` with grid `index` and tune's `config` number) | candidates in `.config` order (grid sorted on the parameters in parsnip's argument order, `make_config_labs()`), stable sort by mean, `NA` last; first row | tested (exact config numbers, order and index, 5 tasks) |
+| `tune_grid()` sub-models (`boost_tree(trees)`) | every candidate fitted on its own | tune predicts smaller `trees` from the largest fit; parsnip 1.5.0 `xgb_by_tree()` + xgboost ≥ 2.0 inclusive `iterationrange` scores `trees + 1` trees | **difference** (R quirk; measured on `synth_reg_xgb_trees`: tune's value = this crate's `trees + 1`, Phase 8i) |
+| `step_impute_mean()` / `step_impute_median()` on an **integer** column | statistic kept as a double | recipes `cast()`s the statistic to the column type: `as.integer(round(x))` | **difference** (this framework has no integer columns; fixtures use double columns) |
+| `select_by_one_std_err(x, ..., metric)` | `select_by_one_std_err(metric, &[SortKey])` | first best, `best ∓ std_err`, arranged by the sort keys, first kept; one resample is an error (tune returns no rows) | tested (exact) |
+| `select_by_pct_loss(x, ..., metric, limit)` | `select_by_pct_loss(metric, &[SortKey], limit)` | `|(|mean| - |best|) / best| * 100`, first candidate at or before the best in sort order with loss < limit | tested (exact) |
+| `finalize_workflow(x, parameters)` | `Workflow::finalize(&params)` | model parameters only (`ModelSpec::with_param`); no recipe tuning | tested through `last_fit` |
+| `last_fit(workflow, split, metrics)` | `Workflow::last_fit(data, &Split, metrics)` → `LastFit { workflow, predictions, metrics }` | tune's resample fit path: no sparse-data toggle, frequency weights in the metrics | tested (metrics, predictions, trees/boosters exact) |
+| `fit_best(x, metric)` | `fit_best(results, workflow, data, metric)` | `finalize_workflow(select_best())` + `fit()` on every row (toggle applies) | tested (predictions, trees/boosters) |
 | `rmse`, `mae` | `rmse`, `mae` | identical formulas | tested (L2) |
 | `rsq` | `rsq` | **squared Pearson correlation** | tested (L2) |
 | `rsq_trad` | `rsq_trad` | 1 - SSE/SST | tested (L2) |
@@ -94,7 +102,7 @@ yardstick 1.4.0, tune 2.1.0.
 
 ## Unsupported in v0.1
 
-workflowsets, `sliding_period`, `nested_cv`, `permutations`, `apparent`, case weights for
+workflowsets, `tune_bayes`, `tune_race_*`, recipe-parameter tuning, `collect_predictions()` across resamples (`save_pred`), `sliding_period`, `nested_cv`, `permutations`, `apparent`, case weights for
 `multinom_reg` and for the linfa/smartcore engines, `step_filter_missing`,
 glmnet-equivalent penalization, `tailor` post-processing,
 `step_zv(group =)`, `step_corr(method = "spearman"/"kendall")`,

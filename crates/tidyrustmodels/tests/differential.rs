@@ -300,6 +300,63 @@ fn full_table(task: &Value) -> Table {
     .unwrap()
 }
 
+/// Compare a prediction with R's `{pred}` / `{class, prob}` dump: numeric predictions
+/// under the model's prediction bound, probabilities under its absolute bound, classes
+/// exactly.
+fn compare_prediction(
+    report: &mut Report,
+    tol: &Tolerances,
+    id: &str,
+    eng: &str,
+    label: &str,
+    ours: &Prediction,
+    fx: &Value,
+    is_boost: bool,
+) {
+    match ours {
+        Prediction::Numeric(p) => report.compare(
+            id,
+            eng,
+            "L4",
+            &format!("{label} predictions"),
+            p,
+            &f64s(&fx["pred"]),
+            tol.pair_eng(id, if is_boost { "xgb_pred" } else { "tree_pred" }, eng),
+        ),
+        Prediction::Class {
+            codes,
+            levels,
+            probabilities,
+        } => {
+            let r_rows: Vec<Vec<f64>> = items(&fx["prob"]).into_iter().map(f64s).collect();
+            let flat_r: Vec<f64> = r_rows.iter().flatten().copied().collect();
+            report.compare(
+                id,
+                eng,
+                "L4",
+                &format!("{label} probabilities"),
+                &probabilities.as_ref().unwrap().to_row_major(),
+                &flat_r,
+                (
+                    0.0,
+                    tol.get_eng(id, if is_boost { "xgb_prob_abs" } else { "tree_prob_abs" }, eng),
+                ),
+            );
+            report.exact(
+                id,
+                eng,
+                "L4",
+                &format!("{label} classes"),
+                &codes
+                    .iter()
+                    .map(|c| levels[*c as usize].clone())
+                    .collect::<Vec<_>>(),
+                &strs(&fx["class"]),
+            );
+        }
+    }
+}
+
 /// Level 4, resampling schemes (ADR-0013): run the Rust generator for the task's
 /// scheme and compare its ids with the ids rsample's own function produced in R (and
 /// with the shared file); for the deterministic time-series schemes compare the
@@ -1518,6 +1575,294 @@ fn differential_against_r_fixtures() {
                     &(s.n as u64),
                     &theirs["n"].as_u64().unwrap(),
                 );
+            }
+
+            // ---- tuning (ADR-0014): tune_grid on the shared rset with the task's
+            // explicit grid, tune's selection rules, finalize + last_fit on the
+            // initial split, fit_best on all rows ----
+            if let Some(tg) = task.get("tuning") {
+                let fxt = &fx["tuning"];
+                assert!(!fxt.is_null(), "{id}: fixture lacks tuning");
+                let grid = Grid {
+                    points: items(&tg["grid"])
+                        .iter()
+                        .map(|g| {
+                            g.as_object()
+                                .unwrap()
+                                .iter()
+                                .map(|(k, v)| (k.clone(), v.as_f64().unwrap()))
+                                .collect()
+                        })
+                        .collect(),
+                };
+                let tres = tune_grid(&wf, &data, &folds, &grid, &metrics, Parallelism::threads(4)).unwrap();
+                let r_cands = items(&fxt["candidates"]);
+                assert_eq!(r_cands.len(), grid.points.len(), "{id}: candidate count");
+                // tune's .config numbering (grid sorted on the parameters in parsnip order)
+                let r_configs: Vec<usize> = strs(&fxt["configs"])
+                    .iter()
+                    .map(|c| {
+                        let mid = c.split("_mod").nth(1).unwrap().split('_').next().unwrap();
+                        mid.parse::<usize>().unwrap()
+                    })
+                    .collect();
+                report.exact(
+                    id,
+                    eng,
+                    "L4",
+                    "tuning .config numbers",
+                    &tres.configs(),
+                    &r_configs,
+                );
+                // one candidate's resampling results against an R dump {per_fold, summary}
+                let compare_candidate = |report: &mut Report,
+                                         label: &str,
+                                         rr: &ResampleResults,
+                                         rc: &Value| {
+                    for fold in &rr.per_fold {
+                        for m in &fold.metrics {
+                            let theirs = rc["per_fold"][&fold.id][&m.name].as_f64();
+                            match (m.value, theirs) {
+                                (Some(a), Some(b)) => report.compare(
+                                    id,
+                                    eng,
+                                    "L4",
+                                    &format!("{label} {} {}", fold.id, m.name),
+                                    &[a],
+                                    &[b],
+                                    tol.pair_eng(id, "resample_metric", eng),
+                                ),
+                                (a, b) => report.exact(
+                                    id,
+                                    eng,
+                                    "L4",
+                                    &format!("{label} {} {} (NA)", fold.id, m.name),
+                                    &a,
+                                    &b,
+                                ),
+                            }
+                        }
+                    }
+                    for sm in &rr.summary {
+                        let theirs = &rc["summary"][&sm.name];
+                        match (sm.mean, theirs["mean"].as_f64()) {
+                            (Some(a), Some(b)) => report.compare(
+                                id,
+                                eng,
+                                "L4",
+                                &format!("{label} mean {}", sm.name),
+                                &[a],
+                                &[b],
+                                tol.pair_eng(id, "summary", eng),
+                            ),
+                            (a, b) => {
+                                report.exact(id, eng, "L4", &format!("{label} mean {} (NA)", sm.name), &a, &b)
+                            }
+                        }
+                        match (sm.std_err, theirs["std_err"].as_f64()) {
+                            (Some(a), Some(b)) => report.compare(
+                                id,
+                                eng,
+                                "L4",
+                                &format!("{label} std_err {}", sm.name),
+                                &[a],
+                                &[b],
+                                tol.pair_eng(id, "summary", eng),
+                            ),
+                            (a, b) => report.exact(
+                                id,
+                                eng,
+                                "L4",
+                                &format!("{label} std_err {} (NA)", sm.name),
+                                &a,
+                                &b,
+                            ),
+                        }
+                        report.exact(
+                            id,
+                            eng,
+                            "L4",
+                            &format!("{label} n {}", sm.name),
+                            &(sm.n as u64),
+                            &theirs["n"].as_u64().unwrap(),
+                        );
+                    }
+                };
+                let mut shifted: Vec<(usize, Vec<(String, f64)>)> = Vec::new();
+                for (i, (params, rr)) in tres.candidates.iter().enumerate() {
+                    let rc = r_cands[i];
+                    for (name, v) in params {
+                        report.exact(
+                            id,
+                            eng,
+                            "L4",
+                            &format!("tuning cand {i} {name}"),
+                            v,
+                            &rc["params"][name].as_f64().unwrap(),
+                        );
+                    }
+                    // every candidate fitted on its own (fit_resamples on the finalized
+                    // workflow) is what this crate computes ...
+                    compare_candidate(&mut report, &format!("tuning cand {i} direct"), rr, &rc["direct"]);
+                    if rc["submodel"].as_bool().unwrap_or(false) {
+                        // ... and tune_grid's own number for a `trees` sub-model is the
+                        // booster with one more tree (parsnip 1.5.0 xgb_by_tree off-by-one)
+                        let mut p = params.clone();
+                        for (n, v) in p.iter_mut() {
+                            if n == "trees" {
+                                *v += 1.0;
+                            }
+                        }
+                        shifted.push((i, p));
+                    } else {
+                        compare_candidate(&mut report, &format!("tuning cand {i} tune_grid"), rr, rc);
+                    }
+                }
+                if !shifted.is_empty() {
+                    let g = Grid {
+                        points: shifted.iter().map(|(_, p)| p.clone()).collect(),
+                    };
+                    let plus_one =
+                        tune_grid(&wf, &data, &folds, &g, &metrics, Parallelism::threads(4)).unwrap();
+                    for ((i, _), (_, rr)) in shifted.iter().zip(&plus_one.candidates) {
+                        compare_candidate(
+                            &mut report,
+                            &format!("tuning cand {i} tune_grid (sub-model = trees + 1)"),
+                            rr,
+                            r_cands[*i],
+                        );
+                    }
+                }
+                let metric = Metric::from_name(tg["metric"].as_str().unwrap()).unwrap();
+                let sort: Vec<SortKey> = strs(&tg["sort"])
+                    .iter()
+                    .map(|k| SortKey::parse(k).unwrap())
+                    .collect();
+                let limit = tg["limit"].as_f64().unwrap_or(2.0);
+                let order: Vec<u64> = tres
+                    .show_best(metric, grid.points.len())
+                    .iter()
+                    .map(|b| b.index as u64)
+                    .collect();
+                let r_order: Vec<u64> = items(&fxt["show_best"])
+                    .iter()
+                    .map(|v| v.as_u64().unwrap())
+                    .collect();
+                report.exact(id, eng, "L4", "show_best order", &order, &r_order);
+                let sel = tres.select_best(metric).unwrap();
+                report.exact(
+                    id,
+                    eng,
+                    "L4",
+                    "select_best",
+                    &(sel.index as u64),
+                    &fxt["select_best"]["index"].as_u64().unwrap(),
+                );
+                let one = tres.select_by_one_std_err(metric, &sort).unwrap();
+                report.exact(
+                    id,
+                    eng,
+                    "L4",
+                    "select_by_one_std_err",
+                    &(one.index as u64),
+                    &fxt["select_by_one_std_err"]["index"].as_u64().unwrap(),
+                );
+                let pct = tres.select_by_pct_loss(metric, &sort, limit).unwrap();
+                report.exact(
+                    id,
+                    eng,
+                    "L4",
+                    "select_by_pct_loss",
+                    &(pct.index as u64),
+                    &fxt["select_by_pct_loss"]["index"].as_u64().unwrap(),
+                );
+                // finalize_workflow(select_best) + last_fit on the shared initial split
+                let init = Split::from_ids(train_ids.clone(), test_ids.clone(), data.nrows()).unwrap();
+                let final_wf = wf.finalize(&sel.params).unwrap();
+                let lf = final_wf.last_fit(&data, &init, &metrics).unwrap();
+                let fxl = &fxt["last_fit"];
+                report.exact(
+                    id,
+                    eng,
+                    "L4",
+                    "last_fit assessment rows",
+                    &init.test,
+                    &usizes(&fxl["rows"]),
+                );
+                for m in &lf.metrics {
+                    let theirs = fxl["metrics"][&m.name].as_f64();
+                    match (m.value, theirs) {
+                        (Some(a), Some(b)) => report.compare(
+                            id,
+                            eng,
+                            "L4",
+                            &format!("last_fit {}", m.name),
+                            &[a],
+                            &[b],
+                            tol.pair_eng(id, "resample_metric", eng),
+                        ),
+                        (a, b) => report.exact(id, eng, "L4", &format!("last_fit {} (NA)", m.name), &a, &b),
+                    }
+                }
+                compare_prediction(
+                    &mut report,
+                    &tol,
+                    id,
+                    eng,
+                    "last_fit",
+                    &lf.predictions,
+                    &fxl["predictions"],
+                    is_boost,
+                );
+                if is_boost {
+                    compare_booster(
+                        &mut report,
+                        &tol,
+                        id,
+                        eng,
+                        "last_fit ",
+                        lf.workflow.model(),
+                        &fxl["model"],
+                        None,
+                    );
+                } else {
+                    compare_tree_structure(
+                        &mut report,
+                        &tol,
+                        id,
+                        eng,
+                        "last_fit",
+                        lf.workflow.model(),
+                        &fxl["model"],
+                    );
+                }
+                // fit_best: the best candidate refitted on every row through fit()
+                let fb = fit_best(&tres, &wf, &data, metric).unwrap();
+                let fxb = &fxt["fit_best"];
+                compare_prediction(
+                    &mut report,
+                    &tol,
+                    id,
+                    eng,
+                    "fit_best",
+                    &fb.predict(&test).unwrap(),
+                    &fxb["predictions"],
+                    is_boost,
+                );
+                if is_boost {
+                    compare_booster(
+                        &mut report,
+                        &tol,
+                        id,
+                        eng,
+                        "fit_best ",
+                        fb.model(),
+                        &fxb["model"],
+                        None,
+                    );
+                } else {
+                    compare_tree_structure(&mut report, &tol, id, eng, "fit_best", fb.model(), &fxb["model"]);
+                }
             }
         }
         let _ = outcome;

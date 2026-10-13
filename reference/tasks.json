@@ -1,6 +1,6 @@
 {
  "schema_version": 1,
- "notes": "Single source of truth for the differential suite. R (reference/tidymodels-r/run_reference.R), Python (reference/fixtures/generate_splits.py) and Rust (crates/tidyrustmodels/tests/differential.rs) all read this file. Step vocabulary: impute_median_numeric, impute_mean_numeric, normalize_numeric, dummy_nominal, zv, nzv, corr_numeric (threshold 0.9), other_nominal (threshold 0.05), novel_nominal, unknown_nominal (recipes defaults). Splits: initial = 75/25 (stratified by outcome for classification), vfold5 = 5-fold (stratified by outcome for classification). Classification tasks whose outcome has more than two levels are fitted with multinom_reg (R: nnet with maxit = 10000, reltol = 1e-15; Rust: MultinomRegSpec) and use yardstick's multiclass estimator defaults. A task's optional `model` (`decision_tree`; default: linear_reg / logistic_reg / multinom_reg by outcome) and `model_args` (parsnip argument names) select the estimator in all three systems. Tree tasks keep predictors on their raw scale: trees are invariant to monotone transforms, and normalising would make exact ties at split points depend on the last bit of the baked values, which differs between R and Rust. `rand_forest` tasks are stochastic: R fits ranger with seeds 1..10 and records per-seed test metrics and predictions; Rust does the same with its own streams and the suite compares the seed means statistically (level 5), not individual forests. A task's optional `case_weights` {column, kind} names a numeric column of the dataset used as `workflows::add_case_weights()` with `hardhat::frequency_weights()` (kind `frequency`, whole numbers, zeros allowed) or `hardhat::importance_weights()` (kind `importance`); the column is never a predictor. R fixtures then carry the weighted fit, and for frequency weights the resampling metrics are weighted (tune passes frequency weights to yardstick) and `test_metrics_weighted` holds the test metrics with `case_weights =`. `multinom_reg` (nnet) takes no case weights, so no weighted multinom task exists. A task's optional `resampling` {scheme, ...} replaces the default 5-fold set for level 4 (ADR-0013): `vfold_cv` {v, repeats}, `bootstraps` {times}, `mc_cv` {prop, times} (all stratified by the outcome for classification), `group_vfold_cv` {group, v, repeats, balance}, `group_bootstraps` {group, times}, `group_mc_cv` {group, prop, times} (the group column is never a predictor), and the deterministic `rolling_origin` {initial, assess, cumulative, skip, lag}, `sliding_window` {lookback, assess_start, assess_stop, complete, step, skip} and `sliding_index` {index, lookback, ...} (the index column is never a predictor; time-series tasks use `initial_time_split` for the 75/25 split). The shared split file carries the resample memberships under `rset` (ids follow rsample's `names0`: Fold1, Bootstrap01, Resample1, Repeat1.Fold1, Slice1); R builds the rset with `make_splits()` + `manual_rset()` and additionally records the ids (and, for the deterministic schemes, the memberships) that rsample's own function produces, which Rust's generators must reproduce exactly.",
+ "notes": "Single source of truth for the differential suite. R (reference/tidymodels-r/run_reference.R), Python (reference/fixtures/generate_splits.py) and Rust (crates/tidyrustmodels/tests/differential.rs) all read this file. Step vocabulary: impute_median_numeric, impute_mean_numeric, normalize_numeric, dummy_nominal, zv, nzv, corr_numeric (threshold 0.9), other_nominal (threshold 0.05), novel_nominal, unknown_nominal (recipes defaults). Splits: initial = 75/25 (stratified by outcome for classification), vfold5 = 5-fold (stratified by outcome for classification). Classification tasks whose outcome has more than two levels are fitted with multinom_reg (R: nnet with maxit = 10000, reltol = 1e-15; Rust: MultinomRegSpec) and use yardstick's multiclass estimator defaults. A task's optional `model` (`decision_tree`; default: linear_reg / logistic_reg / multinom_reg by outcome) and `model_args` (parsnip argument names) select the estimator in all three systems. Tree tasks keep predictors on their raw scale: trees are invariant to monotone transforms, and normalising would make exact ties at split points depend on the last bit of the baked values, which differs between R and Rust. `rand_forest` tasks are stochastic: R fits ranger with seeds 1..10 and records per-seed test metrics and predictions; Rust does the same with its own streams and the suite compares the seed means statistically (level 5), not individual forests. A task's optional `case_weights` {column, kind} names a numeric column of the dataset used as `workflows::add_case_weights()` with `hardhat::frequency_weights()` (kind `frequency`, whole numbers, zeros allowed) or `hardhat::importance_weights()` (kind `importance`); the column is never a predictor. R fixtures then carry the weighted fit, and for frequency weights the resampling metrics are weighted (tune passes frequency weights to yardstick) and `test_metrics_weighted` holds the test metrics with `case_weights =`. `multinom_reg` (nnet) takes no case weights, so no weighted multinom task exists. A task's optional `resampling` {scheme, ...} replaces the default 5-fold set for level 4 (ADR-0013): `vfold_cv` {v, repeats}, `bootstraps` {times}, `mc_cv` {prop, times} (all stratified by the outcome for classification), `group_vfold_cv` {group, v, repeats, balance}, `group_bootstraps` {group, times}, `group_mc_cv` {group, prop, times} (the group column is never a predictor), and the deterministic `rolling_origin` {initial, assess, cumulative, skip, lag}, `sliding_window` {lookback, assess_start, assess_stop, complete, step, skip} and `sliding_index` {index, lookback, ...} (the index column is never a predictor; time-series tasks use `initial_time_split` for the 75/25 split). The shared split file carries the resample memberships under `rset` (ids follow rsample's `names0`: Fold1, Bootstrap01, Resample1, Repeat1.Fold1, Slice1); R builds the rset with `make_splits()` + `manual_rset()` and additionally records the ids (and, for the deterministic schemes, the memberships) that rsample's own function produces, which Rust's generators must reproduce exactly. A task's optional `tuning` {grid, metric, sort, limit} runs `tune_grid()` over the task's rset with an explicit grid (a list of parameter objects, shared verbatim by R and Rust; the tuned parameters are set with `tune()` in R and must not appear in `model_args`), then `show_best`, `select_best`, `select_by_one_std_err(sort...)`, `select_by_pct_loss(sort..., limit)`, `finalize_workflow` with the best, `last_fit` on the initial split and `fit_best` (ADR-0014); R records every candidate's per-resample and summary metrics keyed by grid row, the selections as grid-row indices, and the last-fit / fit-best models and predictions. For `boost_tree` grids over `trees`, tune predicts the smaller candidates from the largest fit (sub-models); R records every candidate's own `fit_resamples()` result as `direct` and flags sub-model candidates, whose tune_grid numbers equal the booster with one more tree (parsnip 1.5.0 `xgb_by_tree()` with xgboost >= 2.0; see VERIFICATION.md Phase 8i). Integer-valued columns are read as doubles in R because recipes casts imputed statistics to the column type (`cast()` rounds on integer columns) and this framework has only double columns.",
  "tasks": [
   {
    "id": "synth_reg",
@@ -1513,6 +1513,314 @@
     "rsq",
     "mae"
    ]
+  },
+  {
+   "id": "synth_reg_tree_tune",
+   "dataset": "synthetic_reg_small",
+   "type": "regression",
+   "outcome": "y",
+   "predictors": [
+    "x1",
+    "x2",
+    "x3",
+    "g"
+   ],
+   "steps": [
+    "impute_median_numeric",
+    "dummy_nominal"
+   ],
+   "model": "decision_tree",
+   "metrics": [
+    "rmse",
+    "rsq",
+    "mae",
+    "rsq_trad"
+   ],
+   "resampling": {
+    "scheme": "vfold_cv",
+    "v": 5,
+    "repeats": 2
+   },
+   "tuning": {
+    "grid": [
+     {
+      "cost_complexity": 0.001,
+      "min_n": 2
+     },
+     {
+      "cost_complexity": 0.01,
+      "min_n": 2
+     },
+     {
+      "cost_complexity": 0.1,
+      "min_n": 2
+     },
+     {
+      "cost_complexity": 0.001,
+      "min_n": 5
+     },
+     {
+      "cost_complexity": 0.01,
+      "min_n": 5
+     },
+     {
+      "cost_complexity": 0.1,
+      "min_n": 5
+     },
+     {
+      "cost_complexity": 0.001,
+      "min_n": 10
+     },
+     {
+      "cost_complexity": 0.01,
+      "min_n": 10
+     },
+     {
+      "cost_complexity": 0.1,
+      "min_n": 10
+     }
+    ],
+    "metric": "rmse",
+    "sort": [
+     "desc(cost_complexity)",
+     "desc(min_n)"
+    ],
+    "limit": 2
+   }
+  },
+  {
+   "id": "synth_clf_tree_tune",
+   "dataset": "synthetic_clf_small",
+   "type": "classification",
+   "outcome": "y",
+   "predictors": [
+    "x1",
+    "x2",
+    "g"
+   ],
+   "steps": [
+    "dummy_nominal"
+   ],
+   "model": "decision_tree",
+   "model_args": {
+    "min_n": 8
+   },
+   "metrics": [
+    "accuracy",
+    "mn_log_loss",
+    "precision",
+    "recall",
+    "roc_auc",
+    "pr_auc",
+    "average_precision",
+    "f_meas",
+    "sens",
+    "spec",
+    "bal_accuracy",
+    "j_index",
+    "kap",
+    "mcc",
+    "brier_class"
+   ],
+   "resampling": {
+    "scheme": "bootstraps",
+    "times": 6
+   },
+   "tuning": {
+    "grid": [
+     {
+      "cost_complexity": 0.0001,
+      "tree_depth": 2
+     },
+     {
+      "cost_complexity": 0.01,
+      "tree_depth": 2
+     },
+     {
+      "cost_complexity": 0.05,
+      "tree_depth": 2
+     },
+     {
+      "cost_complexity": 0.0001,
+      "tree_depth": 4
+     },
+     {
+      "cost_complexity": 0.01,
+      "tree_depth": 4
+     },
+     {
+      "cost_complexity": 0.05,
+      "tree_depth": 4
+     },
+     {
+      "cost_complexity": 0.0001,
+      "tree_depth": 8
+     },
+     {
+      "cost_complexity": 0.01,
+      "tree_depth": 8
+     },
+     {
+      "cost_complexity": 0.05,
+      "tree_depth": 8
+     }
+    ],
+    "metric": "roc_auc",
+    "sort": [
+     "desc(cost_complexity)",
+     "tree_depth"
+    ],
+    "limit": 2
+   }
+  },
+  {
+   "id": "synth_reg_xgb_tune",
+   "dataset": "synthetic_reg_small",
+   "type": "regression",
+   "outcome": "y",
+   "predictors": [
+    "x1",
+    "x2",
+    "x3",
+    "g"
+   ],
+   "steps": [
+    "impute_median_numeric",
+    "dummy_nominal"
+   ],
+   "model": "boost_tree",
+   "metrics": [
+    "rmse",
+    "rsq",
+    "mae",
+    "rsq_trad"
+   ],
+   "tuning": {
+    "grid": [
+     {
+      "learn_rate": 0.1,
+      "tree_depth": 2
+     },
+     {
+      "learn_rate": 0.3,
+      "tree_depth": 2
+     },
+     {
+      "learn_rate": 0.1,
+      "tree_depth": 4
+     },
+     {
+      "learn_rate": 0.3,
+      "tree_depth": 4
+     }
+    ],
+    "metric": "rmse",
+    "sort": [
+     "desc(learn_rate)",
+     "tree_depth"
+    ],
+    "limit": 5
+   }
+  },
+  {
+   "id": "penguins_species_tree_tune",
+   "dataset": "penguins",
+   "type": "classification",
+   "outcome": "species",
+   "predictors": [
+    "bill_length_mm",
+    "body_mass_g"
+   ],
+   "steps": [
+    "impute_median_numeric"
+   ],
+   "model": "decision_tree",
+   "metrics": [
+    "accuracy",
+    "mn_log_loss",
+    "precision",
+    "recall",
+    "roc_auc",
+    "pr_auc",
+    "average_precision",
+    "f_meas",
+    "sens",
+    "spec",
+    "bal_accuracy",
+    "j_index",
+    "kap",
+    "mcc",
+    "brier_class"
+   ],
+   "tuning": {
+    "grid": [
+     {
+      "min_n": 3
+     },
+     {
+      "min_n": 7
+     },
+     {
+      "min_n": 12
+     },
+     {
+      "min_n": 20
+     }
+    ],
+    "metric": "accuracy",
+    "sort": [
+     "desc(min_n)"
+    ],
+    "limit": 2
+   }
+  },
+  {
+   "id": "synth_reg_xgb_trees",
+   "dataset": "synthetic_reg_small",
+   "type": "regression",
+   "outcome": "y",
+   "predictors": [
+    "x1",
+    "x2",
+    "x3",
+    "g"
+   ],
+   "steps": [
+    "impute_median_numeric",
+    "dummy_nominal"
+   ],
+   "model": "boost_tree",
+   "metrics": [
+    "rmse",
+    "rsq",
+    "mae",
+    "rsq_trad"
+   ],
+   "tuning": {
+    "grid": [
+     {
+      "trees": 10,
+      "learn_rate": 0.1
+     },
+     {
+      "trees": 25,
+      "learn_rate": 0.1
+     },
+     {
+      "trees": 10,
+      "learn_rate": 0.3
+     },
+     {
+      "trees": 25,
+      "learn_rate": 0.3
+     }
+    ],
+    "metric": "rmse",
+    "sort": [
+     "trees"
+    ],
+    "limit": 5
+   }
   }
  ]
 }

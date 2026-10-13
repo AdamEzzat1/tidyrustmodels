@@ -58,6 +58,9 @@ pub mod prelude {
         make_strata_categorical, make_strata_numeric, mc_cv, rolling_origin, sliding_index, sliding_window,
         strata_from_numeric, vfold_cv, vfold_cv_repeated, Folds, GroupBalance, Split, ThreeWaySplit,
     };
-    pub use tidyrustmodels_tune::{grid_random, grid_regular, tune_grid, Grid, ParamRange, TuneResults};
-    pub use tidyrustmodels_workflows::{FittedWorkflow, ResampleResults, Workflow};
+    pub use tidyrustmodels_tune::{
+        fit_best, grid_random, grid_regular, tune_grid, BestRow, Grid, ParamRange, Selection, SortKey,
+        TuneResults,
+    };
+    pub use tidyrustmodels_workflows::{FittedWorkflow, LastFit, ResampleResults, Workflow};
 }

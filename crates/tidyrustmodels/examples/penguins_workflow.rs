@@ -88,14 +88,23 @@ fn main() -> Result<()> {
         Parallelism::threads(4),
     )?;
     println!("best by mn_log_loss:");
-    for (params, mean, se) in tuned.show_best(Metric::MnLogLoss, 3) {
+    for row in tuned.show_best(Metric::MnLogLoss, 3) {
         println!(
             "  penalty {:.2e} -> {:.4} (se {:.4})",
-            params[0].1,
-            mean,
-            se.unwrap_or(f64::NAN)
+            row.params[0].1,
+            row.mean.unwrap_or(f64::NAN),
+            row.std_err.unwrap_or(f64::NAN)
         );
     }
+    // tune's selection rules and the final fit (ADR-0014)
+    let best = tuned.select_best(Metric::MnLogLoss)?;
+    let simplest = tuned.select_by_one_std_err(Metric::MnLogLoss, &[SortKey::desc("penalty")])?;
+    println!(
+        "select_best: candidate {}; one-SE rule: candidate {}",
+        best.index, simplest.index
+    );
+    let final_fit = fit_best(&tuned, &wf, &data, Metric::MnLogLoss)?;
+    println!("fit_best refitted on {} rows", final_fit.predict(&data)?.len());
 
     // --- serialize the fitted workflow and predict from the deserialized copy ---
     let json = fitted.to_json()?;

@@ -27,6 +27,14 @@ VERIFICATION.md; nothing is claimed beyond those records.
   the same generators, `vfold_cv(repeats=)`, `Folds.from_splits`, `make_strata`.
   Verified on 17 new reference tasks (VERIFICATION.md Phase 8h). The shared split files
   now carry an `rset` section and rsample ids (`Fold1`, not `Fold01`).
+- Tuning selection and final fits with tune 2.1.0 semantics (ADR-0014):
+  `TuneResults::show_best` now returns `BestRow`s (stable order, undefined means last),
+  `select_best`, `select_by_one_std_err(metric, &[SortKey])`,
+  `select_by_pct_loss(metric, &[SortKey], limit)`, `Workflow::finalize`,
+  `Workflow::last_fit` (tune's resample fit path, returns `LastFit { workflow,
+  predictions, metrics }`), `fit_best`. Python: `TuneResults` object from `tune_grid`
+  with the same methods, `Workflow.finalize`, `Workflow.last_fit`. Verified on four
+  tuning tasks with explicit shared grids (VERIFICATION.md Phase 8i).
 - Metrics: rmse, mae, rsq (squared correlation, as yardstick), rsq_trad, accuracy, precision,
   recall, mn_log_loss (eps-clamped, as yardstick); `MetricSet`.
 - Classification metrics with yardstick 1.4.0 semantics: `ConfusionMatrix` (sens, spec,
