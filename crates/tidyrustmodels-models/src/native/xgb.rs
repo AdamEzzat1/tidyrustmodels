@@ -514,24 +514,40 @@ impl Cuts {
     /// `SketchOnDMatrix` + `MakeCuts` for unweighted data; `x` is column-major
     /// `n × p` in `f32`. With `zero_missing`, zeros are absent from the sketch.
     pub fn make(x: &[f32], n: usize, p: usize, max_bin: usize, zero_missing: bool) -> Cuts {
+        Self::make_weighted(x, n, p, max_bin, zero_missing, None)
+    }
+
+    /// [`Cuts::make`] with DMatrix row weights: `PushRowPage` pushes every present
+    /// value with its row's weight (`info.weights_`), which the weighted quantile
+    /// sketch turns into weighted ranks; the column size (hence `eps`) still counts
+    /// the present values.
+    pub fn make_weighted(
+        x: &[f32],
+        n: usize,
+        p: usize,
+        max_bin: usize,
+        zero_missing: bool,
+        weights: Option<&[f32]>,
+    ) -> Cuts {
         let mut cuts = Cuts {
             ptrs: vec![0],
             values: Vec::new(),
             min_vals: Vec::with_capacity(p),
         };
         for j in 0..p {
-            let present: Vec<f32> = x[j * n..(j + 1) * n]
+            let present: Vec<(f32, f32)> = x[j * n..(j + 1) * n]
                 .iter()
-                .copied()
-                .filter(|v| !(zero_missing && *v == 0.0))
+                .enumerate()
+                .filter(|(_, v)| !(zero_missing && **v == 0.0))
+                .map(|(i, v)| (*v, weights.map_or(1.0f32, |w| w[i])))
                 .collect();
             let csize = present.len();
             // HostSketchContainer: eps from min(max_bin, column size), at least 1 bin
             let n_bins = max_bin.min(csize).max(1);
             let eps = 1.0f64 / ((n_bins as f32) * 8.0f32) as f64;
             let mut sk = Sketch::new(csize, eps);
-            for &v in &present {
-                sk.push(v, 1.0);
+            for &(v, w) in &present {
+                sk.push(v, w);
             }
             let out = sk.summary();
             // AllReduce: intermediate_num_cuts = min(column size, max_bin * kFactor)
@@ -591,17 +607,23 @@ impl Cuts {
 // ---------------------------------------------------------------------------------
 
 /// `GetGradient` for the objective; `preds` and `out` are `n × groups` row-major.
-fn gradients(obj: Objective, preds: &[f32], labels: &[f32], out: &mut [(f32, f32)]) {
+/// With DMatrix weights the pairs are scaled by the row weight: `(g * w, h * w)` for
+/// the regression losses (`RegLossObj`, the hessian floor applied before the weight)
+/// and, for softprob, `(g * w, max(2 p (1 - p) * w, eps))` (`SoftmaxMultiClassObj`).
+fn gradients(obj: Objective, preds: &[f32], labels: &[f32], weights: Option<&[f32]>, out: &mut [(f32, f32)]) {
+    let wt = |i: usize| weights.map_or(1.0f32, |w| w[i]);
     match obj {
         Objective::SquaredError => {
             for (i, &y) in labels.iter().enumerate() {
-                out[i] = (preds[i] - y, 1.0f32);
+                let w = wt(i);
+                out[i] = ((preds[i] - y) * w, 1.0f32 * w);
             }
         }
         Objective::Logistic => {
             for (i, &y) in labels.iter().enumerate() {
                 let p = sigmoid(preds[i]);
-                out[i] = (p - y, (p * (1.0f32 - p)).max(1e-16f32));
+                let w = wt(i);
+                out[i] = ((p - y) * w, (p * (1.0f32 - p)).max(1e-16f32) * w);
             }
         }
         Objective::Softprob { k } => {
@@ -616,11 +638,12 @@ fn gradients(obj: Objective, preds: &[f32], labels: &[f32], out: &mut [(f32, f32
                     wsum += (v - wmax).exp() as f64;
                 }
                 let label = y as usize;
+                let w = wt(i);
                 for (c, &v) in point.iter().enumerate() {
                     let p = (v - wmax).exp() / (wsum as f32);
-                    let h = (2.0f32 * p * (1.0f32 - p)).max(1e-16f32);
+                    let h = (2.0f32 * p * (1.0f32 - p) * w).max(1e-16f32);
                     let g = if label == c { p - 1.0f32 } else { p };
-                    out[i * k + c] = (g, h);
+                    out[i * k + c] = (g * w, h);
                 }
             }
         }
@@ -643,25 +666,41 @@ fn base_margin(obj: Objective, base: &[f32]) -> Vec<f32> {
 }
 
 /// `InitEstimation` (`boost_from_average`) on the scale xgboost stores: the label
-/// mean (squared error and logistic) or the centred log class frequencies.
-fn base_score(obj: Objective, labels: &[f32]) -> Vec<f32> {
+/// mean (squared error and logistic) or the centred log class frequencies. With
+/// DMatrix weights: `common::WeightedSampleMean` (`sum_i y_i / sum_w * w_i` in
+/// double) and, for softprob, the weighted class histogram (`SmallHistogram`, float)
+/// over the double weight sum.
+fn base_score(obj: Objective, labels: &[f32], weights: Option<&[f32]>) -> Vec<f32> {
     let n = labels.len();
     match obj {
         Objective::SquaredError | Objective::Logistic => {
-            // common::SampleMean: double accumulation of y / n
-            let nf = n as f64;
             let mut m = 0.0f64;
-            for &y in labels {
-                m += y as f64 / nf;
+            match weights {
+                None => {
+                    // common::SampleMean: double accumulation of y / n
+                    let nf = n as f64;
+                    for &y in labels {
+                        m += y as f64 / nf;
+                    }
+                }
+                Some(w) => {
+                    let sum_w: f64 = w.iter().fold(0.0f64, |acc, v| acc + *v as f64);
+                    for (&y, &wi) in labels.iter().zip(w) {
+                        m += y as f64 / sum_w * wi as f64;
+                    }
+                }
             }
             vec![m as f32]
         }
         Objective::Softprob { k } => {
             let mut counts = vec![0.0f32; k];
-            for &y in labels {
-                counts[y as usize] += 1.0f32;
+            for (i, &y) in labels.iter().enumerate() {
+                counts[y as usize] += weights.map_or(1.0f32, |w| w[i]);
             }
-            let sum_weight = n as f64;
+            let sum_weight = match weights {
+                None => n as f64,
+                Some(w) => w.iter().fold(0.0f64, |acc, v| acc + *v as f64),
+            };
             let mut v: Vec<f32> = counts
                 .iter()
                 .map(|c| (*c as f64 * (1.0f64 / sum_weight)) as f32)
@@ -1083,11 +1122,32 @@ pub fn fit(
     params: Params,
     zero_as_missing: bool,
 ) -> Booster {
+    fit_weighted(x, n, p, labels, obj, params, zero_as_missing, None)
+}
+
+/// [`fit`] with DMatrix row weights (`xgb.DMatrix(weight = )`): the quantile sketch,
+/// the gradient pairs (hence `min_child_weight` and every leaf) and the base score are
+/// weighted as xgboost does.
+#[allow(clippy::too_many_arguments)]
+pub fn fit_weighted(
+    x: &[f64],
+    n: usize,
+    p: usize,
+    labels: &[f64],
+    obj: Objective,
+    params: Params,
+    zero_as_missing: bool,
+    weights: Option<&[f64]>,
+) -> Booster {
     assert_eq!(x.len(), n * p);
     assert_eq!(labels.len(), n);
     let xf: Vec<f32> = x.iter().map(|v| *v as f32).collect();
     let yf: Vec<f32> = labels.iter().map(|v| *v as f32).collect();
-    let cuts = Cuts::make(&xf, n, p, params.max_bin, zero_as_missing);
+    let wf: Option<Vec<f32>> = weights.map(|w| {
+        assert_eq!(w.len(), n);
+        w.iter().map(|v| *v as f32).collect()
+    });
+    let cuts = Cuts::make_weighted(&xf, n, p, params.max_bin, zero_as_missing, wf.as_deref());
     let mut gidx = vec![0u32; n * p];
     let mut any_missing = false;
     for i in 0..n {
@@ -1102,7 +1162,7 @@ pub fn fit(
         }
     }
     let k = obj.groups();
-    let base = base_score(obj, &yf);
+    let base = base_score(obj, &yf, wf.as_deref());
     let margin0 = base_margin(obj, &base);
     let mut preds = vec![0.0f32; n * k];
     for i in 0..n {
@@ -1114,7 +1174,7 @@ pub fn fit(
     let mut group_pairs = vec![(0.0f32, 0.0f32); n];
     let mut trees = Vec::with_capacity(params.rounds * k);
     for _ in 0..params.rounds {
-        gradients(obj, &preds, &yf, &mut gpair);
+        gradients(obj, &preds, &yf, wf.as_deref(), &mut gpair);
         for g in 0..k {
             for i in 0..n {
                 group_pairs[i] = gpair[i * k + g];
@@ -1165,6 +1225,47 @@ mod tests {
             alpha: 0.0,
             max_bin: 256,
         }
+    }
+
+    #[test]
+    fn integer_weights_equal_replicated_rows_for_one_tree() {
+        // x: 12 rows; weights 0..3; a weighted single-round fit must equal the fit on
+        // the replicated rows: same cuts (weighted ranks), same histograms, same
+        // leaves and base score (the sums are exact in float for these small integers)
+        let n = 12;
+        let x: Vec<f64> = (0..n).map(|i| (i as f64 * 0.7).sin() * 3.0).collect();
+        let y: Vec<f64> = x.iter().map(|v| v * v).collect();
+        let w: Vec<f64> = (0..n).map(|i| (i % 4) as f64).collect();
+        let (mut xr, mut yr) = (Vec::new(), Vec::new());
+        for i in 0..n {
+            for _ in 0..w[i] as usize {
+                xr.push(x[i]);
+                yr.push(y[i]);
+            }
+        }
+        let a = fit_weighted(
+            &x,
+            n,
+            1,
+            &y,
+            Objective::SquaredError,
+            params(1, 2),
+            false,
+            Some(&w),
+        );
+        let b = fit(
+            &xr,
+            xr.len(),
+            1,
+            &yr,
+            Objective::SquaredError,
+            params(1, 2),
+            false,
+        );
+        assert_eq!(a.base_score, b.base_score);
+        assert_eq!(a.trees[0].split_conditions, b.trees[0].split_conditions);
+        assert_eq!(a.trees[0].sum_hessian, b.trees[0].sum_hessian);
+        assert_eq!(a.trees[0].left_children, b.trees[0].left_children);
     }
 
     #[test]

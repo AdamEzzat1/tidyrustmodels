@@ -2,6 +2,7 @@
 //! Definitions follow recipes 1.3.2 (`keep_levels`, `bake.step_other`,
 //! `bake.step_novel`, `bake.step_unknown`), read from the installed package source.
 
+use super::step_weights;
 use crate::selector::Selector;
 use serde::{Deserialize, Serialize};
 use tidyrustmodels_core::{Column, Error, FittedStep, Result, Schema, Step, Table};
@@ -111,23 +112,32 @@ impl Step for StepOther {
             ));
         }
         let mut objects = Vec::new();
+        // frequency case weights: `keep_levels()` tabulates the weights
+        // (`hardhat::weighted_table`) and divides by the weight of the non-missing rows
+        let wts = step_weights(training, schema)?;
         for name in self.selector.resolve(schema)? {
             let col = get_col(training, &name, "prep")?;
             let (labels, levels) = labels_of(&name, col)?;
-            let mut counts = vec![0usize; levels.len()];
-            let mut n_valid = 0usize;
-            for l in labels.iter().flatten() {
-                counts[levels.iter().position(|lv| lv == l).expect("level")] += 1;
-                n_valid += 1;
+            let mut counts = vec![0.0f64; levels.len()];
+            let mut n_valid = 0.0f64;
+            for (i, l) in labels.iter().enumerate() {
+                let Some(l) = l else { continue };
+                let w = wts.map_or(1.0, |w| w[i]);
+                counts[levels.iter().position(|lv| lv == l).expect("level")] += w;
+                n_valid += w;
             }
             // xtab sorted decreasing (stable for ties, as R's `sort` on a table).
             let mut order: Vec<usize> = (0..levels.len()).collect();
-            order.sort_by(|a, b| counts[*b].cmp(&counts[*a]));
+            order.sort_by(|a, b| counts[*b].partial_cmp(&counts[*a]).expect("finite"));
             let value = |k: usize| -> f64 {
                 if self.threshold < 1.0 {
-                    counts[k] as f64 / n_valid.max(1) as f64
+                    if n_valid > 0.0 {
+                        counts[k] / n_valid
+                    } else {
+                        counts[k]
+                    }
                 } else {
-                    counts[k] as f64
+                    counts[k]
                 }
             };
             let dropped: Vec<usize> = order

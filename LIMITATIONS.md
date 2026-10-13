@@ -8,7 +8,8 @@
   only: a forest is never the same forest as R's; no importance, OOB error or
   `max.depth`) and xgboost-style boosted trees (dense or zeros-as-missing designs;
   no `subsample`, `colsample`, early stopping, NA predictors or constraints). No
-  penalized paths (`glmnet`), no case weights.
+  penalized paths (`glmnet`). Case weights (ADR-0012) on the native engine only;
+  `multinom_reg` takes none (as nnet).
 - Boosted trees reproduce tidymodels' sparse-data decision, under which xgboost
   treats every exact zero as missing. recipes estimates the sparsity on a random
   1000-row sample; this crate uses every row, so a design on the decision boundary
@@ -20,8 +21,14 @@
   novel, unknown. No `step_interact`, `step_pca`, splines.
 - Resampling: initial split, v-fold (optionally stratified). No bootstraps, repeats,
   grouped or time-based resampling.
-- Metrics: rmse, mae, rsq, rsq_trad, accuracy, precision, recall, mn_log_loss. No
-  case weights, no ROC AUC.
+- Metrics: the yardstick set listed in COMPATIBILITY.md, with case weights. Weighted
+  `rsq` is undefined with fewer than two non-zero-weight rows (`cov.wt`).
+- Case weights follow tidymodels' split semantics: frequency weights change the
+  recipe statistics, the model and the resampling metrics; importance weights change
+  the model only. Trees with frequency weights are not the trees of the replicated
+  data (rpart counts observations for `minsplit`/`minbucket`). `step_nzv()` with
+  frequency weights and a column with missing values runs here but errors in
+  recipes 1.3.2.
 - Python: NumPy and pandas input. Arrow/Polars input deferred.
 - Unseen categorical levels at `bake` time are an error, not NA (stricter than recipes).
 - Rank deficiency: only identically-zero columns and (with an intercept) constant

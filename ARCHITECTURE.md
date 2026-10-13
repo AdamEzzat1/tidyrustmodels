@@ -77,11 +77,14 @@ Workflow    = Recipe + ModelSpec      --fit(training)-->   FittedWorkflow
 
 Fitted objects are immutable. `prep` sees training rows only. `bake` and `predict`
 never update state. Resampling re-runs `prep` inside every fold (leakage safety).
+Case weights (ADR-0012) travel as a `Role::CaseWeights(kind)` column through `prep`
+(frequency weights feed the unsupervised steps) and as `CaseWeights` into
+`ModelSpec::fit_weighted`; `Workflow::fit_fold` hands frequency weights to the metrics.
 
 ### Capabilities
 
 `ModelSpec::capabilities()` returns a declared set (`Regression`, `BinaryClassification`,
-`ClassProbabilities`, `Coefficients`, `Serializable`). Workflows check capabilities
+`MulticlassClassification`, `ClassProbabilities`, `Coefficients`, `CaseWeights`). Workflows check capabilities
 before running rather than discovering failures at predict time. Backend adapters
 declare only what they genuinely implement; e.g. the smartcore logistic adapter
 derives probabilities itself and declares that fact in its `BackendInfo`.

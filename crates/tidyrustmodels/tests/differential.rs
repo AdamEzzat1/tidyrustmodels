@@ -135,11 +135,26 @@ impl Report {
         theirs: &[f64],
         (rel, abs): (f64, f64),
     ) {
-        assert_eq!(
-            ours.len(),
-            theirs.len(),
-            "{task}/{engine}/{quantity}: length mismatch"
-        );
+        if ours.len() != theirs.len() {
+            // recorded as a failure (not a panic) so the report is still written
+            eprintln!(
+                "{task}/{engine}/{quantity}: length mismatch ({} vs {})",
+                ours.len(),
+                theirs.len()
+            );
+            self.rows.push(Row {
+                task: task.into(),
+                engine: engine.into(),
+                level,
+                quantity: format!("{quantity} (length {} vs R {})", ours.len(), theirs.len()),
+                n: ours.len(),
+                max_abs: f64::NAN,
+                max_rel: f64::NAN,
+                bound: format!("rel {rel:.0e} / abs {abs:.0e}"),
+                pass: false,
+            });
+            return;
+        }
         let mut max_abs: f64 = 0.0;
         let mut max_rel: f64 = 0.0;
         let mut pass = true;
@@ -287,7 +302,35 @@ fn task_table(task: &Value) -> Table {
     for p in strs(&task["predictors"]) {
         cols.push((p.clone(), full.column(&p).unwrap().clone()));
     }
+    if let Some((col, _)) = case_weights_spec(task) {
+        cols.push((col.to_string(), full.column(col).unwrap().clone()));
+    }
     Table::new(cols).unwrap()
+}
+
+/// The task's `case_weights: {column, kind}`, if any.
+fn case_weights_spec(task: &Value) -> Option<(&str, WeightKind)> {
+    let cw = &task["case_weights"];
+    let col = cw["column"].as_str()?;
+    let kind = match cw["kind"].as_str()? {
+        "frequency" => WeightKind::Frequency,
+        "importance" => WeightKind::Importance,
+        other => panic!("unknown case weight kind {other}"),
+    };
+    Some((col, kind))
+}
+
+/// The case weights of `data`'s rows for a task with `case_weights`.
+fn weights_of(task: &Value, data: &Table) -> Option<CaseWeights> {
+    case_weights_spec(task).map(|(col, kind)| {
+        CaseWeights::new(kind, data.column(col).unwrap().as_numeric().unwrap().to_vec()).unwrap()
+    })
+}
+
+/// Weights handed to the metrics: frequency weights only (tune's
+/// `.use_case_weights_with_yardstick()`).
+fn metric_weights(w: &Option<CaseWeights>) -> Option<&[f64]> {
+    w.as_ref().filter(|w| w.used_by_metrics()).map(|w| w.values())
 }
 
 fn model_for(task: &Value, engine: Engine, y: &Outcome) -> Box<dyn ModelSpec> {
@@ -387,7 +430,10 @@ fn differential_against_r_fixtures() {
 
         // ---- Level 1: preprocessing ----
         let recipe = build_recipe(task);
-        let prepped = recipe.prep(&train).unwrap();
+        let cw_spec = case_weights_spec(task);
+        let w_train = weights_of(task, &train);
+        let w_test = weights_of(task, &test);
+        let prepped = recipe.prep_with_weights(&train, cw_spec).unwrap();
         let r_steps = items(&fx["prep"]["steps"]);
         assert_eq!(prepped.steps().len(), r_steps.len());
         for (ours, theirs) in prepped.steps().iter().zip(r_steps) {
@@ -582,6 +628,24 @@ fn differential_against_r_fixtures() {
         let is_treelike = is_tree || is_boost;
         let engines: Vec<Engine> = if is_tree || is_rf || is_boost {
             vec![Engine::Native]
+        } else if w_train.is_some() {
+            // case weights are a native-engine feature; the others refuse as parsnip does
+            for engine in [Engine::Linfa, Engine::Smartcore] {
+                let spec = model_for(task, engine, &y_train);
+                let err = spec
+                    .fit_maybe_weighted(&x_train, &y_train, w_train.as_ref())
+                    .err()
+                    .map(|e| matches!(e, Error::Unsupported(_)));
+                report.exact(
+                    id,
+                    engine.as_str(),
+                    "L3",
+                    "case weights refused (Unsupported)",
+                    &err,
+                    &Some(true),
+                );
+            }
+            vec![Engine::Native]
         } else {
             vec![Engine::Linfa, Engine::Smartcore, Engine::Native]
         };
@@ -600,6 +664,8 @@ fn differential_against_r_fixtures() {
                     &y_test,
                     &metrics,
                     &fx,
+                    w_train.as_ref(),
+                    metric_weights(&w_test),
                 );
                 continue;
             }
@@ -610,7 +676,23 @@ fn differential_against_r_fixtures() {
             let fit_spec = spec
                 .resolve_sparsity(est_sparsity, train.nrows())
                 .unwrap_or_else(|| spec.clone_box());
-            let fitted = fit_spec.fit(&x_train, &y_train).unwrap();
+            let fitted = fit_spec
+                .fit_maybe_weighted(&x_train, &y_train, w_train.as_ref())
+                .unwrap();
+            if let Some(w) = &w_train {
+                report.exact(
+                    id,
+                    eng,
+                    "L3",
+                    "case weights applied (diagnostics note)",
+                    &fitted
+                        .diagnostics()
+                        .note
+                        .unwrap_or_default()
+                        .contains(&format!("case weights ({})", w.kind().as_str())),
+                    &true,
+                );
+            }
             if is_boost {
                 let r_est = fx["fit"]["sparsity"]["estimate"].as_f64().unwrap();
                 let r_dec = fx["fit"]["sparsity"]["decision"].as_str().unwrap() == "yes";
@@ -923,10 +1005,42 @@ fn differential_against_r_fixtures() {
                     (a, b) => report.exact(id, eng, "L2", &format!("test metric {} (NA)", m.name), &a, &b),
                 }
             }
+            // the same metrics with yardstick's `case_weights =` (frequency weights)
+            if let Some(w) = metric_weights(&w_test) {
+                assert!(
+                    !fx["test_metrics_weighted"].is_null(),
+                    "{id}: fixture lacks test_metrics_weighted"
+                );
+                for m in metrics.evaluate_weighted(&y_test, &pred_test, Some(w)).unwrap() {
+                    let theirs = fx["test_metrics_weighted"][&m.name].as_f64();
+                    match (m.value, theirs) {
+                        (Some(a), Some(b)) => report.compare(
+                            id,
+                            eng,
+                            "L2",
+                            &format!("weighted test metric {}", m.name),
+                            &[a],
+                            &[b],
+                            tol.pair_eng(id, "resample_metric", eng),
+                        ),
+                        (a, b) => report.exact(
+                            id,
+                            eng,
+                            "L2",
+                            &format!("weighted test metric {} (NA)", m.name),
+                            &a,
+                            &b,
+                        ),
+                    }
+                }
+            }
 
             // ---- Level 4: resampling with shared folds ----
             let folds = Folds::from_assignments(&u32s(&split["vfold"]["fold_of_row"])).unwrap();
-            let wf = Workflow::from_boxed(build_recipe(task), spec);
+            let mut wf = Workflow::from_boxed(build_recipe(task), spec);
+            if let Some((col, kind)) = cw_spec {
+                wf = wf.case_weights(col, kind);
+            }
             if is_treelike {
                 let fold_of_row = u32s(&split["vfold"]["fold_of_row"]);
                 let v = split["vfold"]["v"].as_u64().unwrap() as u32;
@@ -967,6 +1081,7 @@ fn differential_against_r_fixtures() {
                         .map(|(i, _)| i)
                         .collect();
                     let assess_data = data.select_rows(&assess).unwrap();
+                    let w_assess = weights_of(task, &assess_data);
                     let ours = fw.predict(&assess_data).unwrap();
                     let truth =
                         Outcome::from_column(assess_data.column(task["outcome"].as_str().unwrap()).unwrap())
@@ -1042,7 +1157,10 @@ fn differential_against_r_fixtures() {
                         }
                         _ => unreachable!(),
                     };
-                    for m in metrics.evaluate(&truth, &r_pred).unwrap() {
+                    for m in metrics
+                        .evaluate_weighted(&truth, &r_pred, metric_weights(&w_assess))
+                        .unwrap()
+                    {
                         // boosters: the fold fit comes from fit() (sparsity toggle applied),
                         // whose metrics R records next to it; fit_resamples() skips the
                         // toggle in tune 2.1.0 and is compared separately below
@@ -1653,6 +1771,8 @@ fn compare_forest(
     y_test: &Outcome,
     metrics: &MetricSet,
     fx: &Value,
+    w_train: Option<&CaseWeights>,
+    w_metrics: Option<&[f64]>,
 ) {
     let rf = &fx["fit"]["rf"];
     let r_seeds = items(&rf["per_seed"]);
@@ -1661,7 +1781,7 @@ fn compare_forest(
     let row_fraction = tol.get("-", "rf_row_fraction");
     // resolved defaults must agree with ranger's
     let probe = model_for_seed(task, Engine::Native, y_train, 0)
-        .fit(x_train, y_train)
+        .fit_maybe_weighted(x_train, y_train, w_train)
         .unwrap();
     let note = probe.diagnostics().note.unwrap();
     let our_mtry: u64 = note
@@ -1676,6 +1796,9 @@ fn compare_forest(
     let our_min: u64 = note
         .split("min.node.size ")
         .nth(1)
+        .unwrap()
+        .split(';')
+        .next()
         .unwrap()
         .trim()
         .parse()
@@ -1708,7 +1831,7 @@ fn compare_forest(
     let mut ours: Vec<(Vec<MetricValue>, Vec<f64>)> = Vec::with_capacity(s_n);
     for s in 0..s_n as u64 {
         let fitted = model_for_seed(task, Engine::Native, y_train, s)
-            .fit(x_train, y_train)
+            .fit_maybe_weighted(x_train, y_train, w_train)
             .unwrap();
         let pred = fitted.predict(x_test).unwrap();
         let flat = match &pred {
@@ -1719,7 +1842,7 @@ fn compare_forest(
             } => p.to_row_major(),
             _ => unreachable!(),
         };
-        ours.push((metrics.evaluate(y_test, &pred).unwrap(), flat));
+        ours.push((metrics.evaluate_weighted(y_test, &pred, w_metrics).unwrap(), flat));
     }
     // per-seed dump for diagnosis (target/rust_outputs/<task>_rf_seeds.json)
     {

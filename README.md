@@ -45,6 +45,7 @@ let recipe = Recipe::new("sex")
     .step(StepNormalize::new(Selector::AllNumericPredictors))
     .step(StepDummy::new(Selector::AllNominalPredictors));
 let wf = Workflow::new(recipe, LogisticRegSpec::new());
+// case weights as `add_case_weights()`: .case_weights("w", WeightKind::Frequency)
 let folds = vfold_cv(data.nrows(), 5, None, Seed(7))?;
 let cv = wf.fit_resamples(&data, &folds, &MetricSet::classification_defaults(), Parallelism::threads(4))?;
 ```

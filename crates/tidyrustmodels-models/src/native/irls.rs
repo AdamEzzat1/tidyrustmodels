@@ -10,6 +10,8 @@
 //! * the C-level `logit` link clamps `eta` to `±30` before `exp`, which is reproduced so
 //!   saturated fits land on the same numbers.
 //!
+//! Prior weights (`glm.fit(weights = )`) are supported by `fit_weighted`: see its doc.
+//!
 //! An optional unscaled L2 penalty on the slopes is handled by row augmentation
 //! (`sqrt(penalty)` rows), which `glm` itself does not offer; the convergence criterion
 //! then uses the penalised deviance.
@@ -49,11 +51,13 @@ fn y_log_y(y: f64, mu: f64) -> f64 {
     }
 }
 
-/// `binomial()$dev.resids` summed (`C_binomial_dev_resids`, unit weights).
-fn deviance(y: &[f64], mu: &[f64]) -> f64 {
+/// `binomial()$dev.resids` summed with prior weights (`C_binomial_dev_resids`):
+/// `2 * wt * (y log(y / mu) + (1 - y) log((1 - y) / (1 - mu)))`.
+fn deviance(y: &[f64], mu: &[f64], wt: &[f64]) -> f64 {
     y.iter()
         .zip(mu)
-        .map(|(&yi, &mi)| 2.0 * (y_log_y(yi, mi) + y_log_y(1.0 - yi, 1.0 - mi)))
+        .zip(wt)
+        .map(|((&yi, &mi), &wi)| 2.0 * wi * (y_log_y(yi, mi) + y_log_y(1.0 - yi, 1.0 - mi)))
         .sum()
 }
 
@@ -114,16 +118,55 @@ impl std::fmt::Display for IrlsError {
 }
 
 /// Fit on a column-major `n × p` design (intercept column included by the caller when
-/// `opts.intercept`) with 0/1 outcomes.
+/// `opts.intercept`) with 0/1 outcomes and unit prior weights.
 pub fn fit(x: &[f64], n: usize, p: usize, y: &[u32], opts: IrlsOptions) -> Result<IrlsFit, IrlsError> {
+    fit_weighted(x, n, p, y, None, opts)
+}
+
+/// [`fit`] with prior weights, as `glm.fit(weights = )`: the start is
+/// `mustart = (weights * y + 0.5) / (weights + 1)`, the deviance is weighted, rows
+/// with zero weight are left out of every weighted least-squares solve
+/// (`good <- weights > 0`) while their `eta` and `mu` are still updated, and
+/// non-integer `weights * y` raise glm's "non-integer #successes" warning.
+pub fn fit_weighted(
+    x: &[f64],
+    n: usize,
+    p: usize,
+    y: &[u32],
+    weights: Option<&[f64]>,
+    opts: IrlsOptions,
+) -> Result<IrlsFit, IrlsError> {
     assert_eq!(x.len(), n * p);
     assert_eq!(y.len(), n);
+    let prior: Vec<f64> = match weights {
+        Some(w) => {
+            assert_eq!(w.len(), n);
+            w.to_vec()
+        }
+        None => vec![1.0; n],
+    };
     let yf: Vec<f64> = y.iter().map(|&v| f64::from(v)).collect();
     let tol = (1e-7f64).min(opts.epsilon / 1000.0);
     let penalised = opts.penalty > 0.0;
     let first_slope = usize::from(opts.intercept);
-    let n_aug = if penalised { n + (p - first_slope) } else { n };
+    // `good <- (weights > 0) & (mu.eta.val != 0)`; mu.eta is never 0 under the clamp
+    let good: Vec<usize> = (0..n).filter(|&i| prior[i] > 0.0).collect();
+    let n_good = good.len();
+    let n_aug = if penalised {
+        n_good + (p - first_slope)
+    } else {
+        n_good
+    };
     let sqrt_pen = opts.penalty.sqrt();
+    let mut warnings = Vec::new();
+    if weights.is_some()
+        && yf
+            .iter()
+            .zip(&prior)
+            .any(|(yi, w)| (w * yi - (w * yi).round()).abs() > 0.001)
+    {
+        warnings.push("non-integer #successes in a binomial glm!".into());
+    }
 
     let pen_term = |coef: &[f64]| -> f64 {
         if penalised {
@@ -144,14 +187,17 @@ pub fn fit(x: &[f64], n: usize, p: usize, y: &[u32], opts: IrlsOptions) -> Resul
         eta
     };
 
-    let mut mu: Vec<f64> = yf.iter().map(|&v| (v + 0.5) / 2.0).collect();
+    let mut mu: Vec<f64> = yf
+        .iter()
+        .zip(&prior)
+        .map(|(&v, &w)| (w * v + 0.5) / (w + 1.0))
+        .collect();
     let mut eta: Vec<f64> = mu.iter().map(|&m| (m / (1.0 - m)).ln()).collect();
-    let mut devold = deviance(&yf, &mu);
+    let mut devold = deviance(&yf, &mu, &prior);
     let mut coef = vec![0.0; p];
     let mut coefold: Option<Vec<f64>> = None;
     let mut converged = false;
     let mut boundary = false;
-    let mut warnings = Vec::new();
     let mut aliased = Vec::new();
     let mut dev = devold;
     let mut iter = 0;
@@ -159,15 +205,16 @@ pub fn fit(x: &[f64], n: usize, p: usize, y: &[u32], opts: IrlsOptions) -> Resul
     for it in 1..=opts.maxit {
         iter = it;
         let me: Vec<f64> = eta.iter().map(|&e| mu_eta(e)).collect();
-        // `good` rows: mu.eta != 0, always true for the clamped logit link.
-        let z: Vec<f64> = (0..n).map(|i| eta[i] + (yf[i] - mu[i]) / me[i]).collect();
-        let w: Vec<f64> = (0..n)
-            .map(|i| (me[i] * me[i] / (mu[i] * (1.0 - mu[i]))).sqrt())
+        let z: Vec<f64> = good.iter().map(|&i| eta[i] + (yf[i] - mu[i]) / me[i]).collect();
+        // `w <- sqrt((weights[good] * mu.eta.val[good]^2) / variance(mu)[good])`
+        let w: Vec<f64> = good
+            .iter()
+            .map(|&i| ((prior[i] * (me[i] * me[i])) / (mu[i] * (1.0 - mu[i]))).sqrt())
             .collect();
         let mut xw = Vec::with_capacity(n_aug * p);
         for j in 0..p {
             let col = &x[j * n..(j + 1) * n];
-            xw.extend(col.iter().zip(&w).map(|(v, wi)| v * wi));
+            xw.extend(good.iter().zip(&w).map(|(&i, wi)| col[i] * wi));
             if penalised {
                 for s in first_slope..p {
                     xw.push(if s == j { sqrt_pen } else { 0.0 });
@@ -189,7 +236,7 @@ pub fn fit(x: &[f64], n: usize, p: usize, y: &[u32], opts: IrlsOptions) -> Resul
         let mut start = start;
         eta = eta_of(&start);
         mu = eta.iter().map(|&e| linkinv(e)).collect();
-        dev = deviance(&yf, &mu) + pen_term(&start);
+        dev = deviance(&yf, &mu, &prior) + pen_term(&start);
         boundary = false;
         if !dev.is_finite() {
             let Some(old) = coefold.as_ref() else {
@@ -207,7 +254,7 @@ pub fn fit(x: &[f64], n: usize, p: usize, y: &[u32], opts: IrlsOptions) -> Resul
                 }
                 eta = eta_of(&start);
                 mu = eta.iter().map(|&e| linkinv(e)).collect();
-                dev = deviance(&yf, &mu) + pen_term(&start);
+                dev = deviance(&yf, &mu, &prior) + pen_term(&start);
             }
             boundary = true;
         }
@@ -280,6 +327,38 @@ mod tests {
         // warning is raised by the framework from the fitted probabilities.
         assert!(f.coef[1] > 1.0);
         assert!(f.deviance < 1e-6);
+    }
+
+    #[test]
+    fn frequency_weights_equal_replicated_rows_and_zero_weights_drop_rows() {
+        let n = 8;
+        let mut x = vec![1.0; n];
+        x.extend([0., 0., 0., 0., 1., 1., 1., 1.]);
+        let y = [0, 0, 0, 1, 1, 1, 1, 0];
+        let w = [2.0, 1.0, 0.0, 3.0, 1.0, 2.0, 1.0, 1.0];
+        let f = fit_weighted(&x, n, 2, &y, Some(&w), opts()).unwrap();
+        // replicate rows by their weights
+        let mut xr = Vec::new();
+        let mut xr1 = Vec::new();
+        let mut yr = Vec::new();
+        for i in 0..n {
+            for _ in 0..w[i] as usize {
+                xr.push(1.0);
+                xr1.push(x[n + i]);
+                yr.push(y[i]);
+            }
+        }
+        let m = yr.len();
+        xr.extend(xr1);
+        let g = fit(&xr, m, 2, &yr, opts()).unwrap();
+        // same MLE; the iterates differ (mustart depends on the weights), so agreement
+        // is to the deviance convergence criterion, not to the last bit
+        assert_relative_eq!(f.coef[0], g.coef[0], epsilon = 1e-7, max_relative = 1e-7);
+        assert_relative_eq!(f.coef[1], g.coef[1], epsilon = 1e-7, max_relative = 1e-7);
+        assert_relative_eq!(f.deviance, g.deviance, max_relative = 1e-9);
+        assert!(f.warnings.iter().all(|w| !w.contains("non-integer")));
+        let h = fit_weighted(&x, n, 2, &y, Some(&[0.5; 8]), opts()).unwrap();
+        assert!(h.warnings.iter().any(|w| w.contains("non-integer #successes")));
     }
 
     #[test]

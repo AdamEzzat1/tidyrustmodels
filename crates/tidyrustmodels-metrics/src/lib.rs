@@ -15,9 +15,12 @@ pub mod curves;
 
 pub use class::{weighted_mean, ConfusionMatrix, Estimator, KapWeighting};
 pub use curves::{
-    average_precision, average_precision_multiclass, binary_threshold_curve, brier_class,
-    brier_class_multiclass, mn_log_loss_multiclass, pr_auc, pr_auc_multiclass, pr_curve, roc_auc,
-    roc_auc_multiclass, roc_curve, trapezoid_auc, PrCurve, RocCurve, ThresholdCurve,
+    average_precision, average_precision_multiclass, average_precision_multiclass_weighted,
+    average_precision_weighted, binary_threshold_curve, binary_threshold_curve_weighted, brier_class,
+    brier_class_multiclass, brier_class_multiclass_weighted, brier_class_weighted, mn_log_loss_multiclass,
+    mn_log_loss_multiclass_weighted, pr_auc, pr_auc_multiclass, pr_auc_multiclass_weighted, pr_auc_weighted,
+    pr_curve, roc_auc, roc_auc_multiclass, roc_auc_multiclass_weighted, roc_auc_weighted, roc_curve,
+    trapezoid_auc, PrCurve, RocCurve, ThresholdCurve,
 };
 use serde::{Deserialize, Serialize};
 use tidyrustmodels_core::{Error, Outcome, Prediction, Result};
@@ -43,67 +46,159 @@ fn check_finite(name: &str, v: &[f64]) -> Result<()> {
 
 /// Root mean squared error: `sqrt(mean((truth - estimate)^2))`.
 pub fn rmse(truth: &[f64], estimate: &[f64]) -> Result<Option<f64>> {
+    rmse_weighted(truth, estimate, None)
+}
+
+/// `rmse` with optional case weights: `sqrt(weighted.mean((truth - estimate)^2, w))`.
+pub fn rmse_weighted(truth: &[f64], estimate: &[f64], w: Option<&[f64]>) -> Result<Option<f64>> {
     check_len(truth.len(), estimate.len())?;
     check_finite("truth", truth)?;
     check_finite("estimate", estimate)?;
-    let mse = truth
+    check_weights(truth.len(), w)?;
+    let errors: Vec<f64> = truth
         .iter()
         .zip(estimate)
         .map(|(t, e)| (t - e) * (t - e))
-        .sum::<f64>()
-        / truth.len() as f64;
-    Ok(Some(mse.sqrt()))
+        .collect();
+    Ok(Some(yardstick_mean(&errors, w).sqrt()))
+}
+
+fn check_weights(n: usize, w: Option<&[f64]>) -> Result<()> {
+    if let Some(w) = w {
+        check_len(n, w.len())?;
+        check_finite("case_weights", w)?;
+        if let Some(i) = w.iter().position(|v| *v < 0.0) {
+            return Err(Error::InvalidValue(format!("negative case weight at row {i}")));
+        }
+    }
+    Ok(())
+}
+
+/// `yardstick_mean`: `mean(x)`, or `stats::weighted.mean(x, w)`, which is
+/// `sum((x * w)[w != 0]) / sum(w)`.
+pub fn yardstick_mean(x: &[f64], w: Option<&[f64]>) -> f64 {
+    match w {
+        None => x.iter().sum::<f64>() / x.len() as f64,
+        Some(w) => {
+            let num: f64 = x
+                .iter()
+                .zip(w)
+                .filter(|(_, wi)| **wi != 0.0)
+                .map(|(xi, wi)| xi * wi)
+                .sum();
+            num / w.iter().sum::<f64>()
+        }
+    }
+}
+
+/// `yardstick_sum`: `sum(x)` or `sum(x * w)`.
+pub fn yardstick_sum(x: &[f64], w: Option<&[f64]>) -> f64 {
+    match w {
+        None => x.iter().sum(),
+        Some(w) => x.iter().zip(w).map(|(xi, wi)| xi * wi).sum(),
+    }
 }
 
 /// Mean absolute error.
 pub fn mae(truth: &[f64], estimate: &[f64]) -> Result<Option<f64>> {
+    mae_weighted(truth, estimate, None)
+}
+
+/// `mae` with optional case weights: `weighted.mean(|truth - estimate|, w)`.
+pub fn mae_weighted(truth: &[f64], estimate: &[f64], w: Option<&[f64]>) -> Result<Option<f64>> {
     check_len(truth.len(), estimate.len())?;
     check_finite("truth", truth)?;
     check_finite("estimate", estimate)?;
-    Ok(Some(
-        truth
-            .iter()
-            .zip(estimate)
-            .map(|(t, e)| (t - e).abs())
-            .sum::<f64>()
-            / truth.len() as f64,
-    ))
+    check_weights(truth.len(), w)?;
+    let errors: Vec<f64> = truth.iter().zip(estimate).map(|(t, e)| (t - e).abs()).collect();
+    Ok(Some(yardstick_mean(&errors, w)))
 }
 
 /// yardstick's `rsq`: the **squared Pearson correlation** between truth and estimate.
 /// `None` when either vector is constant or has fewer than two rows.
 pub fn rsq(truth: &[f64], estimate: &[f64]) -> Result<Option<f64>> {
+    rsq_weighted(truth, estimate, None)
+}
+
+/// `rsq` with optional case weights: the squared correlation from
+/// `stats::cov.wt(cbind(truth, estimate), wt = w, cor = TRUE, method = "unbiased")`
+/// (`yardstick_cor`), `NA` for fewer than two rows or a constant truth or estimate.
+pub fn rsq_weighted(truth: &[f64], estimate: &[f64], w: Option<&[f64]>) -> Result<Option<f64>> {
     check_len(truth.len(), estimate.len())?;
     check_finite("truth", truth)?;
     check_finite("estimate", estimate)?;
+    check_weights(truth.len(), w)?;
     let n = truth.len();
     if n < 2 {
         return Ok(None);
     }
-    let mt = truth.iter().sum::<f64>() / n as f64;
-    let me = estimate.iter().sum::<f64>() / n as f64;
-    let (mut sxy, mut sxx, mut syy) = (0.0, 0.0, 0.0);
-    for (t, e) in truth.iter().zip(estimate) {
-        let (dt, de) = (t - mt, e - me);
-        sxy += dt * de;
-        sxx += dt * dt;
-        syy += de * de;
-    }
-    if sxx == 0.0 || syy == 0.0 {
+    let constant = |v: &[f64]| v.iter().all(|x| *x == v[0]);
+    if constant(truth) || constant(estimate) {
         return Ok(None);
     }
-    let r = sxy / (sxx.sqrt() * syy.sqrt());
-    Ok(Some(r * r))
+    match w {
+        None => {
+            let mt = truth.iter().sum::<f64>() / n as f64;
+            let me = estimate.iter().sum::<f64>() / n as f64;
+            let (mut sxy, mut sxx, mut syy) = (0.0, 0.0, 0.0);
+            for (t, e) in truth.iter().zip(estimate) {
+                let (dt, de) = (t - mt, e - me);
+                sxy += dt * de;
+                sxx += dt * dt;
+                syy += de * de;
+            }
+            if sxx == 0.0 || syy == 0.0 {
+                return Ok(None);
+            }
+            let r = sxy / (sxx.sqrt() * syy.sqrt());
+            Ok(Some(r * r))
+        }
+        Some(w) => {
+            // cov.wt: wt <- wt / sum(wt); center <- colSums(wt * x);
+            // x <- sqrt(wt) * (x - center); cov <- crossprod(x) / (1 - sum(wt^2))
+            let sw: f64 = w.iter().sum();
+            if sw == 0.0 {
+                return Ok(None);
+            }
+            let wn: Vec<f64> = w.iter().map(|v| v / sw).collect();
+            let mt: f64 = wn.iter().zip(truth).map(|(a, b)| a * b).sum();
+            let me: f64 = wn.iter().zip(estimate).map(|(a, b)| a * b).sum();
+            let (mut sxy, mut sxx, mut syy) = (0.0, 0.0, 0.0);
+            for ((t, e), wi) in truth.iter().zip(estimate).zip(&wn) {
+                let (dt, de) = (wi.sqrt() * (t - mt), wi.sqrt() * (e - me));
+                sxy += dt * de;
+                sxx += dt * dt;
+                syy += de * de;
+            }
+            let denom = 1.0 - wn.iter().map(|v| v * v).sum::<f64>();
+            let (cxy, cxx, cyy) = (sxy / denom, sxx / denom, syy / denom);
+            let r = (1.0 / cxx.sqrt()) * cxy * (1.0 / cyy.sqrt());
+            Ok(Some(r * r))
+        }
+    }
 }
 
 /// Traditional R²: `1 - SS_res / SS_tot`. `None` when truth is constant.
 pub fn rsq_trad(truth: &[f64], estimate: &[f64]) -> Result<Option<f64>> {
+    rsq_trad_weighted(truth, estimate, None)
+}
+
+/// `rsq_trad` with optional case weights: `1 - SS_res / SS_tot` with weighted sums
+/// around the weighted mean of `truth`.
+pub fn rsq_trad_weighted(truth: &[f64], estimate: &[f64], w: Option<&[f64]>) -> Result<Option<f64>> {
     check_len(truth.len(), estimate.len())?;
     check_finite("truth", truth)?;
     check_finite("estimate", estimate)?;
-    let mt = truth.iter().sum::<f64>() / truth.len() as f64;
-    let ss_res: f64 = truth.iter().zip(estimate).map(|(t, e)| (t - e) * (t - e)).sum();
-    let ss_tot: f64 = truth.iter().map(|t| (t - mt) * (t - mt)).sum();
+    check_weights(truth.len(), w)?;
+    let mt = yardstick_mean(truth, w);
+    let res: Vec<f64> = truth
+        .iter()
+        .zip(estimate)
+        .map(|(t, e)| (t - e) * (t - e))
+        .collect();
+    let tot: Vec<f64> = truth.iter().map(|t| (t - mt) * (t - mt)).collect();
+    let ss_res = yardstick_sum(&res, w);
+    let ss_tot = yardstick_sum(&tot, w);
     if ss_tot == 0.0 {
         return Ok(None);
     }
@@ -154,23 +249,34 @@ pub fn recall(truth: &[u32], estimate: &[u32], event: u32) -> Result<Option<f64>
 /// `prob_event` is the probability of `event` and probabilities are clamped to
 /// `[eps, 1 - eps]` with `eps = f64::EPSILON` (verified in `mn_log_loss_multiclass`).
 pub fn mn_log_loss(truth: &[u32], prob_event: &[f64], event: u32) -> Result<Option<f64>> {
+    mn_log_loss_weighted(truth, prob_event, event, None)
+}
+
+/// `mn_log_loss` with optional case weights (`weighted.mean` of the row losses).
+pub fn mn_log_loss_weighted(
+    truth: &[u32],
+    prob_event: &[f64],
+    event: u32,
+    w: Option<&[f64]>,
+) -> Result<Option<f64>> {
     check_len(truth.len(), prob_event.len())?;
     check_finite("prob_event", prob_event)?;
+    check_weights(truth.len(), w)?;
     if let Some(i) = prob_event.iter().position(|p| *p < 0.0 || *p > 1.0) {
         return Err(Error::InvalidValue(format!(
             "probability out of [0, 1] at row {i}"
         )));
     }
     let eps = f64::EPSILON;
-    let total: f64 = truth
+    let loss: Vec<f64> = truth
         .iter()
         .zip(prob_event)
         .map(|(t, p)| {
             let p_truth = if *t == event { *p } else { 1.0 - *p };
             -p_truth.clamp(eps, 1.0 - eps).ln()
         })
-        .sum();
-    Ok(Some(total / truth.len() as f64))
+        .collect();
+    Ok(Some(yardstick_mean(&loss, w)))
 }
 
 /// Whether larger values are better.
@@ -303,12 +409,25 @@ impl Metric {
     /// use `macro`, `roc_auc` uses `hand_till`, `pr_auc`/`average_precision` use `macro`,
     /// and `kap`/`mcc`/`brier_class`/`mn_log_loss`/`accuracy` use their multiclass forms.
     pub fn compute(self, truth: &Outcome, pred: &Prediction) -> Result<Option<f64>> {
+        self.compute_weighted(truth, pred, None)
+    }
+
+    /// [`compute`](Self::compute) with optional case weights, as yardstick's
+    /// `case_weights`: weighted means and sums, a weighted confusion table, weighted
+    /// threshold curves; the multiclass `roc_auc` default becomes `macro`, since
+    /// `hand_till` cannot take weights.
+    pub fn compute_weighted(
+        self,
+        truth: &Outcome,
+        pred: &Prediction,
+        w: Option<&[f64]>,
+    ) -> Result<Option<f64>> {
         match (truth, pred) {
             (Outcome::Numeric(t), Prediction::Numeric(e)) => match self {
-                Metric::Rmse => rmse(t, e),
-                Metric::Mae => mae(t, e),
-                Metric::Rsq => rsq(t, e),
-                Metric::RsqTrad => rsq_trad(t, e),
+                Metric::Rmse => rmse_weighted(t, e, w),
+                Metric::Mae => mae_weighted(t, e, w),
+                Metric::Rsq => rsq_weighted(t, e, w),
+                Metric::RsqTrad => rsq_trad_weighted(t, e, w),
                 _ => Err(self.not_applicable()),
             },
             (
@@ -340,25 +459,31 @@ impl Metric {
                     if k == 2 {
                         let pe = p.column(0);
                         return match self {
-                            Metric::MnLogLoss => mn_log_loss(t, pe, 0),
-                            Metric::RocAuc => roc_auc(t, pe, 0),
-                            Metric::PrAuc => pr_auc(t, pe, 0),
-                            Metric::AveragePrecision => average_precision(t, pe, 0),
-                            Metric::BrierClass => brier_class(t, pe, 0),
+                            Metric::MnLogLoss => mn_log_loss_weighted(t, pe, 0, w),
+                            Metric::RocAuc => roc_auc_weighted(t, pe, 0, w),
+                            Metric::PrAuc => pr_auc_weighted(t, pe, 0, w),
+                            Metric::AveragePrecision => average_precision_weighted(t, pe, 0, w),
+                            Metric::BrierClass => brier_class_weighted(t, pe, 0, w),
                             _ => unreachable!(),
                         };
                     }
+                    // finalize_estimator_roc_auc: hand_till without weights, macro with
+                    let roc_est = if w.is_some() {
+                        Estimator::Macro
+                    } else {
+                        Estimator::HandTill
+                    };
                     return match self {
-                        Metric::MnLogLoss => mn_log_loss_multiclass(t, p),
-                        Metric::RocAuc => roc_auc_multiclass(t, p, Estimator::HandTill),
-                        Metric::PrAuc => pr_auc_multiclass(t, p, est),
-                        Metric::AveragePrecision => average_precision_multiclass(t, p, est),
-                        Metric::BrierClass => brier_class_multiclass(t, p),
+                        Metric::MnLogLoss => mn_log_loss_multiclass_weighted(t, p, w),
+                        Metric::RocAuc => roc_auc_multiclass_weighted(t, p, roc_est, w),
+                        Metric::PrAuc => pr_auc_multiclass_weighted(t, p, est, w),
+                        Metric::AveragePrecision => average_precision_multiclass_weighted(t, p, est, w),
+                        Metric::BrierClass => brier_class_multiclass_weighted(t, p, w),
                         _ => unreachable!(),
                     };
                 }
                 check_len(t.len(), e.len())?;
-                let cm = ConfusionMatrix::from_codes(t, e, levels)?;
+                let cm = ConfusionMatrix::from_codes_weighted(t, e, levels, w)?;
                 match self {
                     Metric::Accuracy => Ok(cm.accuracy()),
                     Metric::Precision => cm.precision(est),
@@ -431,12 +556,22 @@ impl MetricSet {
 
     /// Evaluate every metric.
     pub fn evaluate(&self, truth: &Outcome, pred: &Prediction) -> Result<Vec<MetricValue>> {
+        self.evaluate_weighted(truth, pred, None)
+    }
+
+    /// Evaluate every metric with optional case weights.
+    pub fn evaluate_weighted(
+        &self,
+        truth: &Outcome,
+        pred: &Prediction,
+        w: Option<&[f64]>,
+    ) -> Result<Vec<MetricValue>> {
         self.0
             .iter()
             .map(|m| {
                 Ok(MetricValue {
                     name: m.name().into(),
-                    value: m.compute(truth, pred)?,
+                    value: m.compute_weighted(truth, pred, w)?,
                 })
             })
             .collect()

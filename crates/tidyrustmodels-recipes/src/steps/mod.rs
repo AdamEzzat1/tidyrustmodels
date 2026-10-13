@@ -14,7 +14,7 @@ pub use levels::{FittedLevelAdd, FittedOther, OtherObject, StepNovel, StepOther,
 pub use normalize::{FittedNormalize, StepNormalize};
 pub use select::{FittedSelect, StepSelect};
 
-use tidyrustmodels_core::{Error, FittedStep, Result};
+use tidyrustmodels_core::{Error, FittedStep, Result, Role, Schema, Table, WeightKind};
 
 /// Rebuild a built-in fitted step from its serialized `state()`.
 pub fn fitted_step_from_state(value: &serde_json::Value) -> Result<Box<dyn FittedStep>> {
@@ -94,6 +94,170 @@ pub(crate) fn median_valid(values: &[f64], valid: Option<&[bool]>) -> Option<f64
     } else {
         (v[n / 2 - 1] + v[n / 2]) / 2.0
     })
+}
+
+// ---------------------------------------------------------------------------------
+// Case weights (recipes 1.3.2: `get_case_weights()` + `are_weights_used(unsupervised =
+// TRUE)`): unsupervised steps use *frequency* weights only; importance weights are
+// ignored by every step and only reach the model.
+// ---------------------------------------------------------------------------------
+
+/// The frequency case weights a step may use: the values of the column with role
+/// `case_weights` when its kind is frequency, else `None`.
+pub(crate) fn step_weights<'a>(training: &'a Table, schema: &Schema) -> Result<Option<&'a [f64]>> {
+    let mut found: Option<(&str, WeightKind)> = None;
+    for f in &schema.fields {
+        if let Role::CaseWeights(kind) = f.role {
+            if found.is_some() {
+                return Err(Error::InvalidArgument(
+                    "recipes: more than one column has the `case_weights` role".into(),
+                ));
+            }
+            found = Some((f.name.as_str(), kind));
+        }
+    }
+    match found {
+        Some((name, WeightKind::Frequency)) => {
+            let col = training.column(name).ok_or_else(|| {
+                Error::SchemaMismatch(format!("case weights column `{name}` not in training data"))
+            })?;
+            let v = col.as_numeric().ok_or_else(|| {
+                Error::InvalidValue(format!(
+                    "`{name}` has a `case_weights` role and should be numeric"
+                ))
+            })?;
+            if col.n_missing() > 0 || v.iter().any(|w| !w.is_finite() || *w < 0.0) {
+                return Err(Error::InvalidValue(format!(
+                    "case weights column `{name}` must be finite and non-negative with no missing values"
+                )));
+            }
+            Ok(Some(v))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// `recipes:::wt_calcs(statistic = "mean" | "var")` on one column: rows with a missing
+/// value are dropped (`vec_detect_complete`), then `stats::cov.wt(x, wt)` with the
+/// weights normalised to sum 1: centre `sum(wt * x)`, unbiased variance
+/// `sum(wt * (x - centre)^2) / (1 - sum(wt^2))`. Errors when the weights are all zero,
+/// as `cov.wt` does.
+pub(crate) fn cov_wt_valid(values: &[f64], valid: Option<&[bool]>, w: &[f64]) -> Result<Option<(f64, f64)>> {
+    let rows: Vec<usize> = (0..values.len())
+        .filter(|i| valid.is_none_or(|m| m[*i]))
+        .collect();
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    let s: f64 = rows.iter().map(|&i| w[i]).sum();
+    if s == 0.0 {
+        return Err(Error::InvalidValue(
+            "weights must be non-negative and not all zero".into(),
+        ));
+    }
+    let wt: Vec<f64> = rows.iter().map(|&i| w[i] / s).collect();
+    let center: f64 = rows.iter().zip(&wt).map(|(&i, wi)| wi * values[i]).sum();
+    let ss: f64 = rows
+        .iter()
+        .zip(&wt)
+        .map(|(&i, wi)| {
+            let d = wi.sqrt() * (values[i] - center);
+            d * d
+        })
+        .sum();
+    let denom = 1.0 - wt.iter().map(|v| v * v).sum::<f64>();
+    Ok(Some((center, ss / denom)))
+}
+
+/// `recipes:::weighted_median_impl` over the complete rows: sort by value, take the
+/// first value whose cumulative weight share exceeds one half.
+pub(crate) fn weighted_median_valid(
+    values: &[f64],
+    valid: Option<&[bool]>,
+    w: &[f64],
+) -> Result<Option<f64>> {
+    let mut rows: Vec<usize> = (0..values.len())
+        .filter(|i| valid.is_none_or(|m| m[*i]))
+        .collect();
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    // `order(x)`: stable radix order on the values
+    rows.sort_by(|a, b| values[*a].partial_cmp(&values[*b]).expect("finite values"));
+    let total: f64 = rows.iter().map(|&i| w[i]).sum();
+    if total == 0.0 {
+        return Err(Error::InvalidValue(
+            "weights must be non-negative and not all zero".into(),
+        ));
+    }
+    let mut cum = 0.0;
+    for &i in &rows {
+        cum += w[i];
+        if cum / total > 0.5 {
+            return Ok(Some(values[i]));
+        }
+    }
+    Ok(Some(values[*rows.last().expect("non-empty")]))
+}
+
+/// `recipes:::wt_calcs(statistic = "cor")`: listwise-complete rows over all columns,
+/// then `cov.wt(cor = TRUE)`. Entries whose variance is zero come out undefined.
+pub(crate) fn weighted_cor_matrix(cols: &[(&[f64], Option<&[bool]>)], w: &[f64]) -> Result<Vec<Option<f64>>> {
+    let p = cols.len();
+    let n = cols.first().map(|c| c.0.len()).unwrap_or(0);
+    let rows: Vec<usize> = (0..n)
+        .filter(|i| cols.iter().all(|(_, v)| v.is_none_or(|m| m[*i])))
+        .collect();
+    let s: f64 = rows.iter().map(|&i| w[i]).sum();
+    if rows.is_empty() || s == 0.0 {
+        return Err(Error::InvalidValue(
+            "weights must be non-negative and not all zero".into(),
+        ));
+    }
+    let wt: Vec<f64> = rows.iter().map(|&i| w[i] / s).collect();
+    let denom = 1.0 - wt.iter().map(|v| v * v).sum::<f64>();
+    let centred: Vec<Vec<f64>> = cols
+        .iter()
+        .map(|(v, _)| {
+            let c: f64 = rows.iter().zip(&wt).map(|(&i, wi)| wi * v[i]).sum();
+            rows.iter()
+                .zip(&wt)
+                .map(|(&i, wi)| wi.sqrt() * (v[i] - c))
+                .collect()
+        })
+        .collect();
+    let mut cov = vec![0.0; p * p];
+    for i in 0..p {
+        for j in 0..=i {
+            let c = centred[i]
+                .iter()
+                .zip(&centred[j])
+                .map(|(a, b)| a * b)
+                .sum::<f64>()
+                / denom;
+            cov[i * p + j] = c;
+            cov[j * p + i] = c;
+        }
+    }
+    let is: Vec<f64> = (0..p).map(|i| 1.0 / cov[i * p + i].sqrt()).collect();
+    // `Is * cov * rep(Is, each = p)`, computed once per pair and mirrored so the matrix
+    // is exactly symmetric (R's elementwise product can differ by one ulp between
+    // (i, j) and (j, i), which would decide `corr_filter`'s tie-break by round-off)
+    let mut out = vec![None; p * p];
+    for i in 0..p {
+        for j in 0..i {
+            let r = is[i] * cov[i * p + j] * is[j];
+            let v = r.is_finite().then_some(r);
+            out[i * p + j] = v;
+            out[j * p + i] = v;
+        }
+        // cov.wt leaves the diagonal as `Is_i * cov_ii * Is_i`, i.e. one up to round-off
+        // (equal for every column in R's arithmetic on the reference task); the exact
+        // one removes a dependency of `corr_filter`'s tie-break (`colMeans(abs(x))`)
+        // on the last bit of a different summation order
+        out[i * p + i] = Some(1.0);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

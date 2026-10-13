@@ -39,17 +39,30 @@ pub struct ThresholdCurve {
 /// `binary_threshold_curve`: sort by estimate decreasing (stable), cumulate events
 /// and non-events, and keep the values at the last row of each tie group.
 pub fn binary_threshold_curve(is_event: &[bool], estimate: &[f64]) -> ThresholdCurve {
-    let mut idx: Vec<usize> = (0..estimate.len()).collect();
+    binary_threshold_curve_weighted(is_event, estimate, None)
+}
+
+/// `binary_threshold_curve` with case weights: rows of zero weight are dropped and
+/// the cumulative counts become cumulative weights.
+pub fn binary_threshold_curve_weighted(
+    is_event: &[bool],
+    estimate: &[f64],
+    w: Option<&[f64]>,
+) -> ThresholdCurve {
+    let mut idx: Vec<usize> = (0..estimate.len())
+        .filter(|i| w.is_none_or(|w| w[*i] != 0.0))
+        .collect();
     // R: order(estimate, decreasing = TRUE); ties keep their original order, which
     // does not affect the per-group cumulative sums used below.
     idx.sort_by(|a, b| estimate[*b].partial_cmp(&estimate[*a]).unwrap());
     let (mut threshold, mut tp, mut fp) = (Vec::new(), Vec::new(), Vec::new());
     let (mut ctp, mut cfp) = (0.0, 0.0);
     for (pos, &i) in idx.iter().enumerate() {
+        let wi = w.map_or(1.0, |w| w[i]);
         if is_event[i] {
-            ctp += 1.0;
+            ctp += wi;
         } else {
-            cfp += 1.0;
+            cfp += wi;
         }
         let last_of_group = pos + 1 == idx.len() || estimate[idx[pos + 1]] != estimate[i];
         if last_of_group {
@@ -100,6 +113,16 @@ fn event_flags(truth: &[u32], event: u32) -> (Vec<bool>, usize, usize) {
 
 /// `roc_curve_binary`. Errors when truth has no event or no control, as R does.
 pub fn roc_curve(truth: &[u32], prob_event: &[f64], event: u32) -> Result<RocCurve> {
+    roc_curve_weighted(truth, prob_event, event, None)
+}
+
+/// `roc_curve` with optional case weights.
+pub fn roc_curve_weighted(
+    truth: &[u32],
+    prob_event: &[f64],
+    event: u32,
+    w: Option<&[f64]>,
+) -> Result<RocCurve> {
     check_prob(truth.len(), prob_event)?;
     let (flags, n_event, n_control) = event_flags(truth, event);
     if n_event == 0 {
@@ -112,7 +135,7 @@ pub fn roc_curve(truth: &[u32], prob_event: &[f64], event: u32) -> Result<RocCur
             "no control observations were detected in truth".into(),
         ));
     }
-    let c = binary_threshold_curve(&flags, prob_event);
+    let c = binary_threshold_curve_weighted(&flags, prob_event, w);
     let tp_last = c.tp[c.tp.len() - 1];
     let fp_last = c.fp[c.fp.len() - 1];
     let m = c.threshold.len();
@@ -140,12 +163,22 @@ pub fn roc_curve(truth: &[u32], prob_event: &[f64], event: u32) -> Result<RocCur
 /// `roc_auc` (binary, event first): trapezoid over the ROC curve. `None` when truth
 /// has no event or no control (yardstick warns and returns `NA`).
 pub fn roc_auc(truth: &[u32], prob_event: &[f64], event: u32) -> Result<Option<f64>> {
+    roc_auc_weighted(truth, prob_event, event, None)
+}
+
+/// `roc_auc` with optional case weights.
+pub fn roc_auc_weighted(
+    truth: &[u32],
+    prob_event: &[f64],
+    event: u32,
+    w: Option<&[f64]>,
+) -> Result<Option<f64>> {
     check_prob(truth.len(), prob_event)?;
     let (_, n_event, n_control) = event_flags(truth, event);
     if n_event == 0 || n_control == 0 {
         return Ok(None);
     }
-    let c = roc_curve(truth, prob_event, event)?;
+    let c = roc_curve_weighted(truth, prob_event, event, w)?;
     Ok(Some(trapezoid_auc(&c.specificity, &c.sensitivity)?))
 }
 
@@ -163,12 +196,22 @@ pub struct PrCurve {
 
 /// `pr_curve_binary`. With no events the recall is `0/0` in R; here it is an error.
 pub fn pr_curve(truth: &[u32], prob_event: &[f64], event: u32) -> Result<PrCurve> {
+    pr_curve_weighted(truth, prob_event, event, None)
+}
+
+/// `pr_curve` with optional case weights.
+pub fn pr_curve_weighted(
+    truth: &[u32],
+    prob_event: &[f64],
+    event: u32,
+    w: Option<&[f64]>,
+) -> Result<PrCurve> {
     check_prob(truth.len(), prob_event)?;
     let (flags, n_event, _) = event_flags(truth, event);
     if n_event == 0 {
         return Err(Error::InvalidValue("there are 0 event cases in truth".into()));
     }
-    let c = binary_threshold_curve(&flags, prob_event);
+    let c = binary_threshold_curve_weighted(&flags, prob_event, w);
     let tp_last = c.tp[c.tp.len() - 1];
     let m = c.threshold.len();
     let mut threshold = Vec::with_capacity(m + 1);
@@ -192,22 +235,42 @@ pub fn pr_curve(truth: &[u32], prob_event: &[f64], event: u32) -> Result<PrCurve
 /// `pr_auc` (binary, event first): trapezoid over the PR curve. `None` when truth has
 /// no event (R: `NaN`).
 pub fn pr_auc(truth: &[u32], prob_event: &[f64], event: u32) -> Result<Option<f64>> {
+    pr_auc_weighted(truth, prob_event, event, None)
+}
+
+/// `pr_auc` with optional case weights.
+pub fn pr_auc_weighted(
+    truth: &[u32],
+    prob_event: &[f64],
+    event: u32,
+    w: Option<&[f64]>,
+) -> Result<Option<f64>> {
     check_prob(truth.len(), prob_event)?;
     if event_flags(truth, event).1 == 0 {
         return Ok(None);
     }
-    let c = pr_curve(truth, prob_event, event)?;
+    let c = pr_curve_weighted(truth, prob_event, event, w)?;
     Ok(Some(trapezoid_auc(&c.recall, &c.precision)?))
 }
 
 /// `average_precision` (binary, event first): `sum(diff(recall) * precision[-1])`.
 /// `None` when truth has no event (R: `NaN`).
 pub fn average_precision(truth: &[u32], prob_event: &[f64], event: u32) -> Result<Option<f64>> {
+    average_precision_weighted(truth, prob_event, event, None)
+}
+
+/// `average_precision` with optional case weights.
+pub fn average_precision_weighted(
+    truth: &[u32],
+    prob_event: &[f64],
+    event: u32,
+    w: Option<&[f64]>,
+) -> Result<Option<f64>> {
     check_prob(truth.len(), prob_event)?;
     if event_flags(truth, event).1 == 0 {
         return Ok(None);
     }
-    let c = pr_curve(truth, prob_event, event)?;
+    let c = pr_curve_weighted(truth, prob_event, event, w)?;
     let mut s = 0.0;
     for i in 1..c.recall.len() {
         s += (c.recall[i] - c.recall[i - 1]) * c.precision[i];
@@ -219,17 +282,40 @@ pub fn average_precision(truth: &[u32], prob_event: &[f64], event: u32) -> Resul
 /// `(p, 1 - p)` matrix, i.e. `mean((y - p)^2 + ((1 - y) - (1 - p))^2) / 2`, written in
 /// R's order of operations (uniform softmax case weights).
 pub fn brier_class(truth: &[u32], prob_event: &[f64], event: u32) -> Result<Option<f64>> {
+    brier_class_weighted(truth, prob_event, event, None)
+}
+
+/// `brier_ind`'s weighting: the case weights are passed through a softmax
+/// (`exp(w - max(w)) / sum(exp(w - max(w)))`) before weighting the squared residuals.
+fn brier_weights(n: usize, w: Option<&[f64]>) -> Vec<f64> {
+    match w {
+        None => vec![1.0 / n as f64; n],
+        Some(w) => {
+            let mx = w.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let e: Vec<f64> = w.iter().map(|v| (v - mx).exp()).collect();
+            let s: f64 = e.iter().sum();
+            e.iter().map(|v| v / s).collect()
+        }
+    }
+}
+
+/// `brier_class` with optional case weights.
+pub fn brier_class_weighted(
+    truth: &[u32],
+    prob_event: &[f64],
+    event: u32,
+    w: Option<&[f64]>,
+) -> Result<Option<f64>> {
     check_prob(truth.len(), prob_event)?;
     check_unit(prob_event)?;
-    let n = truth.len() as f64;
-    let w = 1.0 / n; // exp(0) / sum(exp(0))
+    let bw = brier_weights(truth.len(), w);
     let mut s = 0.0;
-    for (t, p) in truth.iter().zip(prob_event) {
+    for ((t, p), wi) in truth.iter().zip(prob_event).zip(&bw) {
         let y = if *t == event { 1.0 } else { 0.0 };
         let r = (y - p) * (y - p) + ((1.0 - y) - (1.0 - p)) * ((1.0 - y) - (1.0 - p));
-        s += r * w;
+        s += r * wi;
     }
-    Ok(Some(s / (2.0 * (w * n))))
+    Ok(Some(s / (2.0 * bw.iter().sum::<f64>())))
 }
 
 fn check_unit(p: &[f64]) -> Result<()> {
@@ -270,19 +356,19 @@ fn check_matrix(truth: &[u32], probs: &DesignMatrix, n_levels: usize) -> Result<
 }
 
 /// Truth frequencies per level (`yardstick_truth_table`).
-fn truth_table(truth: &[u32], n_levels: usize) -> Vec<f64> {
+fn truth_table(truth: &[u32], n_levels: usize, w: Option<&[f64]>) -> Vec<f64> {
     let mut t = vec![0.0; n_levels];
-    for c in truth {
-        t[*c as usize] += 1.0;
+    for (i, c) in truth.iter().enumerate() {
+        t[*c as usize] += w.map_or(1.0, |w| w[i]);
     }
     t
 }
 
-fn one_vs_all_weights(truth: &[u32], n_levels: usize, est: Estimator) -> Result<Vec<f64>> {
+fn one_vs_all_weights(truth: &[u32], n_levels: usize, est: Estimator, w: Option<&[f64]>) -> Result<Vec<f64>> {
     Ok(match est {
         Estimator::Macro => vec![1.0 / n_levels as f64; n_levels],
         Estimator::MacroWeighted => {
-            let tt = truth_table(truth, n_levels);
+            let tt = truth_table(truth, n_levels, w);
             let s: f64 = tt.iter().sum();
             tt.iter().map(|c| c / s).collect()
         }
@@ -296,7 +382,7 @@ fn one_vs_all_weights(truth: &[u32], n_levels: usize, est: Estimator) -> Result<
 }
 
 /// A binary probability metric `(truth, prob_event, event)`.
-type BinaryProbMetric = fn(&[u32], &[f64], u32) -> Result<Option<f64>>;
+type BinaryProbMetric = fn(&[u32], &[f64], u32, Option<&[f64]>) -> Result<Option<f64>>;
 
 /// `one_vs_all_impl` + `weighted.mean(out_vec, w)` (no `na.rm`): apply a binary
 /// probability metric per level with that level as the event and average.
@@ -306,26 +392,43 @@ fn one_vs_all(
     n_levels: usize,
     est: Estimator,
     f: BinaryProbMetric,
+    w: Option<&[f64]>,
 ) -> Result<Option<f64>> {
     check_matrix(truth, probs, n_levels)?;
-    let w = one_vs_all_weights(truth, n_levels, est)?;
+    let lw = one_vs_all_weights(truth, n_levels, est, w)?;
     let mut vals = Vec::with_capacity(n_levels);
     for lvl in 0..n_levels {
-        vals.push(f(truth, probs.column(lvl), lvl as u32)?);
+        vals.push(f(truth, probs.column(lvl), lvl as u32, w)?);
     }
-    Ok(weighted_mean(&vals, &w, false))
+    Ok(weighted_mean(&vals, &lw, false))
 }
 
 /// Multiclass `roc_auc`: `hand_till` (default), `macro` or `macro_weighted`. For
 /// `hand_till`, levels absent from truth are ignored (yardstick warns); with fewer
 /// than two remaining levels the result is `None`.
 pub fn roc_auc_multiclass(truth: &[u32], probs: &DesignMatrix, est: Estimator) -> Result<Option<f64>> {
+    roc_auc_multiclass_weighted(truth, probs, est, None)
+}
+
+/// `roc_auc_multiclass` with optional case weights; `hand_till` cannot take weights
+/// ("Can't specify both `estimator = 'hand_till'` and `case_weights`").
+pub fn roc_auc_multiclass_weighted(
+    truth: &[u32],
+    probs: &DesignMatrix,
+    est: Estimator,
+    w: Option<&[f64]>,
+) -> Result<Option<f64>> {
     let k = probs.ncols();
     check_matrix(truth, probs, k)?;
     if est != Estimator::HandTill {
-        return one_vs_all(truth, probs, k, est, roc_auc);
+        return one_vs_all(truth, probs, k, est, roc_auc_weighted, w);
     }
-    let present: Vec<usize> = truth_table(truth, k)
+    if w.is_some() {
+        return Err(Error::InvalidArgument(
+            "Can't specify both `estimator = 'hand_till'` and `case_weights`.".into(),
+        ));
+    }
+    let present: Vec<usize> = truth_table(truth, k, None)
         .iter()
         .enumerate()
         .filter(|(_, c)| **c > 0.0)
@@ -364,7 +467,17 @@ fn roc_auc_subset(lvl1: usize, lvl2: usize, truth: &[u32], probs: &DesignMatrix)
 
 /// Multiclass `pr_auc`: `macro` (default) or `macro_weighted` one-vs-all average.
 pub fn pr_auc_multiclass(truth: &[u32], probs: &DesignMatrix, est: Estimator) -> Result<Option<f64>> {
-    one_vs_all(truth, probs, probs.ncols(), est, pr_auc)
+    pr_auc_multiclass_weighted(truth, probs, est, None)
+}
+
+/// `pr_auc_multiclass` with optional case weights.
+pub fn pr_auc_multiclass_weighted(
+    truth: &[u32],
+    probs: &DesignMatrix,
+    est: Estimator,
+    w: Option<&[f64]>,
+) -> Result<Option<f64>> {
+    one_vs_all(truth, probs, probs.ncols(), est, pr_auc_weighted, w)
 }
 
 /// Multiclass `average_precision`: `macro` (default) or `macro_weighted`.
@@ -373,43 +486,71 @@ pub fn average_precision_multiclass(
     probs: &DesignMatrix,
     est: Estimator,
 ) -> Result<Option<f64>> {
-    one_vs_all(truth, probs, probs.ncols(), est, average_precision)
+    average_precision_multiclass_weighted(truth, probs, est, None)
+}
+
+/// `average_precision_multiclass` with optional case weights.
+pub fn average_precision_multiclass_weighted(
+    truth: &[u32],
+    probs: &DesignMatrix,
+    est: Estimator,
+    w: Option<&[f64]>,
+) -> Result<Option<f64>> {
+    one_vs_all(truth, probs, probs.ncols(), est, average_precision_weighted, w)
 }
 
 /// Multiclass `brier_class`: `mean(rowSums((onehot - probs)^2)) / 2` in R's order of
 /// operations.
 pub fn brier_class_multiclass(truth: &[u32], probs: &DesignMatrix) -> Result<Option<f64>> {
+    brier_class_multiclass_weighted(truth, probs, None)
+}
+
+/// `brier_class_multiclass` with optional case weights (softmax-normalised as in
+/// `brier_ind`).
+pub fn brier_class_multiclass_weighted(
+    truth: &[u32],
+    probs: &DesignMatrix,
+    w: Option<&[f64]>,
+) -> Result<Option<f64>> {
     let k = probs.ncols();
     check_matrix(truth, probs, k)?;
     check_unit(probs.data())?;
-    let n = truth.len() as f64;
-    let w = 1.0 / n;
+    let bw = brier_weights(truth.len(), w);
     let mut s = 0.0;
-    for (i, t) in truth.iter().enumerate() {
+    for ((i, t), wi) in truth.iter().enumerate().zip(&bw) {
         let mut r = 0.0;
         for j in 0..k {
             let y = if *t as usize == j { 1.0 } else { 0.0 };
             let d = y - probs.get(i, j);
             r += d * d;
         }
-        s += r * w;
+        s += r * wi;
     }
-    Ok(Some(s / (2.0 * (w * n))))
+    Ok(Some(s / (2.0 * bw.iter().sum::<f64>())))
 }
 
 /// Multiclass `mn_log_loss`: `-mean(log(p[truth]))` with `p` clamped to
 /// `[eps, 1 - eps]`, `eps = .Machine$double.eps`.
 pub fn mn_log_loss_multiclass(truth: &[u32], probs: &DesignMatrix) -> Result<Option<f64>> {
+    mn_log_loss_multiclass_weighted(truth, probs, None)
+}
+
+/// `mn_log_loss_multiclass` with optional case weights.
+pub fn mn_log_loss_multiclass_weighted(
+    truth: &[u32],
+    probs: &DesignMatrix,
+    w: Option<&[f64]>,
+) -> Result<Option<f64>> {
     let k = probs.ncols();
     check_matrix(truth, probs, k)?;
     check_unit(probs.data())?;
     let eps = f64::EPSILON;
-    let total: f64 = truth
+    let loss: Vec<f64> = truth
         .iter()
         .enumerate()
         .map(|(i, t)| -probs.get(i, *t as usize).clamp(eps, 1.0 - eps).ln())
-        .sum();
-    Ok(Some(total / truth.len() as f64))
+        .collect();
+    Ok(Some(crate::yardstick_mean(&loss, w)))
 }
 
 #[cfg(test)]

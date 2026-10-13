@@ -62,6 +62,8 @@ pub enum Capability {
     ClassProbabilities,
     /// Exposes named linear coefficients.
     Coefficients,
+    /// Accepts case weights (`fit_weighted`), as parsnip's `case_weights_allowed()`.
+    CaseWeights,
 }
 
 /// Facts about the backend implementing a model.
@@ -97,6 +99,32 @@ pub trait ModelSpec: Debug + Send + Sync {
     /// Fit on a design matrix and outcome. Must validate shapes and outcome kind
     /// before delegating to a backend.
     fn fit(&self, x: &DesignMatrix, y: &Outcome) -> Result<Box<dyn FittedModel>>;
+
+    /// Fit with case weights. Default: the engine does not take them (parsnip's
+    /// "Case weights are not enabled by the underlying model implementation.").
+    fn fit_weighted(
+        &self,
+        _x: &DesignMatrix,
+        _y: &Outcome,
+        _weights: &crate::weights::CaseWeights,
+    ) -> Result<Box<dyn FittedModel>> {
+        Err(Error::Unsupported(
+            "Case weights are not enabled by the underlying model implementation.".into(),
+        ))
+    }
+
+    /// `fit` or `fit_weighted` depending on whether weights are given.
+    fn fit_maybe_weighted(
+        &self,
+        x: &DesignMatrix,
+        y: &Outcome,
+        weights: Option<&crate::weights::CaseWeights>,
+    ) -> Result<Box<dyn FittedModel>> {
+        match weights {
+            Some(w) => self.fit_weighted(x, y, w),
+            None => self.fit(x, y),
+        }
+    }
 
     /// Names of parameters that `with_param` accepts (used by tuning).
     fn tunable(&self) -> &'static [&'static str] {

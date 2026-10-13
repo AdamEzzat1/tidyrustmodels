@@ -22,10 +22,18 @@ TASKS = json.loads((ROOT / "reference" / "tasks.json").read_text())["tasks"]
 RUST_OUT = ROOT / "target" / "rust_outputs"
 
 
-def _read_csv_table(path: Path, outcome: str, predictors: list[str]) -> trm.Table:
+def _read_csv_table(path: Path, outcome: str, predictors: list[str], extra: list[str] = ()) -> trm.Table:
     pd = pytest.importorskip("pandas")
     df = pd.read_csv(path, keep_default_na=False, na_values=[""])
-    return trm.from_pandas(df[[outcome, *predictors]])
+    return trm.from_pandas(df[[outcome, *predictors, *extra]])
+
+
+def _workflow(task: dict, model) -> trm.Workflow:
+    """Workflow for a task, with its case weights (`{column, kind}`) when it has them."""
+    cw = task.get("case_weights")
+    if cw:
+        return trm.Workflow(_recipe(task), model, case_weights=cw["column"], weight_kind=cw["kind"])
+    return trm.Workflow(_recipe(task), model)
 
 
 def _recipe(task: dict) -> trm.Recipe:
@@ -75,10 +83,12 @@ def _model(task, data, engine="native"):
 
 
 def _load_task(task):
+    cw = task.get("case_weights")
     data = _read_csv_table(
         ROOT / "reference" / "fixtures" / "datasets" / f"{task['dataset']}.csv",
         task["outcome"],
         task["predictors"],
+        [cw["column"]] if cw else [],
     )
     split = json.loads((ROOT / "reference" / "fixtures" / "splits" / f"{task['id']}.json").read_text())
     fx = json.loads((ROOT / "reference" / "fixtures" / "r" / f"{task['id']}.json").read_text())
@@ -93,6 +103,8 @@ def test_python_matches_rust_bitwise(task, engine):
         pytest.skip(f"{task['model']} is implemented on the native engine only")
     if task.get("model") == "rand_forest":
         pytest.skip("rand_forest is stochastic; the Rust suite verifies it statistically (level 5)")
+    if task.get("case_weights") and engine != "native":
+        pytest.skip("case weights are a native-engine feature")
     rust_file = RUST_OUT / f"{task['id']}_{engine}.json"
     if not rust_file.exists():
         pytest.skip("run `cargo test -p tidyrustmodels --test differential` first")
@@ -101,7 +113,7 @@ def test_python_matches_rust_bitwise(task, engine):
     train = data.select_rows(split["initial"]["train"])
     test = data.select_rows(split["initial"]["test"])
     model = _model(task, data, engine)
-    fitted = trm.Workflow(_recipe(task), model).fit(train)
+    fitted = _workflow(task, model).fit(train)
 
     coefs = fitted.coefficients()
     if rust["class_coefficients"] is not None:
@@ -123,7 +135,7 @@ def test_python_matches_rust_bitwise(task, engine):
         assert fitted.predict(test) == rust["class_test"]
 
     folds = trm.Folds.from_assignments(split["vfold"]["fold_of_row"])
-    res = trm.Workflow(_recipe(task), model).fit_resamples(data, folds, task["metrics"], threads=4)
+    res = _workflow(task, model).fit_resamples(data, folds, task["metrics"], threads=4)
     for ours, theirs in zip(res["per_fold"], rust["per_fold"]):
         assert ours["id"] == theirs["id"]
         for m in task["metrics"]:
@@ -137,7 +149,7 @@ def test_python_matches_r_within_tolerance(task):
     train = data.select_rows(split["initial"]["train"])
     test = data.select_rows(split["initial"]["test"])
     model = _model(task, data)
-    fitted = trm.Workflow(_recipe(task), model).fit(train)
+    fitted = _workflow(task, model).fit(train)
     assert fitted.feature_names() == fx["prep"]["predictor_names"]
     coefs = fitted.coefficients()
     multi = "coefficient_levels" in fx["fit"] and fx["fit"]["coefficient_levels"] is not None

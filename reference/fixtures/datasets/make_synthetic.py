@@ -1,4 +1,4 @@
-"""Generate the two small synthetic datasets used by the differential suite.
+"""Generate the small synthetic datasets used by the differential suite.
 
 Deterministic given the seed and CPython's `random` module (outputs are committed, so
 regeneration is only needed when the design changes). Run from the repo root:
@@ -11,6 +11,19 @@ import os
 import random
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def add_weights(rows, seed):
+    """Append two case-weight columns, drawn from their own generator so the existing
+    columns are unchanged: `w_freq`, frequency weights in 0..4 (10% zeros), and
+    `w_imp`, importance weights in [0.2, 2.5] with 5% zeros."""
+    rng = random.Random(seed)
+    for r in rows:
+        u = rng.random()
+        w_freq = 0 if u < 0.10 else 1 if u < 0.45 else 2 if u < 0.75 else 3 if u < 0.90 else 4
+        w_imp = 0.0 if rng.random() < 0.05 else round(rng.uniform(0.2, 2.5), 3)
+        r.extend([w_freq, w_imp])
+    return rows
 
 
 def write_csv(name, header, rows):
@@ -38,7 +51,8 @@ def synthetic_reg_small():
     # mask 4 x3 values as missing (after y was generated from the full value)
     for i in [3, 11, 19, 30]:
         rows[i][2] = None
-    write_csv("synthetic_reg_small", ["x1", "x2", "x3", "g", "y"], rows)
+    add_weights(rows, 20261101)
+    write_csv("synthetic_reg_small", ["x1", "x2", "x3", "g", "y", "w_freq", "w_imp"], rows)
 
 
 def synthetic_clf_small():
@@ -57,7 +71,8 @@ def synthetic_clf_small():
         n_yes = sum(r[3] == "yes" for r in rows)
         if 20 <= n_yes <= 40:
             break
-    write_csv("synthetic_clf_small", ["x1", "x2", "g", "y"], rows)
+    add_weights(rows, 20261102)
+    write_csv("synthetic_clf_small", ["x1", "x2", "g", "y", "w_freq", "w_imp"], rows)
 
 
 def synthetic_multi_small():
@@ -77,7 +92,8 @@ def synthetic_multi_small():
         x3 = rng.uniform(-1.0, 1.0)
         g = "q" if rng.random() < p_q[y] else "p"
         rows.append([round(x1, 6), round(x2, 6), round(x3, 6), g, y])
-    write_csv("synthetic_multi_small", ["x1", "x2", "x3", "g", "y"], rows)
+    add_weights(rows, 20261103)
+    write_csv("synthetic_multi_small", ["x1", "x2", "x3", "g", "y", "w_freq", "w_imp"], rows)
 
 
 def synthetic_filter_reg():
@@ -110,7 +126,8 @@ def synthetic_filter_reg():
     # a few missing x1 values for the imputation step
     for i in [5, 40, 77, 120]:
         rows[i][0] = None
-    write_csv("synthetic_filter_reg", ["x1", "x2", "x3", "x4", "x5", "g", "h", "y"], rows)
+    add_weights(rows, 20261104)
+    write_csv("synthetic_filter_reg", ["x1", "x2", "x3", "x4", "x5", "g", "h", "y", "w_freq", "w_imp"], rows)
 
 
 if __name__ == "__main__":

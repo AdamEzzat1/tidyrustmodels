@@ -19,6 +19,19 @@ pub fn logistic_gradient_norm(
     coefs: &[f64],
     penalty: f64,
 ) -> f64 {
+    logistic_gradient_norm_weighted(x, y, intercept, coefs, penalty, None)
+}
+
+/// [`logistic_gradient_norm`] of the prior-weighted log-likelihood:
+/// `g_j = sum_i w_i (p_i - y_i) x_ij + penalty * beta_j`.
+pub fn logistic_gradient_norm_weighted(
+    x: &DesignMatrix,
+    y: &[u32],
+    intercept: Option<f64>,
+    coefs: &[f64],
+    penalty: f64,
+    weights: Option<&[f64]>,
+) -> f64 {
     let n = x.nrows();
     let mut resid = vec![intercept.unwrap_or(0.0); n];
     for (j, b) in coefs.iter().enumerate() {
@@ -26,8 +39,8 @@ pub fn logistic_gradient_norm(
             *r += b * v;
         }
     }
-    for (r, yi) in resid.iter_mut().zip(y) {
-        *r = sigmoid(*r) - f64::from(*yi);
+    for (i, (r, yi)) in resid.iter_mut().zip(y).enumerate() {
+        *r = (sigmoid(*r) - f64::from(*yi)) * weights.map_or(1.0, |w| w[i]);
     }
     let mut norm: f64 = if intercept.is_some() {
         resid.iter().sum::<f64>().abs()

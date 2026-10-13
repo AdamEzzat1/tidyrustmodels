@@ -5,7 +5,7 @@ use crate::backends::{self, Engine};
 use crate::fitted::FittedLinear;
 use serde::{Deserialize, Serialize};
 use tidyrustmodels_core::{
-    BackendInfo, Capability, DesignMatrix, Error, FittedModel, ModelSpec, Outcome, Result,
+    BackendInfo, Capability, CaseWeights, DesignMatrix, Error, FittedModel, ModelSpec, Outcome, Result,
 };
 
 /// Ordinary least squares, equivalent in objective to `parsnip::linear_reg()` with
@@ -55,7 +55,15 @@ impl ModelSpec for LinearRegSpec {
     }
 
     fn capabilities(&self) -> &'static [Capability] {
-        &[Capability::Regression, Capability::Coefficients]
+        if self.engine == Engine::Native {
+            &[
+                Capability::Regression,
+                Capability::Coefficients,
+                Capability::CaseWeights,
+            ]
+        } else {
+            &[Capability::Regression, Capability::Coefficients]
+        }
     }
 
     fn backend(&self) -> BackendInfo {
@@ -63,12 +71,48 @@ impl ModelSpec for LinearRegSpec {
     }
 
     fn fit(&self, x: &DesignMatrix, y: &Outcome) -> Result<Box<dyn FittedModel>> {
+        self.fit_impl(x, y, None)
+    }
+
+    /// Weighted least squares as `lm(weights = )` (`lm.wfit`): native engine only.
+    fn fit_weighted(
+        &self,
+        x: &DesignMatrix,
+        y: &Outcome,
+        weights: &CaseWeights,
+    ) -> Result<Box<dyn FittedModel>> {
+        self.fit_impl(x, y, Some(weights))
+    }
+
+    fn clone_box(&self) -> Box<dyn ModelSpec> {
+        Box::new(self.clone())
+    }
+}
+
+impl LinearRegSpec {
+    fn fit_impl(
+        &self,
+        x: &DesignMatrix,
+        y: &Outcome,
+        weights: Option<&CaseWeights>,
+    ) -> Result<Box<dyn FittedModel>> {
         let y = y
             .as_numeric()
             .ok_or_else(|| Error::Unsupported("linear_reg requires a numeric outcome".into()))?;
         validate_shapes(x, y.len(), self.intercept)?;
+        check_weights(weights, y.len())?;
         let (xr, keep, aliased) = drop_aliased(x, self.intercept)?;
-        let mut out = backends::fit_linear(self.engine, &xr, y, self.intercept)?;
+        let mut out = match weights {
+            None => backends::fit_linear(self.engine, &xr, y, self.intercept)?,
+            Some(w) => backends::fit_linear_weighted(self.engine, &xr, y, self.intercept, w.values())?,
+        };
+        if let Some(w) = weights {
+            out.diagnostics.note = Some(format!(
+                "{}; case weights ({})",
+                out.diagnostics.note.unwrap_or_default(),
+                w.kind().as_str()
+            ));
+        }
         // Constant/zero columns dropped before the fit come first, then any column the
         // backend itself judged aliased (native pivoted QR).
         let mut all_aliased = aliased;
@@ -82,9 +126,16 @@ impl ModelSpec for LinearRegSpec {
             out.diagnostics,
         )?))
     }
+}
 
-    fn clone_box(&self) -> Box<dyn ModelSpec> {
-        Box::new(self.clone())
+/// Case weights must be one per row.
+pub(crate) fn check_weights(weights: Option<&CaseWeights>, n: usize) -> Result<()> {
+    match weights {
+        Some(w) if w.len() != n => Err(Error::InvalidArgument(format!(
+            "{} case weights for {n} rows",
+            w.len()
+        ))),
+        _ => Ok(()),
     }
 }
 

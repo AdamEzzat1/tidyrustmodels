@@ -61,19 +61,52 @@ fn aliased_names(x: &DesignMatrix, intercept: bool, aliased: &[usize]) -> Vec<St
 /// OLS through the pivoted QR (`lm.fit` semantics, including which collinear column is
 /// aliased).
 pub(crate) fn fit_linear(x: &DesignMatrix, y: &[f64], intercept: bool) -> Result<FitOutput> {
+    fit_linear_weighted(x, y, intercept, None)
+}
+
+/// Weighted least squares as `lm.wfit`: rows with zero weight are dropped, the rest
+/// (design and response) are scaled by `sqrt(w)` before the same pivoted QR.
+pub(crate) fn fit_linear_weighted(
+    x: &DesignMatrix,
+    y: &[f64],
+    intercept: bool,
+    weights: Option<&[f64]>,
+) -> Result<FitOutput> {
     let (buf, p) = design(x, intercept);
-    let qr = qr::PivotedQr::decompose(buf, x.nrows(), p, 1e-7);
-    let coef = qr.solve(y);
+    let n = x.nrows();
+    let (buf, yw, n_ok) = match weights {
+        None => (buf, y.to_vec(), n),
+        Some(w) => {
+            let ok: Vec<usize> = (0..n).filter(|&i| w[i] > 0.0).collect();
+            if ok.is_empty() {
+                return Err(Error::InvalidValue("all case weights are zero".into()));
+            }
+            let mut b = Vec::with_capacity(ok.len() * p);
+            for j in 0..p {
+                b.extend(ok.iter().map(|&i| buf[j * n + i] * w[i].sqrt()));
+            }
+            let yw = ok.iter().map(|&i| y[i] * w[i].sqrt()).collect();
+            (b, yw, ok.len())
+        }
+    };
+    let qr = qr::PivotedQr::decompose(buf, n_ok, p, 1e-7);
+    let coef = qr.solve(&yw);
     let aliased = aliased_names(x, intercept, qr.aliased());
     let (b0, coefs) = split(coef, intercept);
+    let dropped = n - n_ok;
     Ok(FitOutput {
         intercept: b0,
         coefs,
         diagnostics: FitDiagnostics {
             aliased,
             note: Some(format!(
-                "pivoted Householder QR (dqrdc2, tol 1e-7), rank {}",
-                qr.rank()
+                "pivoted Householder QR (dqrdc2, tol 1e-7), rank {}{}",
+                qr.rank(),
+                if weights.is_some() {
+                    format!("; weighted as lm.wfit ({dropped} zero-weight rows dropped)")
+                } else {
+                    String::new()
+                }
             )),
             ..Default::default()
         },
@@ -91,12 +124,23 @@ pub(crate) struct NativeLogisticOptions {
 
 /// Logistic regression through IRLS (`glm.fit` semantics).
 pub(crate) fn fit_logistic(x: &DesignMatrix, y: &[u32], opts: NativeLogisticOptions) -> Result<FitOutput> {
+    fit_logistic_weighted(x, y, opts, None)
+}
+
+/// IRLS with prior weights (`glm.fit(weights = )`), see `irls::fit_weighted`.
+pub(crate) fn fit_logistic_weighted(
+    x: &DesignMatrix,
+    y: &[u32],
+    opts: NativeLogisticOptions,
+    weights: Option<&[f64]>,
+) -> Result<FitOutput> {
     let (buf, p) = design(x, opts.intercept);
-    let fit = irls::fit(
+    let fit = irls::fit_weighted(
         &buf,
         x.nrows(),
         p,
         y,
+        weights,
         irls::IrlsOptions {
             intercept: opts.intercept,
             penalty: opts.penalty,
@@ -120,9 +164,10 @@ pub(crate) fn fit_logistic(x: &DesignMatrix, y: &[u32], opts: NativeLogisticOpti
             warnings: fit.warnings,
             aliased,
             note: Some(format!(
-                "IRLS as glm.fit (epsilon {:e}, maxit {}){}",
+                "IRLS as glm.fit (epsilon {:e}, maxit {}){}{}",
                 opts.epsilon,
                 opts.maxit,
+                if weights.is_some() { "; prior weights" } else { "" },
                 if fit.boundary { "; stopped at boundary" } else { "" }
             )),
             ..Default::default()

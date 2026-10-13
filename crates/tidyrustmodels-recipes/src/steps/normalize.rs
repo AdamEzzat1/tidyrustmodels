@@ -1,13 +1,15 @@
 //! `step_normalize`: centre and scale numeric columns using training statistics.
 
-use super::{mean_valid, var_valid};
+use super::{cov_wt_valid, mean_valid, step_weights, var_valid};
 use crate::selector::Selector;
 use serde::{Deserialize, Serialize};
 use tidyrustmodels_core::{Column, ColumnKind, Error, FittedStep, Result, Schema, Step, Table};
 
 /// Centre by the training mean and scale by the training standard deviation
 /// (`stats::var`, n-1 denominator, missing values ignored). A zero or undefined
-/// standard deviation is replaced by 1, as recipes' `sd_check` does.
+/// standard deviation is replaced by 1, as recipes' `sd_check` does. With frequency
+/// case weights the statistics come from `stats::cov.wt` (weighted centre, unbiased
+/// weighted variance), as recipes' `averages()` / `variances()` do.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StepNormalize {
     selector: Selector,
@@ -36,6 +38,7 @@ impl Step for StepNormalize {
 
     fn prep(&self, training: &Table, schema: &Schema) -> Result<Box<dyn FittedStep>> {
         let cols = self.selector.resolve(schema)?;
+        let wts = step_weights(training, schema)?;
         let mut stats = Vec::with_capacity(cols.len());
         for name in cols {
             let col = training
@@ -46,10 +49,20 @@ impl Step for StepNormalize {
                     "step_normalize requires numeric columns; `{name}` is categorical"
                 ))
             })?;
-            let mean = mean_valid(values, col.validity()).ok_or_else(|| {
-                Error::InvalidValue(format!("column `{name}` has no non-missing training values"))
-            })?;
-            let sd = var_valid(values, col.validity()).map(f64::sqrt);
+            let (mean, sd) = match wts {
+                Some(w) => {
+                    let (m, v) = cov_wt_valid(values, col.validity(), w)?.ok_or_else(|| {
+                        Error::InvalidValue(format!("column `{name}` has no non-missing training values"))
+                    })?;
+                    (m, Some(v.sqrt()))
+                }
+                None => (
+                    mean_valid(values, col.validity()).ok_or_else(|| {
+                        Error::InvalidValue(format!("column `{name}` has no non-missing training values"))
+                    })?,
+                    var_valid(values, col.validity()).map(f64::sqrt),
+                ),
+            };
             // recipes::sd_check: sd == 0 (or NA) -> 1 with a warning.
             let sd = match sd {
                 Some(s) if s > 0.0 => s,

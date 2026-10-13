@@ -185,7 +185,11 @@ pub fn tune_grid(
             for (name, value) in p {
                 spec = spec.with_param(name, *value)?;
             }
-            Ok(Workflow::from_boxed(workflow.recipe().clone(), spec))
+            let mut wf = Workflow::from_boxed(workflow.recipe().clone(), spec);
+            if let Some((col, kind)) = workflow.case_weights_spec() {
+                wf = wf.case_weights(col, kind);
+            }
+            Ok(wf)
         })
         .collect::<Result<_>>()?;
     let jobs: Vec<(usize, usize)> = (0..candidates.len())
@@ -195,14 +199,11 @@ pub fn tune_grid(
         let split = &folds.splits[k];
         let train = data.select_rows(&split.train)?;
         let test = data.select_rows(&split.test)?;
-        let fitted = candidates[c].fit(&train)?;
-        let (x_test, y_test) = fitted.recipe().bake_matrix(&test)?;
-        let y_test =
-            y_test.ok_or_else(|| Error::SchemaMismatch("assessment rows lack the outcome".into()))?;
-        let pred = fitted.model().predict(&x_test)?;
+        // tune 2.1.0: fold fits skip workflows' sparsity toggle and use frequency
+        // case weights in the metrics (Workflow::fit_fold)
         Ok(FoldMetrics {
             id: folds.ids[k].clone(),
-            metrics: metrics.evaluate(&y_test, &pred)?,
+            metrics: candidates[c].fit_fold(&train, &test, metrics)?,
         })
     })?;
     let mut iter = fold_results.into_iter();

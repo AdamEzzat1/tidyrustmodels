@@ -52,6 +52,27 @@ VERIFICATION.md; nothing is claimed beyond those records.
   sparse path every exact zero is a missing value, as xgboost sees it from a
   `dgCMatrix`. Five reference tasks: trees, margins and predictions match xgboost's
   model JSON (details in VERIFICATION.md Phase 8f). Python: `BoostTree`.
+- Case weights (ADR-0012): `core::CaseWeights` / `WeightKind::{Frequency, Importance}`,
+  `Role::CaseWeights`, `Capability::CaseWeights`, `ModelSpec::fit_weighted`;
+  `Recipe::prep_with_weights` (frequency weights feed `step_normalize`,
+  `step_impute_mean`/`_median`, `step_nzv`, `step_corr`, `step_other` with recipes'
+  `cov.wt` / `weighted_median_impl` / `weighted_table` arithmetic; importance weights
+  are ignored by steps, as in recipes); native weighted fits for `linear_reg`
+  (`lm.wfit`), `logistic_reg` (`glm.fit` prior weights), `decision_tree` (rpart
+  `weights`), `rand_forest` (ranger `case.weights` sampling) and `boost_tree` (xgboost
+  DMatrix `weight`); `Workflow::case_weights(col, kind)` (`add_case_weights`),
+  `Workflow::fit_fold`; weighted yardstick metrics (`*_weighted`,
+  `MetricSet::evaluate_weighted`) used by `fit_resamples` / `tune_grid` for frequency
+  weights only, as tune does. Eleven reference tasks (VERIFICATION.md Phase 8g); the
+  synthetic datasets gained `w_freq` / `w_imp` columns (existing columns unchanged).
+  Python: `Workflow(case_weights=, weight_kind=)`, `class_metrics(case_weights=)`.
+- `tune_grid` now fits folds like `fit_resamples` (no sparse-data toggle, as tune
+  2.1.0); it previously went through `Workflow::fit`.
+- `[profile.test] opt-level = 2`: the differential suite boosts trees on every fold and
+  took ~7 minutes unoptimised; Rust optimisation does not change floating-point
+  results.
+- The differential harness records a length mismatch as a failing report row instead
+  of panicking before the report is written.
 - `reference/tidymodels-r/run_reference.R` takes `TRM_TASKS=id1,id2` to regenerate a
   subset of fixtures.
 - Workflows: `fit`, `predict`, `fit_resamples` with per-fold prep and serial-identical

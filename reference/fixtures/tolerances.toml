@@ -166,3 +166,23 @@ resample_metric_rel = 1e-6
 resample_metric_abs = 1e-6
 native_resample_metric_rel = 1e-6
 native_resample_metric_abs = 1e-6
+
+# Weighted boosted-tree classification tasks (Phase 8g): the same platform-expf
+# rationale as the unweighted classification boosters above.
+[tasks.synth_clf_xgb_wimp]
+xgb_pred_rel = 2e-7
+xgb_pred_abs = 1e-6
+xgb_prob_abs = 1e-6
+resample_metric_rel = 1e-6
+resample_metric_abs = 1e-6
+native_resample_metric_rel = 1e-6
+native_resample_metric_abs = 1e-6
+
+[tasks.synth_multi_xgb_wfreq]
+xgb_pred_rel = 2e-7
+xgb_pred_abs = 1e-6
+xgb_prob_abs = 1e-6
+resample_metric_rel = 1e-6
+resample_metric_abs = 1e-6
+native_resample_metric_rel = 1e-6
+native_resample_metric_abs = 1e-6

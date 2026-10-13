@@ -91,7 +91,26 @@ impl ConfusionMatrix {
     /// Cross-tabulate coded truth and estimate over `levels` (codes index `levels`).
     /// At least two levels are required, as in yardstick.
     pub fn from_codes(truth: &[u32], estimate: &[u32], levels: &[String]) -> Result<Self> {
+        Self::from_codes_weighted(truth, estimate, levels, None)
+    }
+
+    /// `hardhat::weighted_table`: each cell is the sum of the case weights of its rows.
+    pub fn from_codes_weighted(
+        truth: &[u32],
+        estimate: &[u32],
+        levels: &[String],
+        w: Option<&[f64]>,
+    ) -> Result<Self> {
         let k = levels.len();
+        if let Some(w) = w {
+            if w.len() != truth.len() {
+                return Err(Error::InvalidArgument(format!(
+                    "truth has {} rows but case_weights has {}",
+                    truth.len(),
+                    w.len()
+                )));
+            }
+        }
         if k < 2 {
             return Err(Error::InvalidArgument("truth must have at least 2 levels".into()));
         }
@@ -110,7 +129,7 @@ impl ConfusionMatrix {
                     "class code out of range at row {i} (levels: {k})"
                 )));
             }
-            counts[e * k + t] += 1.0;
+            counts[e * k + t] += w.map_or(1.0, |w| w[i]);
         }
         Ok(ConfusionMatrix {
             levels: levels.to_vec(),

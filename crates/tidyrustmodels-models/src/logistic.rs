@@ -3,12 +3,12 @@
 
 use crate::alias::{drop_aliased, expand};
 use crate::backends::{self, Engine};
-use crate::diag::{logistic_gradient_norm, probabilities_saturated};
+use crate::diag::{logistic_gradient_norm_weighted, probabilities_saturated};
 use crate::fitted::FittedLogistic;
-use crate::linear::validate_shapes;
+use crate::linear::{check_weights, validate_shapes};
 use serde::{Deserialize, Serialize};
 use tidyrustmodels_core::{
-    BackendInfo, Capability, DesignMatrix, Error, FittedModel, ModelSpec, Outcome, Result,
+    BackendInfo, Capability, CaseWeights, DesignMatrix, Error, FittedModel, ModelSpec, Outcome, Result,
 };
 
 /// Binary logistic regression. With `penalty = 0` the objective is the binomial
@@ -160,11 +160,20 @@ impl ModelSpec for LogisticRegSpec {
     }
 
     fn capabilities(&self) -> &'static [Capability] {
-        &[
-            Capability::BinaryClassification,
-            Capability::ClassProbabilities,
-            Capability::Coefficients,
-        ]
+        if self.engine == Engine::Native {
+            &[
+                Capability::BinaryClassification,
+                Capability::ClassProbabilities,
+                Capability::Coefficients,
+                Capability::CaseWeights,
+            ]
+        } else {
+            &[
+                Capability::BinaryClassification,
+                Capability::ClassProbabilities,
+                Capability::Coefficients,
+            ]
+        }
     }
 
     fn backend(&self) -> BackendInfo {
@@ -172,61 +181,17 @@ impl ModelSpec for LogisticRegSpec {
     }
 
     fn fit(&self, x: &DesignMatrix, y: &Outcome) -> Result<Box<dyn FittedModel>> {
-        self.validate()?;
-        let (codes, levels) = y
-            .as_class()
-            .ok_or_else(|| Error::Unsupported("logistic_reg requires a categorical outcome".into()))?;
-        if levels.len() != 2 {
-            return Err(Error::Unsupported(format!(
-                "logistic_reg is binary; outcome has {} levels",
-                levels.len()
-            )));
-        }
-        validate_shapes(x, codes.len(), self.intercept)?;
-        let n1 = codes.iter().filter(|c| **c == 1).count();
-        if n1 == 0 || n1 == codes.len() {
-            return Err(Error::InvalidValue(
-                "logistic_reg needs both outcome levels present in the training data".into(),
-            ));
-        }
-        let opts = LogisticOptions {
-            intercept: self.intercept,
-            penalty: self.penalty,
-            max_iterations: self.max_iterations,
-            gradient_tolerance: self.gradient_tolerance,
-            irls_epsilon: self.irls_epsilon,
-            irls_max_iterations: self.irls_max_iterations,
-        };
-        let (xr, keep, aliased) = drop_aliased(x, self.intercept)?;
-        let mut out = backends::fit_logistic(self.engine, &xr, codes, opts)?;
-        out.coefs = expand(&out.coefs, &keep, x.ncols());
-        // Constant/zero columns dropped before the fit come first, then any column the
-        // backend itself judged aliased (native pivoted QR).
-        let mut all_aliased = aliased;
-        all_aliased.append(&mut out.diagnostics.aliased);
-        out.diagnostics.aliased = all_aliased;
-        let gnorm = logistic_gradient_norm(x, codes, out.intercept, &out.coefs, self.penalty);
-        out.diagnostics.final_gradient_norm = Some(gnorm);
-        // Scale-aware convergence verdict: gradient entries are sums over n rows. A
-        // backend that reports its own verdict (the native IRLS, with glm's deviance
-        // criterion) keeps it, so `converged` means the same thing as R's `glm$converged`.
-        let scale = (x.nrows() as f64).max(1.0);
-        if out.diagnostics.converged.is_none() {
-            out.diagnostics.converged = Some(gnorm <= self.gradient_tolerance * scale);
-        }
-        if probabilities_saturated(x, out.intercept, &out.coefs) {
-            out.diagnostics
-                .warnings
-                .push("fitted probabilities numerically 0 or 1 occurred (possible separation)".into());
-        }
-        Ok(Box::new(FittedLogistic::new(
-            out.intercept,
-            out.coefs,
-            x.names().to_vec(),
-            levels.to_vec(),
-            self.backend(),
-            out.diagnostics,
-        )?))
+        self.fit_impl(x, y, None)
+    }
+
+    /// IRLS with prior weights as `glm(weights = )`: native engine only.
+    fn fit_weighted(
+        &self,
+        x: &DesignMatrix,
+        y: &Outcome,
+        weights: &CaseWeights,
+    ) -> Result<Box<dyn FittedModel>> {
+        self.fit_impl(x, y, Some(weights))
     }
 
     fn tunable(&self) -> &'static [&'static str] {
@@ -248,5 +213,88 @@ impl ModelSpec for LogisticRegSpec {
 
     fn clone_box(&self) -> Box<dyn ModelSpec> {
         Box::new(self.clone())
+    }
+}
+
+impl LogisticRegSpec {
+    fn fit_impl(
+        &self,
+        x: &DesignMatrix,
+        y: &Outcome,
+        weights: Option<&CaseWeights>,
+    ) -> Result<Box<dyn FittedModel>> {
+        self.validate()?;
+        let (codes, levels) = y
+            .as_class()
+            .ok_or_else(|| Error::Unsupported("logistic_reg requires a categorical outcome".into()))?;
+        if levels.len() != 2 {
+            return Err(Error::Unsupported(format!(
+                "logistic_reg is binary; outcome has {} levels",
+                levels.len()
+            )));
+        }
+        validate_shapes(x, codes.len(), self.intercept)?;
+        check_weights(weights, codes.len())?;
+        let n1 = codes.iter().filter(|c| **c == 1).count();
+        if n1 == 0 || n1 == codes.len() {
+            return Err(Error::InvalidValue(
+                "logistic_reg needs both outcome levels present in the training data".into(),
+            ));
+        }
+        let opts = LogisticOptions {
+            intercept: self.intercept,
+            penalty: self.penalty,
+            max_iterations: self.max_iterations,
+            gradient_tolerance: self.gradient_tolerance,
+            irls_epsilon: self.irls_epsilon,
+            irls_max_iterations: self.irls_max_iterations,
+        };
+        let (xr, keep, aliased) = drop_aliased(x, self.intercept)?;
+        let mut out = match weights {
+            None => backends::fit_logistic(self.engine, &xr, codes, opts)?,
+            Some(w) => backends::fit_logistic_weighted(self.engine, &xr, codes, opts, w.values())?,
+        };
+        if let Some(w) = weights {
+            out.diagnostics.note = Some(format!(
+                "{}; case weights ({})",
+                out.diagnostics.note.unwrap_or_default(),
+                w.kind().as_str()
+            ));
+        }
+        out.coefs = expand(&out.coefs, &keep, x.ncols());
+        // Constant/zero columns dropped before the fit come first, then any column the
+        // backend itself judged aliased (native pivoted QR).
+        let mut all_aliased = aliased;
+        all_aliased.append(&mut out.diagnostics.aliased);
+        out.diagnostics.aliased = all_aliased;
+        let gnorm = logistic_gradient_norm_weighted(
+            x,
+            codes,
+            out.intercept,
+            &out.coefs,
+            self.penalty,
+            weights.map(|w| w.values()),
+        );
+        out.diagnostics.final_gradient_norm = Some(gnorm);
+        // Scale-aware convergence verdict: gradient entries are sums over n rows. A
+        // backend that reports its own verdict (the native IRLS, with glm's deviance
+        // criterion) keeps it, so `converged` means the same thing as R's `glm$converged`.
+        let scale = (x.nrows() as f64).max(1.0);
+        if out.diagnostics.converged.is_none() {
+            out.diagnostics.converged = Some(gnorm <= self.gradient_tolerance * scale);
+        }
+        if probabilities_saturated(x, out.intercept, &out.coefs) {
+            out.diagnostics
+                .warnings
+                .push("fitted probabilities numerically 0 or 1 occurred (possible separation)".into());
+        }
+        Ok(Box::new(FittedLogistic::new(
+            out.intercept,
+            out.coefs,
+            x.names().to_vec(),
+            levels.to_vec(),
+            self.backend(),
+            out.diagnostics,
+        )?))
     }
 }

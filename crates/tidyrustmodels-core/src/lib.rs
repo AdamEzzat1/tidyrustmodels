@@ -17,6 +17,8 @@ pub mod matrix;
 pub mod outcome;
 pub mod rng;
 pub mod sparsity;
+pub mod weights;
+pub use weights::{CaseWeights, WeightKind};
 pub mod traits;
 
 pub use data::{Column, ColumnKind, Field, Role, Schema, Table};

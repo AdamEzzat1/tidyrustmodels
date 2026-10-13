@@ -6,7 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 use tidyrustmodels_core::{
-    Capability, Error, FittedModel, ModelSpec, Outcome, Parallelism, Prediction, Result, Table,
+    Capability, CaseWeights, Error, FittedModel, ModelSpec, Outcome, Parallelism, Prediction, Result, Table,
+    WeightKind,
 };
 use tidyrustmodels_metrics::{MetricSet, MetricValue};
 use tidyrustmodels_models::fitted_model_from_state;
@@ -21,6 +22,7 @@ pub const WORKFLOW_FORMAT_VERSION: u32 = 1;
 pub struct Workflow {
     recipe: Recipe,
     model: Box<dyn ModelSpec>,
+    case_weights: Option<(String, WeightKind)>,
 }
 
 impl Workflow {
@@ -29,12 +31,42 @@ impl Workflow {
         Workflow {
             recipe,
             model: Box::new(model),
+            case_weights: None,
         }
     }
 
     /// Combine with an already boxed specification (used by tuning).
     pub fn from_boxed(recipe: Recipe, model: Box<dyn ModelSpec>) -> Self {
-        Workflow { recipe, model }
+        Workflow {
+            recipe,
+            model,
+            case_weights: None,
+        }
+    }
+
+    /// `workflows::add_case_weights()`: a numeric column of the training data holds
+    /// case weights of the given kind. The column gets the recipe role
+    /// `case_weights` (never a predictor); frequency weights are used by the
+    /// unsupervised recipe steps, by the model and, in `fit_resamples`, by the
+    /// metrics (tune's `.use_case_weights_with_yardstick()`); importance weights reach
+    /// the model only. Engines that take no weights fail at fit time with parsnip's
+    /// message. Prediction data need not carry the column.
+    pub fn case_weights(mut self, column: impl Into<String>, kind: WeightKind) -> Self {
+        self.case_weights = Some((column.into(), kind));
+        self
+    }
+
+    /// The case-weights column and kind, if set.
+    pub fn case_weights_spec(&self) -> Option<(&str, WeightKind)> {
+        self.case_weights.as_ref().map(|(c, k)| (c.as_str(), *k))
+    }
+
+    /// The case weights of `data`'s rows (`None` when the workflow has none).
+    pub fn case_weights_of(&self, data: &Table) -> Result<Option<CaseWeights>> {
+        match &self.case_weights {
+            None => Ok(None),
+            Some((col, kind)) => Ok(Some(extract_case_weights(data, col, *kind)?)),
+        }
     }
 
     /// The recipe.
@@ -55,7 +87,10 @@ impl Workflow {
     }
 
     fn fit_with(&self, training: &Table, resolve_sparsity: bool) -> Result<FittedWorkflow> {
-        let recipe = self.recipe.prep(training)?;
+        let recipe = self
+            .recipe
+            .prep_with_weights(training, self.case_weights_spec())?;
+        let weights = self.case_weights_of(training)?;
         let (x, y) = recipe.bake_matrix(training)?;
         let y = y.ok_or_else(|| {
             Error::SchemaMismatch(format!(
@@ -74,8 +109,25 @@ impl Workflow {
         } else {
             self.model.clone_box()
         };
-        let model = spec.fit(&x, &y)?;
+        let model = spec.fit_maybe_weighted(&x, &y, weights.as_ref())?;
         Ok(FittedWorkflow { recipe, model })
+    }
+
+    /// One resampling fold as tune 2.1.0 runs it: fit on `train` through
+    /// `.fit_pre` / `.fit_model` (no sparse-data toggle), predict `test`, and evaluate
+    /// `metrics`, weighted by the assessment rows' case weights when those are
+    /// frequency weights (`.use_case_weights_with_yardstick()`).
+    pub fn fit_fold(&self, train: &Table, test: &Table, metrics: &MetricSet) -> Result<Vec<MetricValue>> {
+        let fitted = self.fit_with(train, false)?;
+        let (x_test, y_test) = fitted.recipe.bake_matrix(test)?;
+        let y_test =
+            y_test.ok_or_else(|| Error::SchemaMismatch("assessment rows lack the outcome".into()))?;
+        let pred = fitted.model.predict(&x_test)?;
+        let w_test = match self.case_weights_of(test)? {
+            Some(w) if w.used_by_metrics() => Some(w),
+            _ => None,
+        };
+        metrics.evaluate_weighted(&y_test, &pred, w_test.as_ref().map(|w| w.values()))
     }
 
     /// Fit on each fold's analysis rows (prep included), predict the assessment rows,
@@ -103,18 +155,35 @@ impl Workflow {
             let test = data.select_rows(&split.test)?;
             // tune 2.1.0 fits folds through .fit_pre/.fit_model, which skip
             // workflows' sparsity toggle; mirror that so resampling metrics match R's
-            let fitted = self.fit_with(&train, false).map_err(|e| in_fold(e, id))?;
-            let (x_test, y_test) = fitted.recipe.bake_matrix(&test).map_err(|e| in_fold(e, id))?;
-            let y_test =
-                y_test.ok_or_else(|| Error::SchemaMismatch("assessment rows lack the outcome".into()))?;
-            let pred = fitted.model.predict(&x_test).map_err(|e| in_fold(e, id))?;
+            let metrics = self
+                .fit_fold(&train, &test, metrics)
+                .map_err(|e| in_fold(e, id))?;
             Ok(FoldMetrics {
                 id: id.clone(),
-                metrics: metrics.evaluate(&y_test, &pred)?,
+                metrics,
             })
         })?;
         Ok(ResampleResults::from_folds(per_fold))
     }
+}
+
+/// Read a case-weights column (`workflows:::fit.action_case_weights`: numeric, complete,
+/// and valid for its kind; frequency weights must be whole numbers as
+/// `hardhat::frequency_weights()` requires).
+pub fn extract_case_weights(data: &Table, column: &str, kind: WeightKind) -> Result<CaseWeights> {
+    let col = data
+        .column(column)
+        .ok_or_else(|| Error::SchemaMismatch(format!("case weights column `{column}` not found")))?;
+    let values = col
+        .as_numeric()
+        .ok_or_else(|| Error::InvalidValue(format!("case weights column `{column}` must be numeric")))?;
+    if col.n_missing() > 0 {
+        return Err(Error::InvalidValue(format!(
+            "case weights column `{column}` has {} missing values",
+            col.n_missing()
+        )));
+    }
+    CaseWeights::new(kind, values.to_vec())
 }
 
 /// Prefix an error raised inside a resampling fold with the fold id, so a failure in
@@ -406,6 +475,115 @@ mod tests {
         let acc = serial.metric("accuracy").unwrap();
         assert_eq!(acc.n, 5);
         assert!(acc.std_err.is_some());
+    }
+
+    /// Frequency weights mean repeated rows: a weighted workflow (recipe statistics,
+    /// model and resampling metrics) must reproduce the unweighted workflow on the
+    /// data with every row replicated by its weight.
+    #[test]
+    fn frequency_weights_reproduce_replicated_rows() {
+        let mut t = data(30);
+        t.remove("cls");
+        let w: Vec<f64> = (0..30).map(|i| ((i * 7) % 4) as f64).collect(); // includes zeros
+        let mut tw = t.clone();
+        tw.insert("w", Column::numeric(w.clone()).unwrap()).unwrap();
+        let rows: Vec<usize> = (0..30)
+            .flat_map(|i| std::iter::repeat_n(i, w[i] as usize))
+            .collect();
+        let rep = t.select_rows(&rows).unwrap();
+        let rec = Recipe::new("y")
+            .step(StepNormalize::new(Selector::AllNumericPredictors))
+            .step(StepDummy::new(Selector::AllNominalPredictors));
+        let wf = Workflow::new(rec.clone(), LinearRegSpec::new()).case_weights("w", WeightKind::Frequency);
+        let plain = Workflow::new(rec, LinearRegSpec::new());
+        let a = wf.fit(&tw).unwrap();
+        let b = plain.fit(&rep).unwrap();
+        // the weights column is not a predictor and prediction data need not carry it
+        assert_eq!(a.model().feature_names(), &["x", "g_b"]);
+        let pa = match a.predict(&t).unwrap() {
+            Prediction::Numeric(p) => p,
+            _ => unreachable!(),
+        };
+        let pb = match b.predict(&t).unwrap() {
+            Prediction::Numeric(p) => p,
+            _ => unreachable!(),
+        };
+        for (u, v) in pa.iter().zip(&pb) {
+            assert!((u - v).abs() < 1e-9, "{u} vs {v}");
+        }
+        assert!(a
+            .model()
+            .diagnostics()
+            .note
+            .unwrap()
+            .contains("case weights (frequency)"));
+        // weighted metrics on one fold equal the unweighted metrics on replicated rows
+        let m = MetricSet::new(vec![Metric::Rmse, Metric::Rsq]);
+        let fold = wf.fit_fold(&tw, &tw, &m).unwrap();
+        let fold_rep = plain.fit_fold(&rep, &rep, &m).unwrap();
+        for (u, v) in fold.iter().zip(&fold_rep) {
+            assert!(
+                (u.value.unwrap() - v.value.unwrap()).abs() < 1e-9,
+                "{u:?} vs {v:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn importance_weights_skip_recipe_steps_and_unsupported_engines_fail_like_parsnip() {
+        let mut t = data(30);
+        t.remove("cls");
+        t.insert(
+            "w",
+            Column::numeric((0..30).map(|i| 0.5 + (i % 3) as f64).collect()).unwrap(),
+        )
+        .unwrap();
+        let rec = Recipe::new("y")
+            .step(StepNormalize::new(Selector::columns(&["x"])))
+            .step(StepDummy::new(Selector::columns(&["g"])));
+        let imp = Workflow::new(rec.clone(), LinearRegSpec::new())
+            .case_weights("w", WeightKind::Importance)
+            .fit(&t)
+            .unwrap();
+        let mut no_w = t.clone();
+        no_w.remove("w");
+        let plain = Workflow::new(rec.clone(), LinearRegSpec::new())
+            .fit(&no_w)
+            .unwrap();
+        // importance weights do not reach step_normalize: identical statistics (the
+        // schemas differ only by the weights column's role)
+        assert_eq!(
+            imp.recipe().steps()[0].state().unwrap()["stats"],
+            plain.recipe().steps()[0].state().unwrap()["stats"]
+        );
+        // ... but do reach the model: same features, different coefficients
+        assert_eq!(imp.model().feature_names(), plain.model().feature_names());
+        assert_ne!(
+            imp.model().coefficients().unwrap(),
+            plain.model().coefficients().unwrap()
+        );
+        // nnet multinom takes no weights (parsnip's message), nor do non-native engines
+        let mut c = data(30);
+        c.remove("y");
+        c.insert("w", Column::numeric(vec![1.0; 30]).unwrap()).unwrap();
+        let err = Workflow::new(
+            Recipe::new("cls").step(StepDummy::new(Selector::columns(&["g"]))),
+            tidyrustmodels_models::MultinomRegSpec::new(),
+        )
+        .case_weights("w", WeightKind::Frequency)
+        .fit(&c)
+        .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Case weights are not enabled by the underlying model implementation."));
+        let err = Workflow::new(
+            Recipe::new("y").step(StepDummy::new(Selector::columns(&["g"]))),
+            LinearRegSpec::new().engine(tidyrustmodels_models::Engine::Smartcore),
+        )
+        .case_weights("w", WeightKind::Importance)
+        .fit(&t)
+        .unwrap_err();
+        assert!(matches!(err, Error::Unsupported(_)), "{err}");
     }
 
     #[test]

@@ -38,12 +38,18 @@ versions <- list(
 read_dataset <- function(name, task) {
   df <- read.csv(file.path(root, "reference", "fixtures", "datasets", paste0(name, ".csv")),
                  stringsAsFactors = FALSE, na.strings = "", check.names = FALSE)
-  keep <- c(task$outcome, unlist(task$predictors))
+  keep <- c(task$outcome, unlist(task$predictors), task$case_weights$column)
   df <- df[, keep, drop = FALSE]
   for (nm in names(df)) {
     if (is.character(df[[nm]])) {
       df[[nm]] <- factor(df[[nm]], levels = sort(unique(stats::na.omit(df[[nm]]))))
     }
+  }
+  # case weights get hardhat's classes; recipe() then assigns the `case_weights` role
+  if (!is.null(task$case_weights)) {
+    cw <- task$case_weights$column
+    df[[cw]] <- if (identical(task$case_weights$kind, "frequency")) hardhat::frequency_weights(as.integer(df[[cw]]))
+                else hardhat::importance_weights(as.double(df[[cw]]))
   }
   df
 }
@@ -86,6 +92,18 @@ run_task <- function(task) {
 
   f <- as.formula(paste(task$outcome, "~ ."))
   rec <- add_steps(recipe(f, data = train), task$steps)
+  wcol <- task$case_weights$column
+  # frequency weights reach yardstick (tune's .use_case_weights_with_yardstick()); importance weights do not
+  metric_weights <- if (!is.null(wcol) && identical(task$case_weights$kind, "frequency")) wcol else NULL
+  make_wf <- function(model) {
+    w <- workflow() %>% add_recipe(rec) %>% add_model(model)
+    if (!is.null(wcol)) w <- add_case_weights(w, !!rlang::sym(wcol))
+    w
+  }
+  # metric set call with optional case weights taken from column `wcol` of `d`
+  ms_eval <- function(ms, d, ..., weighted = FALSE) {
+    if (weighted && !is.null(metric_weights)) ms(d, ..., case_weights = !!rlang::sym(metric_weights)) else ms(d, ...)
+  }
   n_lv <- if (task$type == "classification") nlevels(train[[task$outcome]]) else 0L
   is_tree <- identical(task$model, "decision_tree")
   is_rf <- identical(task$model, "rand_forest")
@@ -105,7 +123,7 @@ run_task <- function(task) {
   } else if (is_rf) rf_model(rf_seeds[1]) else if (task$type == "regression") linear_reg() %>% set_engine("lm") else
            if (multi) multinom_reg() %>% set_engine("nnet", maxit = 10000, reltol = 1e-15, trace = FALSE) else
            logistic_reg() %>% set_engine("glm")
-  wf <- workflow() %>% add_recipe(rec) %>% add_model(model)
+  wf <- make_wf(model)
 
   # ---- Level 1: preprocessing ----
   prepped <- prep(rec, training = train)
@@ -116,7 +134,7 @@ run_task <- function(task) {
   })
   baked_train <- bake(prepped, new_data = NULL)
   baked_test  <- bake(prepped, new_data = test)
-  pred_cols <- setdiff(names(baked_train), task$outcome)
+  pred_cols <- setdiff(names(baked_train), c(task$outcome, wcol))
 
   # ---- Level 3: estimator ----
   fit <- fit(wf, data = train)
@@ -167,16 +185,19 @@ run_task <- function(task) {
   rf_info <- if (is_rf) {
     ms <- do.call(metric_set, unname(metric_fns[unlist(task$metrics)]))
     per_seed <- lapply(rf_seeds, function(s) {
-      fs <- fit(workflow() %>% add_recipe(rec) %>% add_model(rf_model(s)), data = train)
+      fs <- fit(make_wf(rf_model(s)), data = train)
       if (task$type == "regression") {
         p <- as.numeric(predict(fs, test)$.pred)
-        m <- ms(data.frame(truth = test[[task$outcome]], estimate = p), truth = truth, estimate = estimate)
+        d <- data.frame(truth = test[[task$outcome]], estimate = p)
+        if (!is.null(wcol)) d[[wcol]] <- test[[wcol]]
+        m <- ms_eval(ms, d, truth = truth, estimate = estimate, weighted = TRUE)
         list(metrics = setNames(as.list(m$.estimate), m$.metric), predicted_test = p)
       } else {
         probs <- predict(fs, test, type = "prob"); cls <- predict(fs, test)$.pred_class
         d <- cbind(data.frame(truth = test[[task$outcome]], estimate = cls), as.data.frame(probs))
-        m <- if (n_lv > 2) ms(d, truth = truth, estimate = estimate, tidyselect::starts_with(".pred_"))
-             else ms(d, truth = truth, estimate = estimate, !!rlang::sym(names(probs)[1]))
+        if (!is.null(wcol)) d[[wcol]] <- test[[wcol]]
+        m <- if (n_lv > 2) ms_eval(ms, d, truth = truth, estimate = estimate, tidyselect::starts_with(".pred_"), weighted = TRUE)
+             else ms_eval(ms, d, truth = truth, estimate = estimate, !!rlang::sym(names(probs)[1]), weighted = TRUE)
         list(metrics = setNames(as.list(m$.estimate), m$.metric), prob_test = unname(as.matrix(probs)))
       }
     })
@@ -189,7 +210,7 @@ run_task <- function(task) {
     if (is.matrix(cf)) lapply(setNames(seq_len(nrow(cf)), rownames(cf)), function(r) as.list(cf[r, ])) else as.list(cf)
   }
   nnet_default <- if (multi) {
-    wf2 <- workflow() %>% add_recipe(rec) %>% add_model(multinom_reg() %>% set_engine("nnet", trace = FALSE))
+    wf2 <- make_wf(multinom_reg() %>% set_engine("nnet", trace = FALSE))
     e2 <- extract_fit_engine(fit(wf2, data = train))
     list(value = e2$value, convergence = e2$convergence, coefficients = coef_list(coef(e2)))
   } else NULL
@@ -221,22 +242,29 @@ run_task <- function(task) {
       kappa(crossprod(X), exact = TRUE)
     }
   )
-  test_metrics <- {
+  test_metrics_fn <- function(weighted) {
     ms <- do.call(metric_set, unname(metric_fns[unlist(task$metrics)]))
     if (task$type == "regression") {
-      m <- ms(data.frame(truth = test[[task$outcome]], estimate = fit_info$predicted_test), truth = truth, estimate = estimate)
+      d <- data.frame(truth = test[[task$outcome]], estimate = fit_info$predicted_test)
+      if (!is.null(wcol)) d[[wcol]] <- test[[wcol]]
+      m <- ms_eval(ms, d, truth = truth, estimate = estimate, weighted = weighted)
     } else {
       probs <- predict(fit, test, type = "prob"); cls <- predict(fit, test)$.pred_class
       if (n_lv > 2) {
         d <- cbind(data.frame(truth = test[[task$outcome]], estimate = cls), as.data.frame(probs))
-        m <- ms(d, truth = truth, estimate = estimate, tidyselect::starts_with(".pred_"))
+        if (!is.null(wcol)) d[[wcol]] <- test[[wcol]]
+        m <- ms_eval(ms, d, truth = truth, estimate = estimate, tidyselect::starts_with(".pred_"), weighted = weighted)
       } else {
         d <- data.frame(truth = test[[task$outcome]], estimate = cls, prob = probs[[1]])
-        m <- ms(d, truth = truth, estimate = estimate, prob)
+        if (!is.null(wcol)) d[[wcol]] <- test[[wcol]]
+        m <- ms_eval(ms, d, truth = truth, estimate = estimate, prob, weighted = weighted)
       }
     }
     setNames(as.list(m$.estimate), m$.metric)
   }
+  test_metrics <- test_metrics_fn(FALSE)
+  # the same metrics with `case_weights =` (frequency weights only; NULL otherwise)
+  test_metrics_weighted <- if (!is.null(metric_weights)) test_metrics_fn(TRUE) else NULL
 
   # ---- Level 4: resampling with shared folds (skipped for stochastic forests) ----
   if (is_rf) {
@@ -245,7 +273,7 @@ run_task <- function(task) {
                   baked_train = columns_as_list(baked_train[, pred_cols, drop = FALSE]),
                   baked_test = columns_as_list(baked_test[, pred_cols, drop = FALSE]),
                   predictor_names = pred_cols),
-      fit = fit_info, test_metrics = test_metrics, resample = NULL)
+      fit = fit_info, test_metrics = test_metrics, test_metrics_weighted = test_metrics_weighted, resample = NULL)
     write_json(out, file.path(out_dir, paste0(task$id, ".json")), auto_unbox = TRUE, digits = I(17), na = "null", null = "null", pretty = FALSE)
     cat("   wrote", file.path(out_dir, paste0(task$id, ".json")), "(forest: seed sweep, no resampling)\n")
     return(invisible(NULL))
@@ -272,14 +300,17 @@ run_task <- function(task) {
     ms_f <- do.call(metric_set, unname(metric_fns[unlist(task$metrics)]))
     if (task$type == "regression") {
       p <- as.numeric(predict(f, a)$.pred)
-      m <- ms_f(data.frame(truth = a[[task$outcome]], estimate = p), truth = truth, estimate = estimate)
+      d <- data.frame(truth = a[[task$outcome]], estimate = p)
+      if (!is.null(wcol)) d[[wcol]] <- a[[wcol]]
+      m <- ms_eval(ms_f, d, truth = truth, estimate = estimate, weighted = TRUE)
       list(booster = boost_dump(extract_fit_engine(f)), assess_pred = p,
            assess_metrics = setNames(as.list(m$.estimate), m$.metric))
     } else {
       probs <- predict(f, a, type = "prob"); cls <- predict(f, a)$.pred_class
       d <- cbind(data.frame(truth = a[[task$outcome]], estimate = cls), as.data.frame(probs))
-      m <- if (n_lv > 2) ms_f(d, truth = truth, estimate = estimate, tidyselect::starts_with(".pred_"))
-           else ms_f(d, truth = truth, estimate = estimate, !!rlang::sym(names(probs)[1]))
+      if (!is.null(wcol)) d[[wcol]] <- a[[wcol]]
+      m <- if (n_lv > 2) ms_eval(ms_f, d, truth = truth, estimate = estimate, tidyselect::starts_with(".pred_"), weighted = TRUE)
+           else ms_eval(ms_f, d, truth = truth, estimate = estimate, !!rlang::sym(names(probs)[1]), weighted = TRUE)
       list(booster = boost_dump(extract_fit_engine(f)), assess_prob = unname(as.matrix(probs)),
            assess_class = as.character(cls), assess_metrics = setNames(as.list(m$.estimate), m$.metric))
     }
@@ -308,6 +339,7 @@ run_task <- function(task) {
                 predictor_names = pred_cols),
     fit = fit_info,
     test_metrics = test_metrics,
+    test_metrics_weighted = test_metrics_weighted,
     resample = list(ids = names(per_fold_list), per_fold = per_fold_list, summary = summary_list, fold_trees = fold_trees, fold_boosts = fold_boosts)
   )
   write_json(out, file.path(out_dir, paste0(task$id, ".json")), auto_unbox = TRUE, digits = I(17), na = "null", null = "null", pretty = FALSE)

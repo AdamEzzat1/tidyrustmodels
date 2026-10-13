@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use tidyrustmodels_core::sparsity::should_use_sparsity;
 use tidyrustmodels_core::traits::check_features;
 use tidyrustmodels_core::{
-    BackendInfo, Capability, DesignMatrix, Error, FitDiagnostics, FittedModel, ModelSpec, Outcome,
-    Prediction, Result,
+    BackendInfo, Capability, CaseWeights, DesignMatrix, Error, FitDiagnostics, FittedModel, ModelSpec,
+    Outcome, Prediction, Result,
 };
 
 /// Boosted trees with parsnip's xgboost defaults: `trees = 15` (`nrounds`),
@@ -183,6 +183,7 @@ impl ModelSpec for BoostTreeSpec {
             Capability::BinaryClassification,
             Capability::MulticlassClassification,
             Capability::ClassProbabilities,
+            Capability::CaseWeights,
         ]
     }
 
@@ -195,6 +196,71 @@ impl ModelSpec for BoostTreeSpec {
     }
 
     fn fit(&self, x: &DesignMatrix, y: &Outcome) -> Result<Box<dyn FittedModel>> {
+        self.fit_impl(x, y, None)
+    }
+
+    /// xgboost's DMatrix `weight`: scales every row's gradient pair, weights the
+    /// quantile sketch and the base score (parsnip passes case weights this way).
+    fn fit_weighted(
+        &self,
+        x: &DesignMatrix,
+        y: &Outcome,
+        weights: &CaseWeights,
+    ) -> Result<Box<dyn FittedModel>> {
+        self.fit_impl(x, y, Some(weights))
+    }
+
+    fn tunable(&self) -> &'static [&'static str] {
+        &["trees", "tree_depth", "learn_rate", "min_n", "loss_reduction"]
+    }
+
+    fn with_param(&self, name: &str, value: f64) -> Result<Box<dyn ModelSpec>> {
+        if !value.is_finite() || value < 0.0 {
+            return Err(Error::InvalidArgument(format!(
+                "`{name}` must be a non-negative number, got {value}"
+            )));
+        }
+        let s = match name {
+            "trees" => self.clone().trees(value.round() as usize),
+            "tree_depth" => self.clone().tree_depth(value.round() as usize),
+            "learn_rate" => self.clone().learn_rate(value),
+            "min_n" => self.clone().min_n(value),
+            "loss_reduction" => self.clone().loss_reduction(value),
+            other => {
+                return Err(Error::Unsupported(format!(
+                    "boost_tree has no tunable parameter `{other}`"
+                )))
+            }
+        };
+        s.validate()?;
+        Ok(Box::new(s))
+    }
+
+    fn resolve_sparsity(&self, estimated_sparsity: f64, n_rows: usize) -> Option<Box<dyn ModelSpec>> {
+        if self.sparse != SparsePolicy::Auto {
+            return None;
+        }
+        let mut s = self.clone();
+        s.sparse = if should_use_sparsity(estimated_sparsity, "xgboost", n_rows) {
+            SparsePolicy::ZerosMissing
+        } else {
+            SparsePolicy::Dense
+        };
+        Some(Box::new(s))
+    }
+
+    fn clone_box(&self) -> Box<dyn ModelSpec> {
+        Box::new(self.clone())
+    }
+}
+
+impl BoostTreeSpec {
+    fn fit_impl(
+        &self,
+        x: &DesignMatrix,
+        y: &Outcome,
+        weights: Option<&CaseWeights>,
+    ) -> Result<Box<dyn FittedModel>> {
         self.validate()?;
         let (n, p) = (x.nrows(), x.ncols());
         if n != y.len() {
@@ -208,6 +274,7 @@ impl ModelSpec for BoostTreeSpec {
                 "cannot boost on zero rows or zero predictors".into(),
             ));
         }
+
         if let Some(i) = x.data().iter().position(|v| !v.is_finite()) {
             return Err(Error::InvalidValue(format!(
                 "boost_tree needs finite predictors (non-finite at element {i}); impute first"
@@ -255,7 +322,17 @@ impl ModelSpec for BoostTreeSpec {
             max_bin: 256,
         };
         let zero_as_missing = self.sparse == SparsePolicy::ZerosMissing;
-        let booster = xgb::fit(x.data(), n, p, &labels, objective, params, zero_as_missing);
+        crate::linear::check_weights(weights, n)?;
+        let booster = xgb::fit_weighted(
+            x.data(),
+            n,
+            p,
+            &labels,
+            objective,
+            params,
+            zero_as_missing,
+            weights.map(|w| w.values()),
+        );
         Ok(Box::new(FittedBoostTree {
             model: "boost_tree".into(),
             format_version: crate::fitted::MODEL_FORMAT_VERSION,
@@ -265,60 +342,21 @@ impl ModelSpec for BoostTreeSpec {
             backend: self.backend(),
             diagnostics: FitDiagnostics {
                 note: Some(format!(
-                    "{} rounds, max_depth {}, eta {}, min_child_weight {}, gamma {}, zeros as missing: {}",
+                    "{} rounds, max_depth {}, eta {}, min_child_weight {}, gamma {}, zeros as missing: {}{}",
                     self.trees,
                     self.tree_depth,
                     params.eta,
                     params.min_child_weight,
                     params.gamma,
-                    zero_as_missing
+                    zero_as_missing,
+                    match weights {
+                        Some(w) => format!("; case weights ({})", w.kind().as_str()),
+                        None => String::new(),
+                    }
                 )),
                 ..Default::default()
             },
         }))
-    }
-
-    fn tunable(&self) -> &'static [&'static str] {
-        &["trees", "tree_depth", "learn_rate", "min_n", "loss_reduction"]
-    }
-
-    fn with_param(&self, name: &str, value: f64) -> Result<Box<dyn ModelSpec>> {
-        if !value.is_finite() || value < 0.0 {
-            return Err(Error::InvalidArgument(format!(
-                "`{name}` must be a non-negative number, got {value}"
-            )));
-        }
-        let s = match name {
-            "trees" => self.clone().trees(value.round() as usize),
-            "tree_depth" => self.clone().tree_depth(value.round() as usize),
-            "learn_rate" => self.clone().learn_rate(value),
-            "min_n" => self.clone().min_n(value),
-            "loss_reduction" => self.clone().loss_reduction(value),
-            other => {
-                return Err(Error::Unsupported(format!(
-                    "boost_tree has no tunable parameter `{other}`"
-                )))
-            }
-        };
-        s.validate()?;
-        Ok(Box::new(s))
-    }
-
-    fn resolve_sparsity(&self, estimated_sparsity: f64, n_rows: usize) -> Option<Box<dyn ModelSpec>> {
-        if self.sparse != SparsePolicy::Auto {
-            return None;
-        }
-        let mut s = self.clone();
-        s.sparse = if should_use_sparsity(estimated_sparsity, "xgboost", n_rows) {
-            SparsePolicy::ZerosMissing
-        } else {
-            SparsePolicy::Dense
-        };
-        Some(Box::new(s))
-    }
-
-    fn clone_box(&self) -> Box<dyn ModelSpec> {
-        Box::new(self.clone())
     }
 }
 

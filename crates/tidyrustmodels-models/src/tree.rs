@@ -6,8 +6,8 @@ use crate::native::rpart::{self, Control, Method, NodeValue, Tree};
 use serde::{Deserialize, Serialize};
 use tidyrustmodels_core::traits::check_features;
 use tidyrustmodels_core::{
-    BackendInfo, Capability, DesignMatrix, Error, FitDiagnostics, FittedModel, ModelSpec, Outcome,
-    Prediction, Result,
+    BackendInfo, Capability, CaseWeights, DesignMatrix, Error, FitDiagnostics, FittedModel, ModelSpec,
+    Outcome, Prediction, Result,
 };
 
 /// A single CART tree with rpart's defaults: `cost_complexity = 0.01`,
@@ -109,6 +109,7 @@ impl ModelSpec for DecisionTreeSpec {
             Capability::BinaryClassification,
             Capability::MulticlassClassification,
             Capability::ClassProbabilities,
+            Capability::CaseWeights,
         ]
     }
 
@@ -121,45 +122,18 @@ impl ModelSpec for DecisionTreeSpec {
     }
 
     fn fit(&self, x: &DesignMatrix, y: &Outcome) -> Result<Box<dyn FittedModel>> {
-        self.validate()?;
-        let n = x.nrows();
-        if n != y.len() {
-            return Err(Error::InvalidArgument(format!(
-                "design matrix has {n} rows but the outcome has {}",
-                y.len()
-            )));
-        }
-        if n == 0 {
-            return Err(Error::InvalidArgument("cannot fit a tree on zero rows".into()));
-        }
-        if let Some(i) = x.data().iter().position(|v| !v.is_finite()) {
-            return Err(Error::InvalidValue(format!(
-                "decision_tree needs finite predictors (non-finite at element {i}); impute first"
-            )));
-        }
-        let wt = vec![1.0; n];
-        let (method, yv, levels) = match y {
-            Outcome::Numeric(v) => (Method::Anova, v.clone(), None),
-            Outcome::Class { codes, levels } => (
-                Method::Gini { k: levels.len() },
-                codes.iter().map(|c| f64::from(*c + 1)).collect(),
-                Some(levels.clone()),
-            ),
-        };
-        let tree = rpart::fit(x.data(), n, x.ncols(), &yv, &wt, method, self.control());
-        let n_splits = tree.n_splits();
-        Ok(Box::new(FittedDecisionTree {
-            model: "decision_tree".into(),
-            format_version: crate::fitted::MODEL_FORMAT_VERSION,
-            tree,
-            names: x.names().to_vec(),
-            levels,
-            backend: self.backend(),
-            diagnostics: FitDiagnostics {
-                note: Some(format!("{n_splits} splits")),
-                ..Default::default()
-            },
-        }))
+        self.fit_impl(x, y, None)
+    }
+
+    /// rpart's `weights`: observation weights in every node statistic and split
+    /// evaluation (`minsplit` / `minbucket` still count observations).
+    fn fit_weighted(
+        &self,
+        x: &DesignMatrix,
+        y: &Outcome,
+        weights: &CaseWeights,
+    ) -> Result<Box<dyn FittedModel>> {
+        self.fit_impl(x, y, Some(weights))
     }
 
     fn tunable(&self) -> &'static [&'static str] {
@@ -183,6 +157,63 @@ impl ModelSpec for DecisionTreeSpec {
 
     fn clone_box(&self) -> Box<dyn ModelSpec> {
         Box::new(self.clone())
+    }
+}
+
+impl DecisionTreeSpec {
+    fn fit_impl(
+        &self,
+        x: &DesignMatrix,
+        y: &Outcome,
+        weights: Option<&CaseWeights>,
+    ) -> Result<Box<dyn FittedModel>> {
+        self.validate()?;
+        let n = x.nrows();
+        if n != y.len() {
+            return Err(Error::InvalidArgument(format!(
+                "design matrix has {n} rows but the outcome has {}",
+                y.len()
+            )));
+        }
+        if n == 0 {
+            return Err(Error::InvalidArgument("cannot fit a tree on zero rows".into()));
+        }
+        if let Some(i) = x.data().iter().position(|v| !v.is_finite()) {
+            return Err(Error::InvalidValue(format!(
+                "decision_tree needs finite predictors (non-finite at element {i}); impute first"
+            )));
+        }
+        crate::linear::check_weights(weights, n)?;
+        let wt: Vec<f64> = match weights {
+            Some(w) => w.values().to_vec(),
+            None => vec![1.0; n],
+        };
+
+        let (method, yv, levels) = match y {
+            Outcome::Numeric(v) => (Method::Anova, v.clone(), None),
+            Outcome::Class { codes, levels } => (
+                Method::Gini { k: levels.len() },
+                codes.iter().map(|c| f64::from(*c + 1)).collect(),
+                Some(levels.clone()),
+            ),
+        };
+        let tree = rpart::fit(x.data(), n, x.ncols(), &yv, &wt, method, self.control());
+        let n_splits = tree.n_splits();
+        Ok(Box::new(FittedDecisionTree {
+            model: "decision_tree".into(),
+            format_version: crate::fitted::MODEL_FORMAT_VERSION,
+            tree,
+            names: x.names().to_vec(),
+            levels,
+            backend: self.backend(),
+            diagnostics: FitDiagnostics {
+                note: Some(match weights {
+                    Some(w) => format!("{n_splits} splits; case weights ({})", w.kind().as_str()),
+                    None => format!("{n_splits} splits"),
+                }),
+                ..Default::default()
+            },
+        }))
     }
 }
 

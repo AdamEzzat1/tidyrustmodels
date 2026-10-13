@@ -101,9 +101,11 @@ pub struct MetricSet(Vec<Metric>);  // evaluates a Prediction + Outcome into Vec
 ## tidyrustmodels-workflows
 
 ```rust
-pub struct Workflow { recipe: Recipe, model: Box<dyn ModelSpec> }
+pub struct Workflow { recipe: Recipe, model: Box<dyn ModelSpec>, case_weights: Option<(String, WeightKind)> }
 impl Workflow {
+    pub fn case_weights(self, column: &str, kind: WeightKind) -> Self;   // workflows::add_case_weights (ADR-0012)
     pub fn fit(&self, training: &Table) -> Result<FittedWorkflow>;
+    pub fn fit_fold(&self, train: &Table, test: &Table, metrics: &MetricSet) -> Result<Vec<MetricValue>>;  // one fold as tune runs it
     pub fn fit_resamples(&self, data: &Table, folds: &Folds, metrics: &MetricSet, par: Parallelism)
         -> Result<ResampleResults>;   // prep inside each fold
 }
@@ -130,7 +132,7 @@ exercised end-to-end) and `intercept` (boolean, encoded 0/1).
 ```python
 tbl = trm.from_pandas(df)                       # or trm.Table.from_numpy(X, names=[...]) / Table.from_dict({...})
 rec = trm.Recipe("y").step_normalize("all_numeric_predictors").step_dummy(["species"])
-wf  = trm.Workflow(rec, trm.LinearReg(engine="linfa"))
+wf  = trm.Workflow(rec, trm.LinearReg(engine="linfa"))   # case_weights="w", weight_kind="frequency"|"importance" (native engine)
 fit = wf.fit(tbl); fit.predict(tbl) -> np.ndarray   # classification: list[str]; fit.predict_proba(tbl) -> np.ndarray
 folds = trm.vfold_cv(tbl.nrows, 5, seed=42, strata=list(df["y"]))
 res = wf.fit_resamples(tbl, folds, ["rmse", "rsq"], threads=4)

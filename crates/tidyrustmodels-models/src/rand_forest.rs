@@ -6,8 +6,8 @@ use crate::native::forest::{self, Forest, ForestOptions, Kind};
 use serde::{Deserialize, Serialize};
 use tidyrustmodels_core::traits::check_features;
 use tidyrustmodels_core::{
-    BackendInfo, Capability, DesignMatrix, Error, FitDiagnostics, FittedModel, ModelSpec, Outcome,
-    Prediction, Result, Seed,
+    BackendInfo, Capability, CaseWeights, DesignMatrix, Error, FitDiagnostics, FittedModel, ModelSpec,
+    Outcome, Prediction, Result, Seed,
 };
 
 /// A random forest with ranger's defaults as parsnip applies them: `trees = 500`,
@@ -106,6 +106,7 @@ impl ModelSpec for RandForestSpec {
             Capability::BinaryClassification,
             Capability::MulticlassClassification,
             Capability::ClassProbabilities,
+            Capability::CaseWeights,
         ]
     }
 
@@ -119,8 +120,60 @@ impl ModelSpec for RandForestSpec {
     }
 
     fn fit(&self, x: &DesignMatrix, y: &Outcome) -> Result<Box<dyn FittedModel>> {
+        self.fit_impl(x, y, None)
+    }
+
+    /// ranger's `case.weights`: sampling weights for the bootstrap of every tree
+    /// (rows with larger weights are drawn more often; zero-weight rows never).
+    fn fit_weighted(
+        &self,
+        x: &DesignMatrix,
+        y: &Outcome,
+        weights: &CaseWeights,
+    ) -> Result<Box<dyn FittedModel>> {
+        self.fit_impl(x, y, Some(weights))
+    }
+
+    fn tunable(&self) -> &'static [&'static str] {
+        &["mtry", "trees", "min_n"]
+    }
+
+    fn with_param(&self, name: &str, value: f64) -> Result<Box<dyn ModelSpec>> {
+        let v = value.round();
+        if !v.is_finite() || v < 0.0 {
+            return Err(Error::InvalidArgument(format!(
+                "`{name}` must be a non-negative number, got {value}"
+            )));
+        }
+        let s = match name {
+            "mtry" => self.clone().mtry(v as usize),
+            "trees" => self.clone().trees(v as usize),
+            "min_n" => self.clone().min_n(v as usize),
+            other => {
+                return Err(Error::Unsupported(format!(
+                    "rand_forest has no tunable parameter `{other}`"
+                )))
+            }
+        };
+        s.validate()?;
+        Ok(Box::new(s))
+    }
+
+    fn clone_box(&self) -> Box<dyn ModelSpec> {
+        Box::new(self.clone())
+    }
+}
+
+impl RandForestSpec {
+    fn fit_impl(
+        &self,
+        x: &DesignMatrix,
+        y: &Outcome,
+        weights: Option<&CaseWeights>,
+    ) -> Result<Box<dyn FittedModel>> {
         self.validate()?;
         let (n, p) = (x.nrows(), x.ncols());
+
         if n != y.len() {
             return Err(Error::InvalidArgument(format!(
                 "design matrix has {n} rows but the outcome has {}",
@@ -159,7 +212,13 @@ impl ModelSpec for RandForestSpec {
             min_bucket: 1,
             seed: self.seed,
         };
-        let forest = forest::fit(x.data(), n, p, &yv, kind, opts);
+        crate::linear::check_weights(weights, n)?;
+        if let Some(w) = weights {
+            if w.values().iter().all(|v| *v == 0.0) {
+                return Err(Error::InvalidValue("all case weights are zero".into()));
+            }
+        }
+        let forest = forest::fit_weighted(x.data(), n, p, &yv, kind, opts, weights.map(|w| w.values()));
         Ok(Box::new(FittedRandForest {
             model: "rand_forest".into(),
             format_version: crate::fitted::MODEL_FORMAT_VERSION,
@@ -169,41 +228,17 @@ impl ModelSpec for RandForestSpec {
             backend: self.backend(),
             diagnostics: FitDiagnostics {
                 note: Some(format!(
-                    "{} trees, mtry {mtry}, min.node.size {}",
-                    self.trees, opts.min_node_size
+                    "{} trees, mtry {mtry}, min.node.size {}{}",
+                    self.trees,
+                    opts.min_node_size,
+                    match weights {
+                        Some(w) => format!("; case weights ({}): weighted bootstrap", w.kind().as_str()),
+                        None => String::new(),
+                    }
                 )),
                 ..Default::default()
             },
         }))
-    }
-
-    fn tunable(&self) -> &'static [&'static str] {
-        &["mtry", "trees", "min_n"]
-    }
-
-    fn with_param(&self, name: &str, value: f64) -> Result<Box<dyn ModelSpec>> {
-        let v = value.round();
-        if !v.is_finite() || v < 0.0 {
-            return Err(Error::InvalidArgument(format!(
-                "`{name}` must be a non-negative number, got {value}"
-            )));
-        }
-        let s = match name {
-            "mtry" => self.clone().mtry(v as usize),
-            "trees" => self.clone().trees(v as usize),
-            "min_n" => self.clone().min_n(v as usize),
-            other => {
-                return Err(Error::Unsupported(format!(
-                    "rand_forest has no tunable parameter `{other}`"
-                )))
-            }
-        };
-        s.validate()?;
-        Ok(Box::new(s))
-    }
-
-    fn clone_box(&self) -> Box<dyn ModelSpec> {
-        Box::new(self.clone())
     }
 }
 

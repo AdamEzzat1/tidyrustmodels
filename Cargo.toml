@@ -52,3 +52,9 @@ debug = false
 [profile.bench]
 inherits = "release"
 debug = true
+
+# `cargo test` runs the differential suite, which boosts xgboost-style trees on every
+# fold; unoptimised that takes ~7 minutes, optimised about one. Optimisation does not
+# change floating-point semantics in Rust (no fast-math, no contraction).
+[profile.test]
+opt-level = 2

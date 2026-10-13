@@ -287,6 +287,15 @@ impl<'a> Grower<'a> {
     }
 }
 
+/// One draw from a discrete distribution given by cumulative weights (the last entry
+/// is the total): the first index whose cumulative weight exceeds `u * total`, so a
+/// zero-weight row is never drawn.
+fn draw_weighted(rng: &mut impl Rng, cum: &[f64]) -> usize {
+    let total = *cum.last().expect("non-empty");
+    let u: f64 = rng.random::<f64>() * total;
+    cum.partition_point(|c| *c <= u).min(cum.len() - 1)
+}
+
 /// `drawWithoutReplacement`: a random `k`-subset of `0..n` by partial Fisher-Yates.
 fn draw_without_replacement(rng: &mut impl Rng, n: usize, k: usize) -> Vec<usize> {
     let mut pool: Vec<usize> = (0..n).collect();
@@ -302,13 +311,47 @@ fn draw_without_replacement(rng: &mut impl Rng, n: usize, k: usize) -> Vec<usize
 /// Grow a forest. `x` is column-major `n × p`; `y` holds the numeric response or class
 /// codes `0..k` as `f64`.
 pub fn fit(x: &[f64], n: usize, p: usize, y: &[f64], kind: Kind, opts: ForestOptions) -> Forest {
+    fit_weighted(x, n, p, y, kind, opts, None)
+}
+
+/// [`fit`] with ranger's `case.weights`: each tree's bootstrap draws `n` rows with
+/// replacement with probability proportional to the weights (`bootstrapWeighted()`,
+/// `std::discrete_distribution`). As in `ranger()`, weights that are all equal mean an
+/// unweighted bootstrap.
+pub fn fit_weighted(
+    x: &[f64],
+    n: usize,
+    p: usize,
+    y: &[f64],
+    kind: Kind,
+    opts: ForestOptions,
+    case_weights: Option<&[f64]>,
+) -> Forest {
     assert_eq!(x.len(), n * p);
     assert_eq!(y.len(), n);
+    let cum: Option<Vec<f64>> = case_weights.and_then(|w| {
+        assert_eq!(w.len(), n);
+        if w.iter().all(|v| *v == w[0]) {
+            return None;
+        }
+        let mut acc = 0.0;
+        Some(
+            w.iter()
+                .map(|v| {
+                    acc += v;
+                    acc
+                })
+                .collect(),
+        )
+    });
     let trees = (0..opts.trees)
         .map(|t| {
             let mut rng = opts.seed.derive(t as u64).rng();
-            // bootstrap(): n draws with replacement
-            let ids: Vec<usize> = (0..n).map(|_| rng.random_range(0..n)).collect();
+            // bootstrap(): n draws with replacement, weighted when case weights differ
+            let ids: Vec<usize> = match &cum {
+                None => (0..n).map(|_| rng.random_range(0..n)).collect(),
+                Some(c) => (0..n).map(|_| draw_weighted(&mut rng, c)).collect(),
+            };
             let mut g = Grower {
                 x,
                 y,
@@ -396,6 +439,35 @@ mod tests {
         let b = f64::from_bits(a.to_bits() + 1);
         let mid = (a + b) / 2.0;
         assert!(mid == a || mid == b);
+    }
+
+    #[test]
+    fn weighted_draws_follow_the_weights_and_skip_zero_weight_rows() {
+        let mut rng = Seed(3).rng();
+        let w = [0.0, 1.0, 3.0, 0.0];
+        let mut acc = 0.0;
+        let cum: Vec<f64> = w
+            .iter()
+            .map(|v| {
+                acc += v;
+                acc
+            })
+            .collect();
+        let mut counts = [0usize; 4];
+        for _ in 0..4000 {
+            counts[draw_weighted(&mut rng, &cum)] += 1;
+        }
+        assert_eq!(counts[0], 0);
+        assert_eq!(counts[3], 0);
+        let frac = counts[2] as f64 / 4000.0;
+        assert!((frac - 0.75).abs() < 0.03, "{frac}");
+        // equal weights: plain bootstrap (identical forest)
+        let n = 50;
+        let x: Vec<f64> = (0..n).map(|i| i as f64).collect();
+        let y: Vec<f64> = x.iter().map(|v| v * 2.0).collect();
+        let a = fit(&x, n, 1, &y, Kind::Regression, opts(5, 1, 5));
+        let b = fit_weighted(&x, n, 1, &y, Kind::Regression, opts(5, 1, 5), Some(&vec![2.0; n]));
+        assert_eq!(a, b);
     }
 
     #[test]

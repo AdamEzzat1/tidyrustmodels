@@ -164,6 +164,52 @@ pub(crate) fn fit_linear(engine: Engine, x: &DesignMatrix, y: &[f64], intercept:
     }
 }
 
+/// Case weights are a native-engine feature: the linfa and smartcore solvers take none.
+fn no_weights(engine: Engine, model: &str) -> Error {
+    Error::Unsupported(format!(
+        "case weights are not supported by the `{}` engine of {model}; use the native engine",
+        engine.as_str()
+    ))
+}
+
+/// Dispatch a weighted OLS fit (`lm.wfit` semantics; native engine only).
+pub(crate) fn fit_linear_weighted(
+    engine: Engine,
+    x: &DesignMatrix,
+    y: &[f64],
+    intercept: bool,
+    weights: &[f64],
+) -> Result<FitOutput> {
+    match engine {
+        Engine::Native => crate::native::fit_linear_weighted(x, y, intercept, Some(weights)),
+        other => Err(no_weights(other, "linear_reg")),
+    }
+}
+
+/// Dispatch a weighted logistic fit (`glm.fit(weights = )`; native engine only).
+pub(crate) fn fit_logistic_weighted(
+    engine: Engine,
+    x: &DesignMatrix,
+    y: &[u32],
+    opts: LogisticOptions,
+    weights: &[f64],
+) -> Result<FitOutput> {
+    match engine {
+        Engine::Native => crate::native::fit_logistic_weighted(
+            x,
+            y,
+            crate::native::NativeLogisticOptions {
+                intercept: opts.intercept,
+                penalty: opts.penalty,
+                epsilon: opts.irls_epsilon,
+                maxit: opts.irls_max_iterations,
+            },
+            Some(weights),
+        ),
+        other => Err(no_weights(other, "logistic_reg")),
+    }
+}
+
 /// Dispatch a multinomial fit. `y` holds codes `0..k`; the first level is the baseline.
 pub(crate) fn fit_multinom(
     engine: Engine,

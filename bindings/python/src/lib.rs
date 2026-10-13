@@ -517,9 +517,24 @@ struct PyWorkflow {
 
 #[pymethods]
 impl PyWorkflow {
+    /// `case_weights`: name of a numeric column of the training data holding case
+    /// weights; `weight_kind` is `"frequency"` (whole numbers; used by unsupervised
+    /// recipe steps, the model and resampling metrics) or `"importance"` (model only),
+    /// as `workflows::add_case_weights()` with `hardhat::frequency_weights()` /
+    /// `hardhat::importance_weights()`.
     #[new]
-    fn new(recipe: PyRecipe, model: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(PyWorkflow { inner: Workflow::from_boxed(recipe.inner, model_from_py(model)?) })
+    #[pyo3(signature = (recipe, model, case_weights = None, weight_kind = "frequency"))]
+    fn new(
+        recipe: PyRecipe,
+        model: &Bound<'_, PyAny>,
+        case_weights: Option<String>,
+        weight_kind: &str,
+    ) -> PyResult<Self> {
+        let mut wf = Workflow::from_boxed(recipe.inner, model_from_py(model)?);
+        if let Some(col) = case_weights {
+            wf = wf.case_weights(col, weight_kind_from_str(weight_kind)?);
+        }
+        Ok(PyWorkflow { inner: wf })
     }
 
     fn fit(&self, data: &PyTable) -> PyResult<PyFittedWorkflow> {
@@ -544,6 +559,16 @@ impl PyWorkflow {
         };
         let res = self.inner.fit_resamples(&data.inner, &folds.inner, &set, par).py()?;
         resample_results_to_py(py, &res)
+    }
+}
+
+fn weight_kind_from_str(s: &str) -> PyResult<WeightKind> {
+    match s {
+        "frequency" => Ok(WeightKind::Frequency),
+        "importance" => Ok(WeightKind::Importance),
+        other => Err(InvalidArgumentError::new_err(format!(
+            "weight_kind must be \"frequency\" or \"importance\", got {other:?}"
+        ))),
     }
 }
 
@@ -719,9 +744,11 @@ fn py_tune_grid<'py>(
 /// yardstick metrics on class labels and, for probability metrics, a probability matrix
 /// with one column per level in `levels` order. `estimate` defaults to the arg-max of
 /// each probability row. Returns `{name: value}` with `None` where yardstick gives `NA`;
-/// estimators follow yardstick's defaults (binary / macro / hand_till for roc_auc).
+/// estimators follow yardstick's defaults (binary / macro / hand_till for roc_auc;
+/// macro when `case_weights` are given, as yardstick). `case_weights` are yardstick's
+/// `case_weights =` (one non-negative weight per row).
 #[pyfunction]
-#[pyo3(signature = (truth, levels, metrics, estimate = None, probabilities = None))]
+#[pyo3(signature = (truth, levels, metrics, estimate = None, probabilities = None, case_weights = None))]
 fn py_class_metrics<'py>(
     py: Python<'py>,
     truth: Vec<String>,
@@ -729,6 +756,7 @@ fn py_class_metrics<'py>(
     metrics: Vec<String>,
     estimate: Option<Vec<String>>,
     probabilities: Option<PyReadonlyArray2<'py, f64>>,
+    case_weights: Option<Vec<f64>>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let code = |labels: &[String]| -> PyResult<Vec<u32>> {
         labels
@@ -777,7 +805,7 @@ fn py_class_metrics<'py>(
     let outcome = Outcome::Class { codes: t, levels: levels.clone() };
     let pred = Prediction::Class { codes: e, levels, probabilities: probs };
     let d = PyDict::new(py);
-    for v in set.evaluate(&outcome, &pred).py()? {
+    for v in set.evaluate_weighted(&outcome, &pred, case_weights.as_deref()).py()? {
         d.set_item(v.name, v.value)?;
     }
     Ok(d)

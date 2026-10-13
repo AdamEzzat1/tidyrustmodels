@@ -37,8 +37,9 @@ pub use tidyrustmodels_core::{Error, Result};
 /// Everything needed for a typical workflow.
 pub mod prelude {
     pub use tidyrustmodels_core::{
-        Capability, Coefficients, Column, ColumnKind, DesignMatrix, Error, FitDiagnostics, FittedModel,
-        ModelSpec, Outcome, Parallelism, Prediction, Result, Role, Schema, Seed, Table,
+        Capability, CaseWeights, Coefficients, Column, ColumnKind, DesignMatrix, Error, FitDiagnostics,
+        FittedModel, ModelSpec, Outcome, Parallelism, Prediction, Result, Role, Schema, Seed, Table,
+        WeightKind,
     };
     pub use tidyrustmodels_metrics::{
         ConfusionMatrix, Estimator, KapWeighting, Metric, MetricSet, MetricValue,

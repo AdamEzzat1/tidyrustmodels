@@ -434,6 +434,71 @@ Not covered: `subsample`, `colsample_*`, early stopping, NA predictors,
 `tree_method = "exact"`/`approx`, categorical features, constraints,
 `scale_pos_weight`, multi-threaded histogram accumulation.
 
+## Case weights (Phase 8g)
+
+Executed 2026-10-13. Case weights follow tidymodels' per-package rules (ADR-0012):
+frequency weights reach the unsupervised recipe steps, the model and the resampling
+metrics; importance weights reach the model only; `multinom_reg` and the non-native
+engines refuse them. Eleven reference tasks with a `case_weights` field were added on
+the synthetic datasets, which gained `w_freq` (integers 0-4, about 10 % zeros) and
+`w_imp` (0.2-2.5, about 5 % zeros) columns without changing any existing column
+(checked against the committed files). The R side uses `hardhat::frequency_weights()`
+/ `importance_weights()`, `workflows::add_case_weights()`, and records the test
+metrics both plain and with yardstick's `case_weights =`.
+
+| task | weights | model | L1 recipe statistics | L3 fit | L2 weighted test metrics | L4 resampling |
+|---|---|---|---|---|---|---|
+| `synth_reg_wfreq` | frequency | lm (`lm.wfit`) | <= 8.9e-16 abs (weighted mean / sd, `cov.wt`) | coefficients <= 5e-16 rel; 3 zero-weight rows dropped | <= 1.6e-15 rel | <= 2.8e-14 rel |
+| `synth_reg_wimp` | importance | lm | identical to unweighted statistics (steps ignore importance weights) | <= 6.5e-16 rel | (unweighted, as tune) | <= 2.0e-15 rel |
+| `synth_filter_wfreq` | frequency | lm | weighted median, nzv (weighted table), other (weighted levels), normalize, corr: all states exact / <= 2.8e-15 rel | <= 1.3e-15 rel | <= 1.9e-15 rel | <= 1.4e-15 rel |
+| `synth_clf_wfreq` | frequency | glm (prior weights) | <= 2.6e-15 rel | coefficients <= 2.8e-15 rel; probabilities <= 3.3e-16 abs | 15 metrics <= 2.1e-16 rel | 120 values <= 6.1e-16 rel |
+| `synth_clf_wimp` | importance | glm (non-integer successes warning reproduced) | unweighted statistics | <= 6.2e-16 rel | (unweighted) | <= 1.2e-15 rel |
+| `synth_reg_tree_wfreq` | frequency | rpart `weights` | exact | whole tree exact (nodes, weights `wt`, deviances, splits, improvements), predictions exact | <= 1.1e-15 rel | 5 fold trees exact; metrics <= 1.1e-15 rel |
+| `synth_clf_tree_wimp` | importance | rpart | exact | whole tree exact, probabilities exact | (unweighted) | 5 fold trees exact; <= 9.3e-15 rel |
+| `synth_reg_rf_wfreq` | frequency | ranger `case.weights` (weighted bootstrap) | exact | level 5: seed means within 4 SE (largest 1.77 SE), 10/10 prediction values within band | | (no resampling for forests) |
+| `synth_reg_xgb_wfreq` | frequency | xgboost DMatrix `weight` | exact | trees exact, margins and predictions **exact (0)** | <= 1.7e-16 rel | 5 fold boosters: structure exact, values <= 5.8e-8 rel (JSON printing) |
+| `synth_clf_xgb_wimp` | importance | xgboost | exact | trees exact, probabilities exact (0) | (unweighted) | fold boosters exact / <= 5.8e-8 rel |
+| `synth_multi_xgb_wfreq` | frequency | xgboost softprob | exact | trees exact, probabilities exact (0) | 15 metrics <= 2.4e-16 rel (macro roc_auc under weights) | fold boosters <= 6.7e-7 rel; metrics to round-off |
+
+Differential suite after this phase: 7167 comparisons, 0 failures, 1684 of them on the
+weighted tasks (`target/differential_report.md`); every weighted fit's diagnostics note
+names the weight kind, and the linfa and smartcore engines refuse weights with
+`Unsupported` on every weighted lm/glm task (10 checks). Runtime of the suite fell
+from about 7 minutes to 13 s with `[profile.test] opt-level = 2`; the results are
+bit-identical (Rust optimisation does not alter floating-point semantics).
+
+Findings, each of which failed a comparison before it was fixed:
+
+1. **`step_nzv()` with frequency weights and missing values errors in recipes 1.3.2.**
+   The first R run of `synth_filter_wfreq` stopped in `hardhat::weighted_table()`:
+   `nzv()` drops the `NA`s from the data (`data[!is.na(data)]`) but passes the full
+   weight vector. The task now imputes before filtering; this crate subsets the
+   weights with the data and proceeds (COMPATIBILITY.md).
+2. **`corr_filter`'s tie-break depends on the last bit of `cov.wt`'s matrix.** With
+   `x3` removed by nzv the correlation step sees two columns whose mean absolute
+   correlations are mathematically equal, and recipes drops the first on an exact
+   tie. `cov.wt(cor = TRUE)` computes `Is * cov * rep(Is, each = p)` elementwise,
+   which is asymmetric in the last bit in 35 % of random draws (2000 trials) and
+   whose diagonal is one only up to round-off; on the reference task R's matrix came
+   out exactly symmetric with equal diagonals, while the port's different summation
+   order gave diagonals differing by an ulp and dropped the other column. The port
+   now mirrors each pair and sets the diagonal to exactly one, so exact ties are
+   resolved as R resolves them; a tie that R itself resolves by round-off cannot be
+   reproduced and is recorded as a limitation.
+
+Independent baselines (unit tests): frequency-weighted IRLS and OLS reproduce the
+replicated-row fits (coefficients to 1e-7 / deviance to 1e-9 for IRLS, workflow
+predictions to 1e-9 for lm, including zero-weight rows); importance weights leave
+`step_normalize` unchanged and change the model; `multinom_reg` and smartcore fail
+with parsnip's message / `Unsupported`; the weighted quantile sketch and one-round
+booster equal the replicated-row booster bit for bit; weighted bootstrap draws follow
+the weights and never pick zero-weight rows, and equal weights reproduce the plain
+bootstrap forest exactly.
+
+Not covered: `step_filter_missing`, weighted `step_pca`/`step_classdist`
+(not implemented), case weights on the linfa/smartcore engines, nnet weights
+(unsupported upstream), weighted `roc_curve(thresholds =)`.
+
 ## Test inventory
 
 | suite | location | runs in CI | needs R |

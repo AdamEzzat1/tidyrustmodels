@@ -27,6 +27,9 @@ pub enum Role {
     Id,
     /// Dropped from modelling.
     Ignored,
+    /// Case weights of the given kind (recipes role `case_weights`): never a predictor,
+    /// read by unsupervised steps when the weights are frequency weights.
+    CaseWeights(crate::weights::WeightKind),
 }
 
 /// One typed column.
@@ -416,10 +419,35 @@ impl Table {
     /// A schema with every column assigned `role`, except `outcome` which gets
     /// `Role::Outcome`.
     pub fn schema_with_outcome(&self, outcome: &str, role: Role) -> Result<Schema> {
+        self.schema_with_roles(outcome, role, None)
+    }
+
+    /// Like `schema_with_outcome`, with one numeric column marked as case weights.
+    pub fn schema_with_roles(
+        &self,
+        outcome: &str,
+        role: Role,
+        weights: Option<(&str, crate::weights::WeightKind)>,
+    ) -> Result<Schema> {
         if self.column(outcome).is_none() {
             return Err(Error::SchemaMismatch(format!(
                 "outcome column `{outcome}` not found"
             )));
+        }
+        if let Some((w, _)) = weights {
+            match self.column(w) {
+                None => {
+                    return Err(Error::SchemaMismatch(format!(
+                        "case weights column `{w}` not found"
+                    )))
+                }
+                Some(c) if c.kind() != ColumnKind::Numeric => {
+                    return Err(Error::InvalidValue(format!(
+                        "case weights column `{w}` must be numeric"
+                    )))
+                }
+                _ => {}
+            }
         }
         Ok(Schema {
             fields: self
@@ -427,7 +455,11 @@ impl Table {
                 .map(|(n, c)| Field {
                     name: n.to_string(),
                     kind: c.kind(),
-                    role: if n == outcome { Role::Outcome } else { role },
+                    role: match weights {
+                        _ if n == outcome => Role::Outcome,
+                        Some((w, k)) if w == n => Role::CaseWeights(k),
+                        _ => role,
+                    },
                 })
                 .collect(),
         })

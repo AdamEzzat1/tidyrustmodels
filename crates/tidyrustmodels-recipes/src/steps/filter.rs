@@ -3,6 +3,7 @@
 //! `recipes_remove_cols`. Definitions follow recipes 1.3.2 (`one_unique`, `nzv`,
 //! `corr_filter`), read from the installed package source.
 
+use super::{step_weights, weighted_cor_matrix};
 use crate::selector::Selector;
 use serde::{Deserialize, Serialize};
 use tidyrustmodels_core::{Column, Error, FittedStep, Result, Schema, Step, Table};
@@ -61,6 +62,36 @@ impl FittedStep for FittedRemoveCols {
 
 /// Distinct non-missing values of a column as sortable keys (numeric bits or codes),
 /// plus the count of non-missing rows.
+/// Weighted `distinct_counts`: the sum of the frequency weights of each distinct
+/// non-missing value (`hardhat::weighted_table` over `factor(x)`), descending. Values
+/// whose rows all have zero weight keep a zero entry, as the factor keeps the level.
+/// (recipes' `nzv()` passes the full weight vector with the NA-free data; it would
+/// error on a column with missing values, so this subsets the weights alongside.)
+fn distinct_counts_weighted(col: &Column, w: &[f64]) -> Vec<f64> {
+    let valid = col.validity();
+    let mut sums: std::collections::HashMap<u64, f64> = std::collections::HashMap::new();
+    match col {
+        Column::Numeric { values, .. } => {
+            for (i, v) in values.iter().enumerate() {
+                if valid.is_none_or(|m| m[i]) {
+                    let key = if *v == 0.0 { 0.0f64.to_bits() } else { v.to_bits() };
+                    *sums.entry(key).or_insert(0.0) += w[i];
+                }
+            }
+        }
+        Column::Categorical { codes, .. } => {
+            for (i, c) in codes.iter().enumerate() {
+                if valid.is_none_or(|m| m[i]) {
+                    *sums.entry(u64::from(*c)).or_insert(0.0) += w[i];
+                }
+            }
+        }
+    }
+    let mut v: Vec<f64> = sums.into_values().collect();
+    v.sort_by(|a, b| b.partial_cmp(a).expect("finite weights"));
+    v
+}
+
 fn distinct_counts(col: &Column) -> Vec<usize> {
     let valid = col.validity();
     let mut counts: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
@@ -175,15 +206,25 @@ impl Step for StepNzv {
             ));
         }
         let mut removals = Vec::new();
+        // frequency case weights enter the frequency ratio (weighted table) only;
+        // the percent-unique and zero-variance checks stay unweighted (recipes `nzv()`)
+        let wts = step_weights(training, schema)?;
         for name in self.selector.resolve(schema)? {
             let col = training
                 .column(&name)
                 .ok_or_else(|| Error::SchemaMismatch(format!("column `{name}` not in training data")))?;
             let counts = distinct_counts(col);
-            let freq_ratio = if counts.len() <= 1 {
-                0.0
-            } else {
-                counts[0] as f64 / counts[1] as f64
+            let freq_ratio = match wts {
+                Some(w) => {
+                    let wc = distinct_counts_weighted(col, w);
+                    if wc.len() <= 1 {
+                        0.0
+                    } else {
+                        wc[0] / wc[1]
+                    }
+                }
+                None if counts.len() <= 1 => 0.0,
+                None => counts[0] as f64 / counts[1] as f64,
             };
             let pct_unique = 100.0 * counts.len() as f64 / col.len() as f64;
             let zero_var = counts.len() == 1 || counts.is_empty();
@@ -380,16 +421,25 @@ impl Step for StepCorr {
             cols.push((values, col.validity()));
         }
         let p = cols.len();
+        // frequency case weights: recipes' `correlations()` switches from pairwise
+        // `stats::cor` to `cov.wt(cor = TRUE)` on the listwise-complete rows
+        let wts = step_weights(training, schema)?;
         let (removals, notes) = if p > 1 {
-            let mut m = vec![None; p * p];
-            for j in 0..p {
-                m[j * p + j] = Some(1.0);
-                for i in 0..j {
-                    let c = pairwise_cor(cols[i].0, cols[i].1, cols[j].0, cols[j].1);
-                    m[j * p + i] = c;
-                    m[i * p + j] = c;
+            let m = match wts {
+                Some(w) => weighted_cor_matrix(&cols, w)?,
+                None => {
+                    let mut m = vec![None; p * p];
+                    for j in 0..p {
+                        m[j * p + j] = Some(1.0);
+                        for i in 0..j {
+                            let c = pairwise_cor(cols[i].0, cols[i].1, cols[j].0, cols[j].1);
+                            m[j * p + i] = c;
+                            m[i * p + j] = c;
+                        }
+                    }
+                    m
                 }
-            }
+            };
             let (idx, notes) = corr_filter(m, p, self.threshold);
             (idx.into_iter().map(|k| names[k].clone()).collect(), notes)
         } else {

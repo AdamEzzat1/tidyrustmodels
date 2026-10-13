@@ -1,7 +1,7 @@
 //! `step_impute_mean` / `step_impute_median`: fill missing numeric values with a
 //! statistic estimated on the training data.
 
-use super::{mean_valid, median_valid};
+use super::{cov_wt_valid, mean_valid, median_valid, step_weights, weighted_median_valid};
 use crate::selector::Selector;
 use serde::{Deserialize, Serialize};
 use tidyrustmodels_core::{Column, Error, FittedStep, Result, Schema, Step, Table};
@@ -58,6 +58,8 @@ fn prep_impute(
     schema: &Schema,
 ) -> Result<FittedImpute> {
     let cols = selector.resolve(schema)?;
+    // frequency case weights: `averages()` (cov.wt centre) / `weighted_median_impl`
+    let wts = step_weights(training, schema)?;
     let mut fills = Vec::with_capacity(cols.len());
     for name in cols {
         let col = training
@@ -68,9 +70,11 @@ fn prep_impute(
                 "imputation requires numeric columns; `{name}` is categorical"
             ))
         })?;
-        let fill = match stat {
-            ImputeStat::Mean => mean_valid(values, col.validity()),
-            ImputeStat::Median => median_valid(values, col.validity()),
+        let fill = match (stat, wts) {
+            (ImputeStat::Mean, None) => mean_valid(values, col.validity()),
+            (ImputeStat::Median, None) => median_valid(values, col.validity()),
+            (ImputeStat::Mean, Some(w)) => cov_wt_valid(values, col.validity(), w)?.map(|(m, _)| m),
+            (ImputeStat::Median, Some(w)) => weighted_median_valid(values, col.validity(), w)?,
         }
         .ok_or_else(|| Error::InvalidValue(format!("column `{name}` has no non-missing training values")))?;
         fills.push((name, fill));

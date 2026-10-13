@@ -3,7 +3,7 @@
 use crate::steps::fitted_step_from_state;
 use serde::{Deserialize, Serialize};
 use tidyrustmodels_core::{
-    ColumnKind, DesignMatrix, Error, FittedStep, Outcome, Result, Role, Schema, Step, Table,
+    ColumnKind, DesignMatrix, Error, FittedStep, Outcome, Result, Role, Schema, Step, Table, WeightKind,
 };
 
 /// Serialization format version for fitted recipes.
@@ -80,7 +80,19 @@ impl Recipe {
     /// Estimate every step on `training` in sequence (each step sees the output of the
     /// previous one, exactly as recipes' `prep`).
     pub fn prep(&self, training: &Table) -> Result<FittedRecipe> {
-        let input_schema = training.schema_with_outcome(&self.outcome, Role::Predictor)?;
+        self.prep_with_weights(training, None)
+    }
+
+    /// `prep` with one column given the `case_weights` role (recipes assigns it to a
+    /// `hardhat` case-weights column automatically). The column is never a predictor;
+    /// unsupervised steps read it when the kind is `WeightKind::Frequency`, and the
+    /// importance kind only reaches the model. At bake time the column may be absent.
+    pub fn prep_with_weights(
+        &self,
+        training: &Table,
+        case_weights: Option<(&str, WeightKind)>,
+    ) -> Result<FittedRecipe> {
+        let input_schema = training.schema_with_roles(&self.outcome, Role::Predictor, case_weights)?;
         let mut schema = input_schema.clone();
         let mut current = training.clone();
         let mut fitted: Vec<Box<dyn FittedStep>> = Vec::with_capacity(self.steps.len());
@@ -116,6 +128,8 @@ impl FittedRecipe {
                 continue;
             }
             match data.column(&f.name) {
+                // case weights are only needed to prep; `predict()` data carry none
+                None if matches!(f.role, Role::CaseWeights(_)) => continue,
                 None => return Err(Error::SchemaMismatch(format!("column `{}` is missing", f.name))),
                 Some(c) if c.kind() != f.kind => {
                     return Err(Error::SchemaMismatch(format!(

@@ -17,18 +17,18 @@
  },
  "synthetic_clf_small": {
   "rows": 60,
-  "sha256": "a8e408987cf6e4a2edcf965372332af6698395fbcabee69f3801ec795737048b"
+  "sha256": "6d14b0a4d112a2ad1480899acda59da8bf739d92bd88780f0daa14e7960e3331"
  },
  "synthetic_filter_reg": {
   "rows": 150,
-  "sha256": "997973140b30b63aa842404a5c6802ab1d547b2bb8e1023ee8747e8fd4ca2caa"
+  "sha256": "3c41ea3ba26ec9b3e31bdc9dd1f62da1698862e01e18dbf1e45f3d210fbf26a9"
  },
  "synthetic_multi_small": {
   "rows": 180,
-  "sha256": "0285e58df05a3090f2fe6a99ae7dc2a0f9e3d57a326c0cbc9443b90385ec29c7"
+  "sha256": "b99265e06670ba9557b6a6b6b987532d2aecf5f0f20f650be608ca281f483ffc"
  },
  "synthetic_reg_small": {
   "rows": 40,
-  "sha256": "278d7d37ea68cb4af7019fa902d5ca61b5488bcace0b011ced3bc8d32ab9b1ac"
+  "sha256": "5f4372066e5cb2ebdf0bcf3474324a0b264db5b3836f75f679997f5b4e86ab2c"
  }
 }
