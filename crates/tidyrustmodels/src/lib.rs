@@ -35,6 +35,7 @@ pub use tidyrustmodels_recipes as recipes;
 pub use tidyrustmodels_resample as resample;
 pub use tidyrustmodels_tune as tune;
 pub use tidyrustmodels_workflows as workflows;
+pub use tidyrustmodels_workflowsets as workflowsets;
 
 pub use tidyrustmodels_core::{Error, Result};
 
@@ -67,4 +68,7 @@ pub mod prelude {
         TuneResults,
     };
     pub use tidyrustmodels_workflows::{FittedWorkflow, LastFit, ResampleResults, Workflow};
+    pub use tidyrustmodels_workflowsets::{
+        fix_list_names, workflow_set, CollectedMetric, RankRow, WorkflowResult, WorkflowSet, WorkflowSetEntry,
+    };
 }

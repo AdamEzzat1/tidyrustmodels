@@ -137,6 +137,19 @@ native_resample_metric_abs = 1e-7
 native_summary_rel = 1e-6
 native_summary_abs = 1e-7
 
+# wfs_multi_pairs (Phase 8k) resamples the penguins_species multinomial fit (same
+# recipe, predictors and nnet settings) as one workflow of its set (`a_mn`), so the
+# same measured bounds apply to its resampling rows.
+[tasks.wfs_multi_pairs]
+resample_metric_rel = 1e-6
+resample_metric_abs = 1e-7
+summary_rel = 1e-6
+summary_abs = 1e-7
+native_resample_metric_rel = 1e-6
+native_resample_metric_abs = 1e-7
+native_summary_rel = 1e-6
+native_summary_abs = 1e-7
+
 # Boosted-tree classification tasks: logistic / softprob gradients and outputs go
 # through expf; measured 0 on Windows (shared C runtime), one float ulp allowed for
 # platforms whose expf rounds differently (2e-7 relative, 1e-6 absolute).

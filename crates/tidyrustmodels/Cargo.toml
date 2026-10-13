@@ -16,6 +16,7 @@ tidyrustmodels-resample = { workspace = true }
 tidyrustmodels-metrics = { workspace = true }
 tidyrustmodels-workflows = { workspace = true }
 tidyrustmodels-tune = { workspace = true }
+tidyrustmodels-workflowsets = { workspace = true }
 arrow-array = { version = "60", optional = true }
 arrow-schema = { version = "60", optional = true }
 

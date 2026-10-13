@@ -17,6 +17,7 @@ suppressPackageStartupMessages(suppressWarnings({
   library(tidymodels)
   library(jsonlite)
   library(sparsevctrs)
+library(workflowsets)
 }))
 Sys.setlocale("LC_COLLATE", "C")
 options(warn = 1)
@@ -474,6 +475,86 @@ run_task <- function(task) {
          fit_best = list(predictions = pred_dump(fb_pred), model = model_dump(fb)))
   } else NULL
 
+  # ---- workflow sets (ADR-0016): workflow_set() + workflow_map("tune_grid") on the
+  # shared rset, collect_metrics(), rank_results() in both modes, fit_best() ----
+  wfs_info <- if (!is.null(task$workflow_set)) {
+    ws <- task$workflow_set
+    pp_name <- function(p) if (is.null(p$name)) "" else p$name
+    preproc <- lapply(ws$preproc, function(p) add_steps(recipe(f, data = train), p$steps))
+    pnm <- vapply(ws$preproc, pp_name, "")
+    if (any(pnm != "")) names(preproc) <- pnm
+    grid_of <- function(m) {
+      if (is.null(m$grid)) return(NULL)
+      gn <- names(m$grid[[1]])
+      g <- tibble::as_tibble(setNames(lapply(gn, function(nm) sapply(m$grid, function(r) as.numeric(r[[nm]]))), gn))
+      for (nm in intersect(gn, c("min_n", "tree_depth", "trees", "mtry"))) g[[nm]] <- as.integer(g[[nm]])
+      g
+    }
+    mk_model <- function(m) {
+      g <- grid_of(m)
+      tuned <- if (is.null(g)) character(0) else names(g)
+      fixed <- if (is.null(m$model_args)) list() else m$model_args[setdiff(names(m$model_args), tuned)]
+      args <- c(setNames(lapply(tuned, function(x) tune()), tuned), fixed)
+      switch(m$model,
+        linear_reg = linear_reg() %>% set_engine("lm"),
+        logistic_reg = logistic_reg() %>% set_engine("glm"),
+        multinom_reg = multinom_reg() %>% set_engine("nnet", maxit = 10000, reltol = 1e-15, trace = FALSE),
+        decision_tree = do.call(decision_tree, args) %>% set_engine("rpart") %>% set_mode(task$type),
+        boost_tree = do.call(boost_tree, args) %>% set_engine("xgboost") %>% set_mode(task$type),
+        stop("unknown workflow-set model ", m$model))
+    }
+    models <- lapply(ws$models, mk_model)
+    mnm <- vapply(ws$models, pp_name, "")
+    if (any(mnm != "")) names(models) <- mnm
+    wfs <- workflow_set(preproc, models, cross = isTRUE(ws$cross))
+    # the ids workflowsets built, re-derived from its own naming rule so that the
+    # Rust port's rule is checked against the real thing, not against this script
+    pp_fixed <- names(workflowsets:::fix_list_names(preproc))
+    mod_fixed <- names(workflowsets:::fix_list_names(models))
+    expected_ids <- if (isTRUE(ws$cross) || length(preproc) == 1 || length(models) == 1) {
+      paste(rep(pp_fixed, each = length(mod_fixed)), rep(mod_fixed, times = length(pp_fixed)), sep = "_")
+    } else paste(pp_fixed, mod_fixed, sep = "_")
+    stopifnot(identical(wfs$wflow_id, expected_ids))
+    # grids attach by model: every workflow whose model index carries a grid
+    model_index <- if (isTRUE(ws$cross) || length(preproc) == 1 || length(models) == 1) {
+      rep(seq_along(models), times = length(preproc))
+    } else seq_along(models)
+    for (j in seq_along(models)) {
+      g <- grid_of(ws$models[[j]])
+      if (!is.null(g)) for (wid in wfs$wflow_id[model_index == j]) wfs <- option_add(wfs, grid = g, id = wid)
+    }
+    ms_w <- do.call(metric_set, metric_fns[unlist(task$metrics)])
+    wfs <- workflow_map(wfs, "tune_grid", resamples = rset, metrics = ms_w, seed = 1,
+                        control = control_grid(save_workflow = TRUE))
+    cm <- collect_metrics(wfs)
+    cm_rows <- lapply(seq_len(nrow(cm)), function(i) list(
+      wflow_id = cm$wflow_id[i], config = cm$.config[i], preproc = cm$preproc[i], model = cm$model[i],
+      metric = cm$.metric[i], mean = cm$mean[i], std_err = cm$std_err[i], n = cm$n[i]))
+    rank_rows <- function(rr) lapply(seq_len(nrow(rr)), function(i) list(
+      wflow_id = rr$wflow_id[i], config = rr$.config[i], metric = rr$.metric[i], mean = rr$mean[i],
+      std_err = rr$std_err[i], n = rr$n[i], preprocessor = rr$preprocessor[i], model = rr$model[i], rank = rr$rank[i]))
+    rr_all <- rank_results(wfs, rank_metric = ws$metric, select_best = FALSE)
+    rr_best <- rank_results(wfs, rank_metric = ws$metric, select_best = TRUE)
+    rr_default <- rank_results(wfs)
+    best_id <- rr_best$wflow_id[1]
+    best_res <- extract_workflow_set_result(wfs, best_id)
+    best_sel <- select_best(best_res, metric = ws$metric)
+    best_params <- as.list(best_sel[setdiff(names(best_sel), ".config")])
+    fb <- fit_best(wfs, metric = ws$metric)
+    fb_pred <- if (task$type == "regression") predict(fb, test) else cbind(predict(fb, test), predict(fb, test, type = "prob"))
+    prob_cols <- function(d) setdiff(grep("^[.]pred_", names(d), value = TRUE), ".pred_class")
+    pred_dump <- function(d) if (task$type == "regression") list(pred = as.numeric(d$.pred)) else
+      list(class = as.character(d$.pred_class), prob = unname(as.matrix(d[, prob_cols(d), drop = FALSE])))
+    info <- dplyr::bind_rows(wfs$info)
+    list(ids = wfs$wflow_id,
+         info = lapply(seq_len(nrow(info)), function(i) list(preproc = info$preproc[i], model = info$model[i])),
+         result_classes = vapply(wfs$result, function(r) class(r)[1], ""),
+         collect_metrics = cm_rows,
+         rank_results = list(all = rank_rows(rr_all), best = rank_rows(rr_best), default = rank_rows(rr_default)),
+         fit_best = list(wflow_id = best_id, config = best_sel$.config, params = best_params,
+                         model_class = class(extract_spec_parsnip(fb))[1], predictions = pred_dump(fb_pred)))
+  } else NULL
+
   out <- list(
     task = task,
     versions = versions,
@@ -487,7 +568,8 @@ run_task <- function(task) {
     test_metrics_weighted = test_metrics_weighted,
     resample = list(ids = names(per_fold_list), per_fold = per_fold_list, summary = summary_list, fold_trees = fold_trees, fold_boosts = fold_boosts,
                     rsample_native = rsample_native),
-    tuning = tuning_info
+    tuning = tuning_info,
+    workflow_set = wfs_info
   )
   write_json(out, file.path(out_dir, paste0(task$id, ".json")), auto_unbox = TRUE, digits = I(17), na = "null", null = "null", pretty = FALSE)
   cat("   wrote", file.path(out_dir, paste0(task$id, ".json")), "\n")

@@ -23,6 +23,7 @@ crates/
   tidyrustmodels-metrics    yardstick-compatible metric definitions
   tidyrustmodels-workflows  recipe + model composition; fit_resamples
   tidyrustmodels-tune       grid / random search over resamples
+  tidyrustmodels-workflowsets  preprocessor x model workflow sets mapped over one set of resamples; rank, refit (workflowsets semantics)
   tidyrustmodels            facade crate re-exporting a curated public API
 bindings/python             PyO3 crate (`tidyrustmodels._native`), maturin packaged
 python/tidyrustmodels       pure-Python wrapper package

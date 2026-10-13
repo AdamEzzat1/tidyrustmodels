@@ -191,6 +191,25 @@ Tunable parameters: `penalty` (`LogisticRegSpec`, `MultinomRegSpec`), `cost_comp
 `tree_depth` / `min_n` (`DecisionTreeSpec`), `mtry` / `trees` / `min_n` (`RandForestSpec`),
 `trees` / `tree_depth` / `learn_rate` / `min_n` / `loss_reduction` (`BoostTreeSpec`).
 
+## tidyrustmodels-workflowsets (ADR-0016)
+
+```rust
+pub fn workflow_set(preproc: Vec<(Option<String>, Recipe)>, models: Vec<(Option<String>, Box<dyn ModelSpec>)>, cross: bool) -> Result<WorkflowSet>;
+pub fn fix_list_names(classes: &[&str], given: &[Option<String>]) -> Vec<String>;   // workflowsets' naming rule
+pub struct WorkflowSetEntry { id, preproc, model, workflow: Workflow, grid: Option<Grid>, result: Option<WorkflowResult> }
+pub enum WorkflowResult { Resamples(ResampleResults), Tuned(TuneResults) }
+impl WorkflowSet {
+    fn ids(&self) -> Vec<&str>; fn entry(&self, id) / extract_workflow(id) / extract_result(id);
+    fn option_grid(&mut self, id, grid: Grid) -> Result<()>;               // option_add(grid = ..)
+    fn workflow_map(&mut self, data, folds, metrics: &MetricSet, par) -> Result<()>;  // tune_grid with a grid, fit_resamples without
+    fn collect_metrics(&self) -> Result<Vec<CollectedMetric>>;            // wflow_id, config, preproc, model, metric, mean, std_err, n
+    fn rank_results(&self, metric: Option<Metric>, select_best: bool) -> Result<Vec<RankRow>>;  // ties keep order (R: random under seed 1)
+    fn best(&self, metric: Option<Metric>) -> Result<(String, ParamSet)>;
+    fn fit_best(&self, data, metric: Option<Metric>) -> Result<FittedWorkflow>;
+}
+// tune: TuneResults::config_labels() -> Vec<String>   // pre0_mod01_post0 ... (make_config_labs)
+```
+
 ## Python (`tidyrustmodels`)
 
 ```python

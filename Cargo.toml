@@ -8,6 +8,7 @@ members = [
     "crates/tidyrustmodels-metrics",
     "crates/tidyrustmodels-workflows",
     "crates/tidyrustmodels-tune",
+    "crates/tidyrustmodels-workflowsets",
     "crates/tidyrustmodels",
 ]
 exclude = ["bindings/python", "benchmarks/rust"]
@@ -28,6 +29,7 @@ tidyrustmodels-resample = { path = "crates/tidyrustmodels-resample", version = "
 tidyrustmodels-metrics = { path = "crates/tidyrustmodels-metrics", version = "0.1.0-dev" }
 tidyrustmodels-workflows = { path = "crates/tidyrustmodels-workflows", version = "0.1.0-dev" }
 tidyrustmodels-tune = { path = "crates/tidyrustmodels-tune", version = "0.1.0-dev" }
+tidyrustmodels-workflowsets = { path = "crates/tidyrustmodels-workflowsets", version = "0.1.0-dev" }
 
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["float_roundtrip"] }

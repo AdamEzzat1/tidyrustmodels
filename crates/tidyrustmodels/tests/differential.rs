@@ -607,8 +607,13 @@ fn check_resampling(report: &mut Report, task: &Value, split: &Value, fx: &Value
 }
 
 fn build_recipe(task: &Value) -> Recipe {
-    let mut rec = Recipe::new(task["outcome"].as_str().unwrap());
-    for s in task["steps"].as_array().unwrap() {
+    recipe_from_steps(task["outcome"].as_str().unwrap(), &task["steps"])
+}
+
+/// A recipe for `outcome` with the task vocabulary's `steps` (ADR-0006).
+fn recipe_from_steps(outcome: &str, steps: &Value) -> Recipe {
+    let mut rec = Recipe::new(outcome);
+    for s in steps.as_array().unwrap() {
         rec = match s.as_str().unwrap() {
             "impute_median_numeric" => rec.step(StepImputeMedian::new(Selector::AllNumericPredictors)),
             "impute_mean_numeric" => rec.step(StepImputeMean::new(Selector::AllNumericPredictors)),
@@ -680,8 +685,28 @@ fn model_for(task: &Value, engine: Engine, y: &Outcome) -> Box<dyn ModelSpec> {
 }
 
 fn model_for_seed(task: &Value, engine: Engine, y: &Outcome, seed: u64) -> Box<dyn ModelSpec> {
-    if task["model"] == "rand_forest" {
-        let a = &task["model_args"];
+    model_spec_for(
+        task["model"].as_str().unwrap_or(""),
+        &task["model_args"],
+        task["type"].as_str().unwrap(),
+        y,
+        engine,
+        seed,
+    )
+}
+
+/// A model specification from the task vocabulary: `model` (`linear_reg` /
+/// `logistic_reg` / `multinom_reg` by the outcome when empty) with `args`.
+fn model_spec_for(
+    model: &str,
+    args: &Value,
+    task_type: &str,
+    y: &Outcome,
+    engine: Engine,
+    seed: u64,
+) -> Box<dyn ModelSpec> {
+    if model == "rand_forest" {
+        let a = args;
         let mut s = RandForestSpec::new().engine(engine).seed(Seed(seed));
         if let Some(v) = a["mtry"].as_u64() {
             s = s.mtry(v as usize);
@@ -694,8 +719,8 @@ fn model_for_seed(task: &Value, engine: Engine, y: &Outcome, seed: u64) -> Box<d
         }
         return Box::new(s);
     }
-    if task["model"] == "boost_tree" {
-        let a = &task["model_args"];
+    if model == "boost_tree" {
+        let a = args;
         let mut s = BoostTreeSpec::new().engine(engine);
         if let Some(v) = a["trees"].as_u64() {
             s = s.trees(v as usize);
@@ -714,8 +739,8 @@ fn model_for_seed(task: &Value, engine: Engine, y: &Outcome, seed: u64) -> Box<d
         }
         return Box::new(s);
     }
-    if task["model"] == "decision_tree" {
-        let a = &task["model_args"];
+    if model == "decision_tree" {
+        let a = args;
         let mut s = DecisionTreeSpec::new().engine(engine);
         if let Some(v) = a["cost_complexity"].as_f64() {
             s = s.cost_complexity(v);
@@ -728,7 +753,7 @@ fn model_for_seed(task: &Value, engine: Engine, y: &Outcome, seed: u64) -> Box<d
         }
         return Box::new(s);
     }
-    if task["type"] == "regression" {
+    if task_type == "regression" {
         Box::new(LinearRegSpec::new().engine(engine))
     } else if y.as_class().map(|(_, l)| l.len()).unwrap_or(0) > 2 {
         Box::new(MultinomRegSpec::new().engine(engine))
@@ -1970,6 +1995,353 @@ fn differential_against_r_fixtures() {
                     );
                 } else {
                     compare_tree_structure(&mut report, &tol, id, eng, "fit_best", fb.model(), &fxb["model"]);
+                }
+            }
+
+            // ---- workflow sets (ADR-0016): workflow_set + workflow_map on the shared
+            // rset, collect_metrics, rank_results in both modes and by default, fit_best ----
+            if let (Some(ws), Engine::Native) = (task.get("workflow_set"), engine) {
+                let fxw = &fx["workflow_set"];
+                assert!(!fxw.is_null(), "{id}: fixture lacks workflow_set");
+                let outcome = task["outcome"].as_str().unwrap();
+                let task_type = task["type"].as_str().unwrap();
+                let cross = ws["cross"].as_bool().unwrap_or(true);
+                let r_preproc = items(&ws["preproc"]);
+                let r_models = items(&ws["models"]);
+                let preproc: Vec<(Option<String>, Recipe)> = r_preproc
+                    .iter()
+                    .map(|p| {
+                        (
+                            p["name"].as_str().map(str::to_string),
+                            recipe_from_steps(outcome, &p["steps"]),
+                        )
+                    })
+                    .collect();
+                let models: Vec<(Option<String>, Box<dyn ModelSpec>)> = r_models
+                    .iter()
+                    .map(|m| {
+                        (
+                            m["name"].as_str().map(str::to_string),
+                            model_spec_for(
+                                m["model"].as_str().unwrap(),
+                                &m["model_args"],
+                                task_type,
+                                &y_train,
+                                engine,
+                                0,
+                            ),
+                        )
+                    })
+                    .collect();
+                let mut set = workflow_set(preproc, models, cross).unwrap();
+                let ids: Vec<String> = set.ids().iter().map(|s| s.to_string()).collect();
+                report.exact(id, eng, "L4", "workflow set ids", &ids, &strs(&fxw["ids"]));
+                // grids attach by model (option_add(grid, id = ...) in R): entries are
+                // preprocessor-major, so the model index cycles fastest when crossed
+                let n_m = r_models.len();
+                let crossed = cross || r_preproc.len() == 1 || n_m == 1;
+                for (e, wid) in ids.iter().enumerate() {
+                    let m = if crossed { e % n_m } else { e };
+                    if let Some(g) = r_models[m].get("grid") {
+                        let grid = Grid {
+                            points: items(g)
+                                .iter()
+                                .map(|row| {
+                                    row.as_object()
+                                        .unwrap()
+                                        .iter()
+                                        .map(|(k, v)| (k.clone(), v.as_f64().unwrap()))
+                                        .collect()
+                                })
+                                .collect(),
+                        };
+                        set.option_grid(wid, grid).unwrap();
+                    }
+                }
+                set.workflow_map(&data, &folds, &metrics, Parallelism::threads(4))
+                    .unwrap();
+                let info: Vec<(String, String)> = set
+                    .entries
+                    .iter()
+                    .map(|e| (e.preproc.clone(), e.model.clone()))
+                    .collect();
+                let r_info: Vec<(String, String)> = items(&fxw["info"])
+                    .iter()
+                    .map(|v| {
+                        (
+                            v["preproc"].as_str().unwrap().to_string(),
+                            v["model"].as_str().unwrap().to_string(),
+                        )
+                    })
+                    .collect();
+                report.exact(
+                    id,
+                    eng,
+                    "L4",
+                    "workflow set info (preproc, model)",
+                    &info,
+                    &r_info,
+                );
+                let classes: Vec<String> = set
+                    .entries
+                    .iter()
+                    .map(|e| match e.result.as_ref().unwrap() {
+                        WorkflowResult::Resamples(_) => "resample_results".to_string(),
+                        WorkflowResult::Tuned(_) => "tune_results".to_string(),
+                    })
+                    .collect();
+                report.exact(
+                    id,
+                    eng,
+                    "L4",
+                    "workflow set result classes",
+                    &classes,
+                    &strs(&fxw["result_classes"]),
+                );
+                // collect_metrics: the same rows in the same order, values within the
+                // summary bounds
+                let cm = set.collect_metrics().unwrap();
+                let r_cm = items(&fxw["collect_metrics"]);
+                let key = |r: &CollectedMetric| (r.wflow_id.clone(), r.config.clone(), r.metric.clone());
+                let r_key = |v: &Value| {
+                    (
+                        v["wflow_id"].as_str().unwrap().to_string(),
+                        v["config"].as_str().unwrap().to_string(),
+                        v["metric"].as_str().unwrap().to_string(),
+                    )
+                };
+                report.exact(
+                    id,
+                    eng,
+                    "L4",
+                    "collect_metrics rows (wflow_id, .config, .metric) in order",
+                    &cm.iter().map(key).collect::<Vec<_>>(),
+                    &r_cm.iter().map(|v| r_key(v)).collect::<Vec<_>>(),
+                );
+                for rv in &r_cm {
+                    let k = r_key(rv);
+                    let Some(ours) = cm.iter().find(|r| key(r) == k) else {
+                        continue;
+                    };
+                    let label = format!("collect_metrics {} {} {}", k.0, k.1, k.2);
+                    report.exact(
+                        id,
+                        eng,
+                        "L4",
+                        &format!("{label} preproc/model"),
+                        &(ours.preproc.clone(), ours.model.clone()),
+                        &(
+                            rv["preproc"].as_str().unwrap().to_string(),
+                            rv["model"].as_str().unwrap().to_string(),
+                        ),
+                    );
+                    report.exact(
+                        id,
+                        eng,
+                        "L4",
+                        &format!("{label} n"),
+                        &(ours.n as u64),
+                        &rv["n"].as_u64().unwrap(),
+                    );
+                    match (ours.mean, rv["mean"].as_f64()) {
+                        (Some(a), Some(b)) => report.compare(
+                            id,
+                            eng,
+                            "L4",
+                            &format!("{label} mean"),
+                            &[a],
+                            &[b],
+                            tol.pair_eng(id, "summary", eng),
+                        ),
+                        (a, b) => report.exact(id, eng, "L4", &format!("{label} mean (NA)"), &a, &b),
+                    }
+                    match (ours.std_err, rv["std_err"].as_f64()) {
+                        (Some(a), Some(b)) => report.compare(
+                            id,
+                            eng,
+                            "L4",
+                            &format!("{label} std_err"),
+                            &[a],
+                            &[b],
+                            tol.pair_eng(id, "summary", eng),
+                        ),
+                        (a, b) => report.exact(id, eng, "L4", &format!("{label} std_err (NA)"), &a, &b),
+                    }
+                }
+                // rank_results: ranks exact except inside tie groups (R breaks ties at
+                // random under seed 1), where the sets of ranks must agree
+                let metric = Metric::from_name(ws["metric"].as_str().unwrap()).unwrap();
+                let default_metric = metrics.metrics()[0];
+                for (mode, m, best) in [
+                    ("all", Some(metric), false),
+                    ("best", Some(metric), true),
+                    ("default", None, false),
+                ] {
+                    let rr = set.rank_results(m, best).unwrap();
+                    let r_rr = items(&fxw["rank_results"][mode]);
+                    let rank_metric = m.unwrap_or(default_metric).name();
+                    let rkey = |r: &RankRow| (r.wflow_id.clone(), r.config.clone(), r.metric.clone());
+                    let mut ours_keys: Vec<_> = rr.iter().map(rkey).collect();
+                    let mut their_keys: Vec<_> = r_rr.iter().map(|v| r_key(v)).collect();
+                    ours_keys.sort();
+                    their_keys.sort();
+                    report.exact(
+                        id,
+                        eng,
+                        "L4",
+                        &format!("rank_results[{mode}] rows"),
+                        &ours_keys,
+                        &their_keys,
+                    );
+                    // every candidate of the ranking metric: its rank, or its tie group's ranks
+                    let their_metric_rows: Vec<&Value> = r_rr
+                        .iter()
+                        .copied()
+                        .filter(|v| v["metric"] == rank_metric)
+                        .collect();
+                    for rv in &their_metric_rows {
+                        let k = r_key(rv);
+                        let Some(ours) = rr.iter().find(|r| rkey(r) == k) else {
+                            continue;
+                        };
+                        let label = format!("rank_results[{mode}] {} {}", k.0, k.1);
+                        report.exact(
+                            id,
+                            eng,
+                            "L4",
+                            &format!("{label} preprocessor/model"),
+                            &(ours.preprocessor.clone(), ours.model.clone()),
+                            &(
+                                rv["preprocessor"].as_str().unwrap().to_string(),
+                                rv["model"].as_str().unwrap().to_string(),
+                            ),
+                        );
+                        let r_mean = rv["mean"].as_f64();
+                        let group: Vec<&&Value> = their_metric_rows
+                            .iter()
+                            .filter(|o| o["mean"].as_f64() == r_mean)
+                            .collect();
+                        if group.len() == 1 {
+                            report.exact(
+                                id,
+                                eng,
+                                "L4",
+                                &format!("{label} rank"),
+                                &ours.rank.map(|r| r as u64),
+                                &rv["rank"].as_u64(),
+                            );
+                        } else {
+                            let mut theirs: Vec<Option<u64>> =
+                                group.iter().map(|o| o["rank"].as_u64()).collect();
+                            let mut mine: Vec<Option<u64>> = group
+                                .iter()
+                                .filter_map(|o| rr.iter().find(|r| rkey(r) == r_key(o)))
+                                .map(|r| r.rank.map(|x| x as u64))
+                                .collect();
+                            theirs.sort();
+                            mine.sort();
+                            report.exact(
+                                id,
+                                eng,
+                                "L4",
+                                &format!("{label} rank (tie group of {})", group.len()),
+                                &mine,
+                                &theirs,
+                            );
+                        }
+                    }
+                }
+                // fit_best: the top workflow of rank_results(select_best = TRUE), its
+                // select_best() parameters, and the refit's predictions on the test rows
+                let fxb = &fxw["fit_best"];
+                let r_best_rows = items(&fxw["rank_results"]["best"]);
+                let top_mean = r_best_rows
+                    .iter()
+                    .find(|v| v["metric"] == metric.name())
+                    .and_then(|v| v["mean"].as_f64());
+                let top_ties = r_best_rows
+                    .iter()
+                    .filter(|v| v["metric"] == metric.name() && v["mean"].as_f64() == top_mean)
+                    .count();
+                assert_eq!(
+                    top_ties, 1,
+                    "{id}: tie at the top of rank_results(select_best); the task must avoid it"
+                );
+                let (best_id, best_params) = set.best(Some(metric)).unwrap();
+                report.exact(
+                    id,
+                    eng,
+                    "L4",
+                    "fit_best workflow",
+                    &best_id,
+                    &fxb["wflow_id"].as_str().unwrap().to_string(),
+                );
+                let r_params: Vec<(String, f64)> = fxb["params"]
+                    .as_object()
+                    .map(|o| o.iter().map(|(k, v)| (k.clone(), v.as_f64().unwrap())).collect())
+                    .unwrap_or_default();
+                let mut ours_params = best_params.clone();
+                ours_params.sort_by(|a, b| a.0.cmp(&b.0));
+                let mut theirs_params = r_params.clone();
+                theirs_params.sort_by(|a, b| a.0.cmp(&b.0));
+                report.exact(id, eng, "L4", "fit_best parameters", &ours_params, &theirs_params);
+                let fb = set.fit_best(&data, Some(metric)).unwrap();
+                let model_class = set.extract_workflow(&best_id).unwrap().model().name();
+                report.exact(
+                    id,
+                    eng,
+                    "L4",
+                    "fit_best model class",
+                    &model_class.to_string(),
+                    &fxb["model_class"].as_str().unwrap().to_string(),
+                );
+                let pred = fb.predict(&test).unwrap();
+                let (pred_key, prob_key) = match model_class {
+                    "boost_tree" => ("xgb_pred", "xgb_prob_abs"),
+                    "decision_tree" => ("tree_pred", "tree_prob_abs"),
+                    "logistic_reg" => ("ols_pred", "logistic_prob_abs"),
+                    "multinom_reg" => ("ols_pred", "multinom_prob_abs"),
+                    _ => ("ols_pred", "logistic_prob_abs"),
+                };
+                match &pred {
+                    Prediction::Numeric(p) => report.compare(
+                        id,
+                        eng,
+                        "L4",
+                        "fit_best predictions",
+                        p,
+                        &f64s(&fxb["predictions"]["pred"]),
+                        tol.pair_eng(id, pred_key, eng),
+                    ),
+                    Prediction::Class {
+                        codes,
+                        levels,
+                        probabilities,
+                    } => {
+                        let r_rows: Vec<Vec<f64>> =
+                            items(&fxb["predictions"]["prob"]).into_iter().map(f64s).collect();
+                        let flat_r: Vec<f64> = r_rows.iter().flatten().copied().collect();
+                        report.compare(
+                            id,
+                            eng,
+                            "L4",
+                            "fit_best probabilities",
+                            &probabilities.as_ref().unwrap().to_row_major(),
+                            &flat_r,
+                            (0.0, tol.get_eng(id, prob_key, eng)),
+                        );
+                        report.exact(
+                            id,
+                            eng,
+                            "L4",
+                            "fit_best classes",
+                            &codes
+                                .iter()
+                                .map(|c| levels[*c as usize].clone())
+                                .collect::<Vec<_>>(),
+                            &strs(&fxb["predictions"]["class"]),
+                        );
+                    }
                 }
             }
         }

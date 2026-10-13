@@ -6,6 +6,13 @@ First vertical slice. Everything listed here is backed by tests recorded in
 VERIFICATION.md; nothing is claimed beyond those records.
 
 ### Added
+- Workflow sets (ADR-0016, crate `tidyrustmodels-workflowsets`): `workflow_set` (crossed
+  or paired preprocessors x models, workflowsets' ids and default names),
+  `WorkflowSet::option_grid` / `workflow_map` (tune or resample every workflow on the
+  same folds), `collect_metrics`, `rank_results` (both modes, default metric),
+  `best` / `fit_best`, `extract_workflow` / `extract_result`;
+  `TuneResults::config_labels`; `Workflow` is `Clone`. Python `workflow_set` and
+  `WorkflowSet`. Verified on three tasks (VERIFICATION.md Phase 8k).
 - Core contracts: `Table`/`Column` with explicit missing-value masks, `Schema` with roles,
   column-major `DesignMatrix`, `Outcome`/`Prediction`, structured `Error`, `Step`/`ModelSpec`
   lifecycle traits, explicit `Seed` and bounded `Parallelism`.

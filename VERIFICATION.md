@@ -743,6 +743,58 @@ Not covered: sparse storage, ranger / glmnet with sparse input (identical in R;
 ranger is level 5 here), Arrow types beyond integers, floats, strings, dictionaries
 and booleans, zero-copy.
 
+## Workflow sets (Phase 8k)
+
+Executed 2026-10-13. workflowsets 1.1.1 was read from its sources and probed in R
+(`target/wfs_probe*.log`, scratch probes `probe_wfs3.R`): `workflow_set()` lays the
+combinations out preprocessor-outermost / model-innermost in the given order and
+names unnamed elements by class and position (`recipe_1_linear_reg`); a
+`workflow_map("tune_grid")` on a workflow without `tune()` falls back to
+`fit_resamples()` (`.config` `pre0_mod0_post0`; tuned candidates carry zero-padded
+`pre0_mod01_post0` labels, `make_config_labs`); `collect_metrics()` orders rows by
+workflow, `.config`, then metric *name* (`rsq` after `rmse` whatever the set order);
+`rank_results()` negates larger-is-better means, keeps each workflow's first best
+with `select_best`, ranks with `rank(ties.method = "random")` under seed 1 and
+defaults to the set's first metric; `fit_best()` needs `save_workflow = TRUE` and
+refits the top workflow through `fit()`. `tidyr::crossing()` de-duplicates identical
+objects (two identical recipes gave one workflow). ADR-0016 ports this; the one
+deliberate difference is tie-breaking (order of appearance here).
+
+Three tasks carry a `workflow_set` field; the R runner re-derives workflowsets' ids
+from `fix_list_names` and asserts them before mapping. The harness compares ids,
+info and result classes exactly, `collect_metrics` row keys exactly in order with
+values within the summary bounds, ranks exactly outside tie groups and as sets inside
+(three modes: the task's metric, the same with `select_best`, the default metric),
+and `fit_best`'s workflow, parameters, model class and test predictions.
+
+| task | set | best (R = Rust) | tie groups | collect_metrics (max abs / rel) | fit_best predictions |
+|---|---|---|---|---|---|
+| `wfs_reg_filter` | 2 named preprocessors (filter chains) x lm, tuned rpart (3 `cost_complexity`), xgboost; 6 workflows, 10 candidates | `basic_lm` | 0 | 3.3e-16 / 7.6e-15 | 1.3e-14 rel |
+| `wfs_clf_unnamed` | 1 unnamed recipe x unnamed glm, tuned rpart, xgboost (`recipe_logistic_reg`, ...); ranked on `roc_auc` (maximised) | `recipe_boost_tree` | 4 (identical tree candidates) | 3.3e-16 / 6.0e-16 | probabilities exact (0) |
+| `wfs_multi_pairs` | `cross = FALSE`: (normalised recipe, nnet multinom), (impute, tuned rpart on `min_n`), (impute-mean, xgboost) on penguins | `a_mn` | 6 | 1.4e-10 / 6.9e-9 (nnet) | 4.3e-9 abs |
+
+Findings:
+
+1. **The task-level model of `wfs_multi_pairs` is a tree, not the multinomial fit.**
+   Its first version resampled nnet without normalisation and, on this task's split,
+   nnet stopped short of the optimum (fold `mn_log_loss` 1e-5 rel from the Rust
+   solution; linfa did not converge at all), and even normalised the test
+   probabilities differed by 1.3e-7 against the 1e-7 bound. Within the set the
+   normalised multinomial workflow is compared only on resampling summaries (bounds
+   of `penguins_species`, Phase 8c, now also `[tasks.wfs_multi_pairs]`) and, as the
+   winner, on `fit_best` probabilities (4.3e-9 abs).
+2. **Ties are real and only ties differ.** Identical tuned-tree candidates (grids
+   whose `cost_complexity` values prune nothing extra) produce tie groups in two
+   tasks; R's seed-1 random ranks and the order-of-appearance ranks here agree as
+   sets, and no task has a tie at the top (asserted), so `fit_best` is comparable.
+3. `option_add(id = )` takes a single id (one call per workflow), and `fit_best` on
+   a set mapped without `control_grid(save_workflow = TRUE)` aborts even for a
+   `fit_resamples` winner.
+
+Differential suite after this phase: 17541 comparisons, 0 failures, 70 tasks.
+Python: 208 passed (`python/tests/test_workflowsets.py` covers ids, default names,
+pairing, mapping, ranking, `fit_best` and `extract_*`).
+
 ## Test inventory
 
 | suite | location | runs in CI | needs R |

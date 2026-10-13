@@ -1244,6 +1244,167 @@ fn py_grid_regular<'py>(py: Python<'py>, ranges: Vec<(String, f64, f64, bool)>, 
     Ok(out)
 }
 
+/// A workflow set (workflowsets 1.1.1 semantics, ADR-0016): one workflow per
+/// preprocessor x model combination, mapped over the same resamples. Build it with
+/// `workflow_set(preproc, models, cross)`.
+#[pyclass(name = "WorkflowSet", module = "tidyrustmodels._native")]
+struct PyWorkflowSet {
+    inner: WorkflowSet,
+}
+
+fn metric_opt(metric: Option<String>) -> PyResult<Option<Metric>> {
+    Ok(match metric {
+        Some(name) => Some(Metric::from_name(&name).py()?),
+        None => None,
+    })
+}
+
+fn grid_from_py(grid: &[Bound<'_, PyDict>]) -> PyResult<Grid> {
+    let points = grid
+        .iter()
+        .map(|d| {
+            d.iter().map(|(k, v)| Ok((k.extract::<String>()?, v.extract::<f64>()?))).collect::<PyResult<Vec<_>>>()
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    Ok(Grid { points })
+}
+
+#[pymethods]
+impl PyWorkflowSet {
+    fn __len__(&self) -> usize {
+        self.inner.entries.len()
+    }
+
+    /// The `wflow_id`s in workflowsets' order (preprocessors outermost, models innermost).
+    #[getter]
+    fn ids(&self) -> Vec<String> {
+        self.inner.ids().iter().map(|s| s.to_string()).collect()
+    }
+
+    /// `[{"wflow_id", "preproc", "model", "tuned"}]` (`info` plus whether a grid is attached).
+    fn info<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let out = PyList::empty(py);
+        for e in &self.inner.entries {
+            let d = PyDict::new(py);
+            d.set_item("wflow_id", &e.id)?;
+            d.set_item("preproc", &e.preproc)?;
+            d.set_item("model", &e.model)?;
+            d.set_item("tuned", e.grid.is_some())?;
+            out.append(d)?;
+        }
+        Ok(out)
+    }
+
+    /// `option_add(grid = grid, id = id)`: the grid (`[{param: value}]`) `workflow_map`
+    /// tunes this workflow over.
+    fn option_grid(&mut self, id: &str, grid: Vec<Bound<'_, PyDict>>) -> PyResult<()> {
+        self.inner.option_grid(id, grid_from_py(&grid)?).py()
+    }
+
+    /// `workflow_map(x, "tune_grid", resamples, metrics)`: tune every workflow with a
+    /// grid, resample the others, all on `folds`.
+    #[pyo3(signature = (data, folds, metrics, threads = None))]
+    fn workflow_map(&mut self, data: &PyTable, folds: &PyFolds, metrics: Vec<String>, threads: Option<usize>) -> PyResult<()> {
+        let set = MetricSet::from_names(&metrics).py()?;
+        let par = match threads {
+            Some(k) => Parallelism::threads(k),
+            None => Parallelism::SERIAL,
+        };
+        self.inner.workflow_map(&data.inner, &folds.inner, &set, par).py()
+    }
+
+    /// `collect_metrics(x)`: `[{"wflow_id", "config", "preproc", "model", "metric", "mean", "std_err", "n"}]`.
+    fn collect_metrics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let out = PyList::empty(py);
+        for r in self.inner.collect_metrics().py()? {
+            let d = PyDict::new(py);
+            d.set_item("wflow_id", &r.wflow_id)?;
+            d.set_item("config", &r.config)?;
+            d.set_item("preproc", &r.preproc)?;
+            d.set_item("model", &r.model)?;
+            d.set_item("metric", &r.metric)?;
+            d.set_item("mean", r.mean)?;
+            d.set_item("std_err", r.std_err)?;
+            d.set_item("n", r.n)?;
+            out.append(d)?;
+        }
+        Ok(out)
+    }
+
+    /// `rank_results(x, rank_metric, select_best)`: rows `{"wflow_id", "config",
+    /// "metric", "mean", "std_err", "n", "preprocessor", "model", "rank"}` arranged by
+    /// rank (`metric` None = the first metric of the set; ties keep their order of
+    /// appearance where workflowsets draws random ranks under seed 1).
+    #[pyo3(signature = (metric = None, select_best = false))]
+    fn rank_results<'py>(&self, py: Python<'py>, metric: Option<String>, select_best: bool) -> PyResult<Bound<'py, PyList>> {
+        let out = PyList::empty(py);
+        for r in self.inner.rank_results(metric_opt(metric)?, select_best).py()? {
+            let d = PyDict::new(py);
+            d.set_item("wflow_id", &r.wflow_id)?;
+            d.set_item("config", &r.config)?;
+            d.set_item("metric", &r.metric)?;
+            d.set_item("mean", r.mean)?;
+            d.set_item("std_err", r.std_err)?;
+            d.set_item("n", r.n)?;
+            d.set_item("preprocessor", &r.preprocessor)?;
+            d.set_item("model", &r.model)?;
+            d.set_item("rank", r.rank)?;
+            out.append(d)?;
+        }
+        Ok(out)
+    }
+
+    /// The workflow `fit_best` refits and its `select_best()` parameters: `{"wflow_id", "params"}`.
+    #[pyo3(signature = (metric = None))]
+    fn best<'py>(&self, py: Python<'py>, metric: Option<String>) -> PyResult<Bound<'py, PyDict>> {
+        let (id, params) = self.inner.best(metric_opt(metric)?).py()?;
+        let d = PyDict::new(py);
+        d.set_item("wflow_id", id)?;
+        d.set_item("params", param_set_to_py(py, &params)?)?;
+        Ok(d)
+    }
+
+    /// `fit_best(x, metric)`: the top workflow of `rank_results(select_best=True)`,
+    /// finalized when tuned, fitted on all of `data` with `Workflow.fit`.
+    #[pyo3(signature = (data, metric = None))]
+    fn fit_best(&self, data: &PyTable, metric: Option<String>) -> PyResult<PyFittedWorkflow> {
+        Ok(PyFittedWorkflow { inner: self.inner.fit_best(&data.inner, metric_opt(metric)?).py()? })
+    }
+
+    /// `extract_workflow(x, id)`.
+    fn extract_workflow(&self, id: &str) -> PyResult<PyWorkflow> {
+        Ok(PyWorkflow { inner: self.inner.extract_workflow(id).py()?.clone() })
+    }
+
+    /// `extract_workflow_set_result(x, id)`: a `TuneResults` for a tuned workflow, the
+    /// `{"per_fold", "summary"}` dict of `Workflow.fit_resamples` otherwise.
+    fn extract_result<'py>(&self, py: Python<'py>, id: &str) -> PyResult<Bound<'py, PyAny>> {
+        Ok(match self.inner.extract_result(id).py()? {
+            WorkflowResult::Tuned(t) => PyTuneResults { inner: t.clone() }.into_pyobject(py)?.into_any(),
+            WorkflowResult::Resamples(r) => resample_results_to_py(py, r)?.into_any(),
+        })
+    }
+}
+
+/// `workflowsets::workflow_set(preproc, models, cross)`: `preproc` is a list of
+/// `(name, Recipe)` and `models` a list of `(name, model)`; a `None` name gets the
+/// class name made unique as workflowsets does (`recipe_1`, `linear_reg`, ...). Ids
+/// are `"{preproc}_{model}"`.
+#[pyfunction]
+#[pyo3(signature = (preproc, models, cross = true))]
+fn py_workflow_set(
+    preproc: Vec<(Option<String>, PyRecipe)>,
+    models: Vec<(Option<String>, Bound<'_, PyAny>)>,
+    cross: bool,
+) -> PyResult<PyWorkflowSet> {
+    let pp: Vec<(Option<String>, Recipe)> = preproc.into_iter().map(|(n, r)| (n, r.inner)).collect();
+    let mut ms: Vec<(Option<String>, Box<dyn ModelSpec>)> = Vec::with_capacity(models.len());
+    for (n, m) in &models {
+        ms.push((n.clone(), model_from_py(m)?));
+    }
+    Ok(PyWorkflowSet { inner: workflow_set(pp, ms, cross).py()? })
+}
+
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
@@ -1257,6 +1418,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBoostTree>()?;
     m.add_class::<PyFolds>()?;
     m.add_class::<PyTuneResults>()?;
+    m.add_class::<PyWorkflowSet>()?;
     m.add_class::<PyWorkflow>()?;
     m.add_class::<PyFittedWorkflow>()?;
     m.add_function(wrap_pyfunction!(py_vfold_cv, m)?)?;
@@ -1275,6 +1437,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_initial_validation_split, m)?)?;
     m.add_function(wrap_pyfunction!(py_make_strata, m)?)?;
     m.add_function(wrap_pyfunction!(py_tune_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(py_workflow_set, m)?)?;
     m.add_function(wrap_pyfunction!(py_grid_regular, m)?)?;
     m.add_function(wrap_pyfunction!(py_class_metrics, m)?)?;
     m.add_function(wrap_pyfunction!(py_conf_mat, m)?)?;

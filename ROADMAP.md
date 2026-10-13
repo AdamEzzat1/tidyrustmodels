@@ -96,7 +96,10 @@ VERIFICATION.md Phase 8i); (h) Arrow/Polars/sparse inputs — **done** (sparse
 vectors as a column flag with recipes' propagation rules and parsnip's sparse-matrix
 hand-off to xgboost, six tasks against R; Arrow interop behind the `arrow` feature;
 Python `from_arrow` / `from_polars` / `from_scipy_sparse` and exports, ADR-0015;
-VERIFICATION.md Phase 8j); (i) workflowsets.
+VERIFICATION.md Phase 8j); (i) workflowsets — **done** (crate
+`tidyrustmodels-workflowsets`: `workflow_set` / `workflow_map` / `collect_metrics` /
+`rank_results` / `fit_best` with workflowsets 1.1.1 semantics, three tasks against R,
+ADR-0016; VERIFICATION.md Phase 8k).
 
 ## Phase 7 — Native algorithms (2026-10-12) — first two solvers complete, pending review
 

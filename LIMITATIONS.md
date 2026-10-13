@@ -17,6 +17,10 @@
   and dense by the other. As in tune 2.1.0, the decision applies to `fit` but not to
   `fit_resamples`, so on a sparse design the resampled models and the final model
   are not the same model.
+- Workflow sets: `rank_results` breaks ties by order of appearance where workflowsets
+  draws random ranks under seed 1; identical preprocessor or model objects are not
+  de-duplicated (`tidyr::crossing` does); no comments, options beyond the grid,
+  `collect_predictions` / `collect_extracts` on a set, or race / Bayesian mapping.
 - Precision: `f64` only.
 - Preprocessing: select, mean/median imputation, normalize, dummy, zv, nzv, corr, other,
   novel, unknown. No `step_interact`, `step_pca`, splines.

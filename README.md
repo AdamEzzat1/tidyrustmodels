@@ -52,6 +52,7 @@ let folds = vfold_cv(data.nrows(), 5, None, Seed(7))?;
 let cv = wf.fit_resamples(&data, &folds, &MetricSet::classification_defaults(), Parallelism::threads(4))?;
 // tuning: tune_grid(..) then .select_best(m) / .select_by_one_std_err(m, &[SortKey::desc("penalty")]),
 // wf.finalize(&sel.params).last_fit(&data, &split, &metrics), fit_best(..) (ADR-0014)
+// workflow sets: workflow_set(preproc, models, true)?.workflow_map(..); .rank_results(None, true); .fit_best(&data, None) (ADR-0016)
 ```
 
 See `crates/tidyrustmodels/examples/penguins_workflow.rs` for the full example
@@ -106,7 +107,7 @@ pytest python/tests
 ## Layout
 
 ```
-crates/            Rust workspace crates (core, recipes, models, resample, metrics, workflows, tune, facade)
+crates/            Rust workspace crates (core, recipes, models, resample, metrics, workflows, tune, workflowsets, facade)
 bindings/python/   PyO3 extension crate
 python/            Python package and tests
 reference/         R scripts, datasets, shared splits, fixtures, tolerances

@@ -35,6 +35,7 @@ from ._native import (
     Table,
     TidyRustModelsError,
     TuneResults,
+    WorkflowSet,
     UnsupportedError,
     Workflow,
     __version__,
@@ -56,6 +57,7 @@ initial_time_split = _native.py_initial_time_split
 initial_validation_split = _native.py_initial_validation_split
 make_strata = _native.py_make_strata
 tune_grid = _native.py_tune_grid
+workflow_set = _native.py_workflow_set
 grid_regular = _native.py_grid_regular
 class_metrics = _native.py_class_metrics
 conf_mat = _native.py_conf_mat
@@ -88,6 +90,8 @@ __all__ = [
     "make_strata",
     "tune_grid",
     "TuneResults",
+    "WorkflowSet",
+    "workflow_set",
     "grid_regular",
     "class_metrics",
     "conf_mat",

@@ -1,0 +1,19 @@
+[package]
+name = "tidyrustmodels-workflowsets"
+description = "tidyrustmodels workflow sets: crossed preprocessor x model workflows mapped over resamples (workflowsets semantics)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+tidyrustmodels-core = { workspace = true }
+tidyrustmodels-recipes = { workspace = true }
+tidyrustmodels-models = { workspace = true }
+tidyrustmodels-resample = { workspace = true }
+tidyrustmodels-metrics = { workspace = true }
+tidyrustmodels-workflows = { workspace = true }
+tidyrustmodels-tune = { workspace = true }
+serde = { workspace = true }

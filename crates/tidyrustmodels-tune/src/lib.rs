@@ -256,6 +256,19 @@ impl TuneResults {
             .collect()
     }
 
+    /// tune's `.config` labels (`make_config_labs`): `pre0_mod{k}_post0` with `k`
+    /// the config number zero-padded to the width of the largest one
+    /// (`pre0_mod01_post0` ... `pre0_mod12_post0`); a resampled workflow without
+    /// parameters is `pre0_mod0_post0`.
+    pub fn config_labels(&self) -> Vec<String> {
+        let configs = self.configs();
+        let width = configs.iter().max().map_or(1, |m| m.to_string().len());
+        configs
+            .iter()
+            .map(|k| format!("pre0_mod{k:0width$}_post0"))
+            .collect()
+    }
+
     /// `tune::collect_metrics()` for one metric: every candidate's summary in
     /// `.config` order (ties in grid order), as [`BestRow`]s.
     fn rows_for(&self, metric: Metric) -> Vec<BestRow> {

@@ -2058,6 +2058,228 @@
     "rsq",
     "mae"
    ]
+  },
+  {
+   "id": "wfs_reg_filter",
+   "dataset": "synthetic_filter_reg",
+   "type": "regression",
+   "outcome": "y",
+   "predictors": [
+    "x1",
+    "x2",
+    "x3",
+    "x4",
+    "x5",
+    "g",
+    "h"
+   ],
+   "steps": [
+    "unknown_nominal",
+    "zv",
+    "novel_nominal",
+    "other_nominal",
+    "impute_median_numeric",
+    "dummy_nominal"
+   ],
+   "model": "linear_reg",
+   "metrics": [
+    "rmse",
+    "rsq",
+    "mae"
+   ],
+   "workflow_set": {
+    "cross": true,
+    "metric": "rmse",
+    "preproc": [
+     {
+      "name": "basic",
+      "steps": [
+       "unknown_nominal",
+       "zv",
+       "novel_nominal",
+       "other_nominal",
+       "impute_median_numeric",
+       "dummy_nominal"
+      ]
+     },
+     {
+      "name": "filter",
+      "steps": [
+       "unknown_nominal",
+       "zv",
+       "nzv",
+       "novel_nominal",
+       "other_nominal",
+       "impute_mean_numeric",
+       "corr_numeric",
+       "dummy_nominal"
+      ]
+     }
+    ],
+    "models": [
+     {
+      "name": "lm",
+      "model": "linear_reg"
+     },
+     {
+      "name": "tree",
+      "model": "decision_tree",
+      "model_args": {
+       "min_n": 5
+      },
+      "grid": [
+       {
+        "cost_complexity": 0.001
+       },
+       {
+        "cost_complexity": 0.01
+       },
+       {
+        "cost_complexity": 0.1
+       }
+      ]
+     },
+     {
+      "name": "xgb",
+      "model": "boost_tree",
+      "model_args": {
+       "trees": 10
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "wfs_clf_unnamed",
+   "dataset": "synthetic_clf_small",
+   "type": "classification",
+   "outcome": "y",
+   "predictors": [
+    "x1",
+    "x2",
+    "g"
+   ],
+   "steps": [
+    "dummy_nominal"
+   ],
+   "model": "logistic_reg",
+   "metrics": [
+    "accuracy",
+    "roc_auc",
+    "mn_log_loss",
+    "brier_class"
+   ],
+   "workflow_set": {
+    "cross": true,
+    "metric": "roc_auc",
+    "preproc": [
+     {
+      "steps": [
+       "dummy_nominal"
+      ]
+     }
+    ],
+    "models": [
+     {
+      "model": "logistic_reg"
+     },
+     {
+      "model": "decision_tree",
+      "model_args": {
+       "min_n": 8
+      },
+      "grid": [
+       {
+        "cost_complexity": 0.0001
+       },
+       {
+        "cost_complexity": 0.01
+       },
+       {
+        "cost_complexity": 0.05
+       }
+      ]
+     },
+     {
+      "model": "boost_tree",
+      "model_args": {
+       "trees": 10
+      }
+     }
+    ]
+   }
+  },
+  {
+   "id": "wfs_multi_pairs",
+   "dataset": "penguins",
+   "type": "classification",
+   "outcome": "species",
+   "predictors": [
+    "bill_length_mm",
+    "body_mass_g"
+   ],
+   "steps": [
+    "impute_median_numeric"
+   ],
+   "model": "decision_tree",
+   "metrics": [
+    "accuracy",
+    "mn_log_loss",
+    "roc_auc"
+   ],
+   "workflow_set": {
+    "cross": false,
+    "metric": "accuracy",
+    "preproc": [
+     {
+      "name": "a",
+      "steps": [
+       "impute_median_numeric",
+       "normalize_numeric"
+      ]
+     },
+     {
+      "name": "b",
+      "steps": [
+       "impute_median_numeric"
+      ]
+     },
+     {
+      "name": "c",
+      "steps": [
+       "impute_mean_numeric"
+      ]
+     }
+    ],
+    "models": [
+     {
+      "name": "mn",
+      "model": "multinom_reg"
+     },
+     {
+      "name": "tree",
+      "model": "decision_tree",
+      "grid": [
+       {
+        "min_n": 3
+       },
+       {
+        "min_n": 7
+       },
+       {
+        "min_n": 12
+       }
+      ]
+     },
+     {
+      "name": "xgb",
+      "model": "boost_tree",
+      "model_args": {
+       "trees": 10
+      }
+     }
+    ]
+   }
   }
  ]
 }
