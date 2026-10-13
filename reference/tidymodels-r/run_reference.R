@@ -7,6 +7,7 @@
 # Run from the repository root AFTER export_datasets.R, make_synthetic.py and
 # generate_splits.py:
 #   Rscript reference/tidymodels-r/run_reference.R
+# (set TRM_TASKS=id1,id2 to regenerate a subset; metrics_fixed.json is always rewritten)
 #
 # Everything here is deterministic given the shared split ids; the only randomness is
 # ranger's, fixed per forest through set_engine(seed =) (Phase 8e).
@@ -88,7 +89,8 @@ run_task <- function(task) {
   n_lv <- if (task$type == "classification") nlevels(train[[task$outcome]]) else 0L
   is_tree <- identical(task$model, "decision_tree")
   is_rf <- identical(task$model, "rand_forest")
-  multi <- n_lv > 2 && !is_tree && !is_rf
+  is_boost <- identical(task$model, "boost_tree")
+  multi <- n_lv > 2 && !is_tree && !is_rf && !is_boost
   rf_seeds <- 1:10
   rf_model <- function(seed) {
     args <- if (is.null(task$model_args)) list() else task$model_args
@@ -97,6 +99,9 @@ run_task <- function(task) {
   model <- if (is_tree) {
     args <- if (is.null(task$model_args)) list() else task$model_args
     do.call(decision_tree, args) %>% set_engine("rpart") %>% set_mode(task$type)
+  } else if (is_boost) {
+    args <- if (is.null(task$model_args)) list() else task$model_args
+    do.call(boost_tree, args) %>% set_engine("xgboost") %>% set_mode(task$type)
   } else if (is_rf) rf_model(rf_seeds[1]) else if (task$type == "regression") linear_reg() %>% set_engine("lm") else
            if (multi) multinom_reg() %>% set_engine("nnet", maxit = 10000, reltol = 1e-15, trace = FALSE) else
            logistic_reg() %>% set_engine("glm")
@@ -135,6 +140,30 @@ run_task <- function(task) {
          cptable = unname(eng$cptable[, c("CP", "nsplit", "rel error"), drop = FALSE]),
          control = eng$control[c("minsplit", "minbucket", "cp", "maxdepth")])
   } else NULL
+  # xgboost: the model JSON (float32 split values, leaves, stats) and raw margins
+  boost_dump <- function(b) {
+    mj <- jsonlite::fromJSON(rawToChar(xgboost::xgb.save.raw(b, raw_format = "json")), simplifyVector = FALSE)
+    lp <- mj$learner$learner_model_param
+    trees <- lapply(mj$learner$gradient_booster$model$trees, function(t) {
+      f <- function(nm) unlist(t[[nm]])
+      list(split_indices = f("split_indices"), split_conditions = f("split_conditions"),
+           left_children = f("left_children"), right_children = f("right_children"),
+           base_weights = f("base_weights"), sum_hessian = f("sum_hessian"),
+           loss_changes = f("loss_changes"), default_left = f("default_left"))
+    })
+    cfg <- xgboost::xgb.config(b); if (is.character(cfg)) cfg <- jsonlite::fromJSON(cfg)
+    tp <- cfg$learner$gradient_booster$tree_train_param
+    list(objective = mj$learner$objective$name, base_score = lp$base_score, num_class = lp$num_class,
+         n_trees = length(trees), trees = trees,
+         params = tp[c("eta", "max_depth", "gamma", "min_child_weight", "lambda", "alpha", "max_bin")],
+         updater = cfg$learner$gradient_booster$gbtree_train_param$updater)
+  }
+  # raw margins through parsnip's own predict path (which bakes test data sparse or
+  # dense exactly as the fit saw it); outputmargin skips the link transform
+  boost_margin <- function(fitted_wf, newdata) {
+    unname(as.matrix(predict(fitted_wf, newdata, type = "raw", opts = list(outputmargin = TRUE))))
+  }
+  boost_info <- if (is_boost) boost_dump(eng) else NULL
   rf_info <- if (is_rf) {
     ms <- do.call(metric_set, unname(metric_fns[unlist(task$metrics)]))
     per_seed <- lapply(rf_seeds, function(s) {
@@ -154,7 +183,7 @@ run_task <- function(task) {
     list(seeds = rf_seeds, treetype = eng$treetype, mtry = eng$mtry, min_node_size = eng$min.node.size,
          num_trees = eng$num.trees, per_seed = per_seed)
   } else NULL
-  coefs <- if (is_tree || is_rf) NULL else coef(eng)
+  coefs <- if (is_tree || is_rf || is_boost) NULL else coef(eng)
   coef_list <- function(cf) {
     if (is.null(cf)) return(NULL)
     if (is.matrix(cf)) lapply(setNames(seq_len(nrow(cf)), rownames(cf)), function(r) as.list(cf[r, ])) else as.list(cf)
@@ -167,8 +196,14 @@ run_task <- function(task) {
   fit_info <- list(
     tree = tree_info,
     rf = rf_info,
+    boost = boost_info,
+    sparsity = if (is_boost) {
+      est <- recipes::.recipes_estimate_sparsity(rec)
+      list(estimate = est, decision = workflows:::should_use_sparsity(est, "xgboost", nrow(train)))
+    } else NULL,
+    margin_test = if (is_boost) boost_margin(fit, test) else NULL,
     coefficients = coef_list(coefs),
-    coefficient_names = if (is_tree || is_rf) NULL else if (multi) colnames(coefs) else names(coefs),
+    coefficient_names = if (is_tree || is_rf || is_boost) NULL else if (multi) colnames(coefs) else names(coefs),
     coefficient_levels = if (multi) rownames(coefs) else NULL,
     nnet_value = if (multi) eng$value else NULL,
     nnet_default = nnet_default,
@@ -177,9 +212,9 @@ run_task <- function(task) {
     predicted_test = if (task$type == "regression") as.numeric(predict(fit, test)$.pred)
                      else columns_as_list(predict(fit, test, type = "prob")),
     class_test = if (task$type == "classification") as.character(predict(fit, test)$.pred_class) else NULL,
-    converged = if (task$type == "classification" && !is_tree && !is_rf) { if (multi) eng$convergence == 0 else eng$converged } else NULL,
-    iterations = if (task$type == "classification" && !multi && !is_tree && !is_rf) eng$iter else NULL,
-    deviance = if (task$type == "classification" && !is_tree && !is_rf) { if (multi) 2 * eng$value else eng$deviance } else NULL,
+    converged = if (task$type == "classification" && !is_tree && !is_rf && !is_boost) { if (multi) eng$convergence == 0 else eng$converged } else NULL,
+    iterations = if (task$type == "classification" && !multi && !is_tree && !is_rf && !is_boost) eng$iter else NULL,
+    deviance = if (task$type == "classification" && !is_tree && !is_rf && !is_boost) { if (multi) 2 * eng$value else eng$deviance } else NULL,
     outcome_levels = if (task$type == "classification") levels(train[[task$outcome]]) else NULL,
     xtx_condition = {
       X <- as.matrix(baked_train[, pred_cols, drop = FALSE]); X <- cbind(1, X)
@@ -229,6 +264,26 @@ run_task <- function(task) {
          split_point = if (is.null(e$splits)) NULL else ifelse(is.na(idx), NA, e$splits[idx, "index"]),
          split_improve = if (is.null(e$splits)) NULL else ifelse(is.na(idx), NA, e$splits[idx, "improve"]))
   }
+  # fit() applies workflows' sparsity toggle but tune's fit_resamples() does not
+  # (tune 2.1.0), so a fold model from fit() can differ from the same fold inside
+  # fit_resamples(); the fold boosters below come from fit() and carry their own metrics
+  fold_boosts <- if (is_boost) lapply(splits, function(s) {
+    f <- fit(wf, data = analysis(s)); a <- assessment(s)
+    ms_f <- do.call(metric_set, unname(metric_fns[unlist(task$metrics)]))
+    if (task$type == "regression") {
+      p <- as.numeric(predict(f, a)$.pred)
+      m <- ms_f(data.frame(truth = a[[task$outcome]], estimate = p), truth = truth, estimate = estimate)
+      list(booster = boost_dump(extract_fit_engine(f)), assess_pred = p,
+           assess_metrics = setNames(as.list(m$.estimate), m$.metric))
+    } else {
+      probs <- predict(f, a, type = "prob"); cls <- predict(f, a)$.pred_class
+      d <- cbind(data.frame(truth = a[[task$outcome]], estimate = cls), as.data.frame(probs))
+      m <- if (n_lv > 2) ms_f(d, truth = truth, estimate = estimate, tidyselect::starts_with(".pred_"))
+           else ms_f(d, truth = truth, estimate = estimate, !!rlang::sym(names(probs)[1]))
+      list(booster = boost_dump(extract_fit_engine(f)), assess_prob = unname(as.matrix(probs)),
+           assess_class = as.character(cls), assess_metrics = setNames(as.list(m$.estimate), m$.metric))
+    }
+  }) else NULL
   fold_trees <- if (is_tree) lapply(splits, function(s) {
     f <- fit(wf, data = analysis(s)); a <- assessment(s)
     c(tree_frame(extract_fit_engine(f)),
@@ -253,12 +308,14 @@ run_task <- function(task) {
                 predictor_names = pred_cols),
     fit = fit_info,
     test_metrics = test_metrics,
-    resample = list(ids = names(per_fold_list), per_fold = per_fold_list, summary = summary_list, fold_trees = fold_trees)
+    resample = list(ids = names(per_fold_list), per_fold = per_fold_list, summary = summary_list, fold_trees = fold_trees, fold_boosts = fold_boosts)
   )
   write_json(out, file.path(out_dir, paste0(task$id, ".json")), auto_unbox = TRUE, digits = I(17), na = "null", null = "null", pretty = FALSE)
   cat("   wrote", file.path(out_dir, paste0(task$id, ".json")), "\n")
 }
 
+only <- Sys.getenv("TRM_TASKS")  # optional comma-separated task ids to regenerate
+if (nzchar(only)) tasks <- Filter(function(t) t$id %in% strsplit(only, ",")[[1]], tasks)
 for (task in tasks) run_task(task)
 
 # ---- Level 2: metrics on fixed arrays ----

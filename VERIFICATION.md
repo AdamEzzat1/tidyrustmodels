@@ -362,6 +362,78 @@ Not covered: variable importance, OOB error, `max.depth`, `sample.fraction`,
 sampling without replacement, case and class weights, `splitrule` variants,
 categorical splits, resampling (level 4) of forests.
 
+## Boosted trees (Phase 8f)
+
+Executed 2026-10-13. `BoostTreeSpec` is a port of xgboost 3.2.1's single-threaded
+CPU `hist` booster (ADR-0011, Amendment B) verified against
+`parsnip::boost_tree() %>% set_engine("xgboost")` on five new tasks, two with
+non-default parameters. The comparison reads xgboost's own model JSON
+(`xgb.save.raw(raw_format = "json")`) and parsnip's raw margins:
+
+| task | outcome | nodes (full fit) | structure, features, default directions | split values, leaves, weights, gains, hessians | margins / predictions / probabilities | fold boosters (5) |
+|---|---|---|---|---|---|---|
+| `synth_reg_xgb` | numeric | 367 | exact | ≤ 1.4e-7 rel | **exact (0)** | exact |
+| `ames_reg_xgb` (50 rounds, depth 3, eta 0.1, min_n 5, gamma 0.5) | numeric | 718 | exact | ≤ 1.4e-7 rel | **exact (0)** | exact |
+| `synth_clf_xgb` | binary | 139 | exact | ≤ 1.4e-7 rel | **exact (0)** | exact |
+| `synth_multi_xgb` (20 rounds, depth 4, eta 0.2) | 3 classes | 1086 | exact | ≤ 1.4e-7 rel | **exact (0)** | exact |
+| `penguins_species_xgb` | 3 classes | 839 | exact | ≤ 1.4e-7 rel | **exact (0)** | exact |
+
+The 1.4e-7 relative differences on tree values are xgboost's JSON writer printing
+floats with about eight significant digits; the margins, which are computed from the
+unprinted float32 model on both sides, agree to the bit, as do all test and
+assessment predictions and probabilities and therefore every metric (differential
+suite 5485 comparisons, 0 failures; tolerances set to the measured maxima, with a
+one-float-ulp allowance on exp-dependent quantities of the classification tasks for
+platforms whose `expf` rounds differently from the one R and Rust share on
+Windows).
+
+Findings, each of which produced a measurable disagreement before it was fixed:
+
+1. **Zeros are missing values on Ames.** The first run matched the four smaller
+   tasks exactly and failed Ames from the second tree on: xgboost split a 0/1 dummy
+   at the sentinel cut above 1 and sent the zero rows to the *right* child, which is
+   only possible if those rows were missing. They were: `workflows::fit()` estimates
+   the recipe's sparsity (`recipes::.recipes_estimate_sparsity`; Ames 0.836), applies
+   a fitted decision rule (`workflows:::should_use_sparsity`; "yes"), tells
+   `step_dummy()` to emit sparse columns, parsnip converts the design to a
+   `dgCMatrix`, and xgboost treats every absent entry, i.e. every exact zero of
+   every column, including `Total_Bsmt_SF = 0`, as missing. Verified directly in R:
+   the workflow fit equals `xgb.train` on the sparse matrix (difference 0) and not
+   on the dense one (1.6e5). The port now carries the missing-value machinery
+   (sketch and histograms over present entries only, forward and backward split
+   scans, learned default directions, default child at prediction) and reproduces
+   the decision (`Recipe::estimate_sparsity`, `core::sparsity::should_use_sparsity`,
+   `ModelSpec::resolve_sparsity`); the decision is compared exactly on every task
+   and the estimate within 2e-2 (R samples 1000 rows; 1.3e-4 observed on Ames).
+2. **tune does not toggle.** With the sparse path in place, R's own `fit_resamples()`
+   metrics disagreed with R's manual per-fold `fit()` models by up to 2.8 % rmse. Only
+   `fit.workflow` calls `toggle_sparsity`; tune 2.1.0 fits folds through
+   `.fit_pre()`/`.fit_model()` and gets dense xgboost. `Workflow::fit_resamples`
+   mirrors that, and the fold boosters are compared against R's `fit()` fold models
+   with their own metrics, the resampling summaries against R's `fit_resamples()`.
+3. **Base score scale.** xgboost stores the binary base score as the event rate and
+   applies the logit when it initialises predictions; storing the logit made every
+   binary base-score row fail by 0.9 while predictions were already exact.
+4. **Dense root statistics.** On dense data xgboost sums the first feature's
+   histogram bins for the root gradient; on sparse data it sums the gradient pairs.
+   The two orders of double accumulation differ in the last bit, which decides
+   whether a feature's backward scan runs (`SplitContainsMissingValues` is an exact
+   comparison) and hence the recorded default direction.
+
+Independent baselines in `crates/tidyrustmodels-models/tests/boost.rs` and the
+`native::xgb` unit tests: cut points as the sorted distinct values with a sentinel,
+pruning to 256 bins, the closed-form one-round stump (base score, leaves,
+gain), the sentinel split and default direction for an indicator with zeros as
+missing, the binary event level and the 0.5 class rule, probability rows summing
+to one, `min_child_weight` capped at the row count, `gamma` and depth stops,
+parameter validation and tuning, the sparse-policy hook, state round trip,
+constant outcomes; `core::sparsity` reproduces workflows' decision on the Ames
+and synthetic estimates.
+
+Not covered: `subsample`, `colsample_*`, early stopping, NA predictors,
+`tree_method = "exact"`/`approx`, categorical features, constraints,
+`scale_pos_weight`, multi-threaded histogram accumulation.
+
 ## Test inventory
 
 | suite | location | runs in CI | needs R |
@@ -373,6 +445,7 @@ categorical splits, resampling (level 4) of forests.
 | multinomial baselines | `crates/tidyrustmodels-models/tests/multinom.rs` | yes | no |
 | decision-tree baselines | `crates/tidyrustmodels-models/tests/tree.rs` | yes | no |
 | random-forest baselines | `crates/tidyrustmodels-models/tests/forest.rs` | yes | no |
+| boosted-tree baselines | `crates/tidyrustmodels-models/tests/boost.rs` | yes | no |
 | differential vs pinned R fixtures | `crates/tidyrustmodels/tests/differential.rs` | yes | no (fixtures committed) |
 | fixture regeneration | `reference/tidymodels-r/` | scheduled job only | yes |
 | Python parity | `python/tests/` | yes (python job) | no |

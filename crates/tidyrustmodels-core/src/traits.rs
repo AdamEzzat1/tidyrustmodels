@@ -15,6 +15,14 @@ pub trait Step: Debug + Send + Sync {
     /// Estimate the step's state from training data. Must not mutate `self`.
     fn prep(&self, training: &Table, schema: &Schema) -> Result<Box<dyn FittedStep>>;
 
+    /// recipes' `.recipes_estimate_sparsity` contribution of a step that can emit
+    /// sparse columns (`sparse = "auto"`): one `(n_cols, sparsity)` pair per selected
+    /// column, where `n_cols` columns of that sparsity replace the column. Default:
+    /// none (the step is dense).
+    fn sparse_adjustments(&self, _training: &Table, _schema: &Schema) -> Vec<(usize, f64)> {
+        Vec::new()
+    }
+
     /// Clone into a boxed trait object.
     fn clone_box(&self) -> Box<dyn Step>;
 }
@@ -101,6 +109,15 @@ pub trait ModelSpec: Debug + Send + Sync {
             "`{}` has no tunable parameter `{name}`",
             self.name()
         )))
+    }
+
+    /// workflows' sparse-data hook: given the estimated sparsity of the baked design
+    /// and the number of training rows (`workflows:::toggle_sparsity`), return the
+    /// specification to fit instead, or `None` to fit `self` unchanged. Only models
+    /// whose R engine accepts sparse matrices (`allow_sparse_x`) and whose behaviour
+    /// depends on it override this.
+    fn resolve_sparsity(&self, _estimated_sparsity: f64, _n_rows: usize) -> Option<Box<dyn ModelSpec>> {
+        None
     }
 
     /// Clone into a boxed trait object.

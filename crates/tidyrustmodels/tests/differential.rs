@@ -309,6 +309,26 @@ fn model_for_seed(task: &Value, engine: Engine, y: &Outcome, seed: u64) -> Box<d
         }
         return Box::new(s);
     }
+    if task["model"] == "boost_tree" {
+        let a = &task["model_args"];
+        let mut s = BoostTreeSpec::new().engine(engine);
+        if let Some(v) = a["trees"].as_u64() {
+            s = s.trees(v as usize);
+        }
+        if let Some(v) = a["tree_depth"].as_u64() {
+            s = s.tree_depth(v as usize);
+        }
+        if let Some(v) = a["learn_rate"].as_f64() {
+            s = s.learn_rate(v);
+        }
+        if let Some(v) = a["min_n"].as_f64() {
+            s = s.min_n(v);
+        }
+        if let Some(v) = a["loss_reduction"].as_f64() {
+            s = s.loss_reduction(v);
+        }
+        return Box::new(s);
+    }
     if task["model"] == "decision_tree" {
         let a = &task["model_args"];
         let mut s = DecisionTreeSpec::new().engine(engine);
@@ -558,7 +578,9 @@ fn differential_against_r_fixtures() {
         let metrics = MetricSet::from_names(&strs(&task["metrics"])).unwrap();
         let is_tree = task["model"] == "decision_tree";
         let is_rf = task["model"] == "rand_forest";
-        let engines: Vec<Engine> = if is_tree || is_rf {
+        let is_boost = task["model"] == "boost_tree";
+        let is_treelike = is_tree || is_boost;
+        let engines: Vec<Engine> = if is_tree || is_rf || is_boost {
             vec![Engine::Native]
         } else {
             vec![Engine::Linfa, Engine::Smartcore, Engine::Native]
@@ -583,14 +605,56 @@ fn differential_against_r_fixtures() {
             }
             let spec = model_for(task, engine, &y_train);
             let is_multi = spec.name() == "multinom_reg";
-            let fitted = spec.fit(&x_train, &y_train).unwrap();
+            // the full-data fit goes through the same sparse-data decision as a workflow
+            let est_sparsity = build_recipe(task).estimate_sparsity(&train);
+            let fit_spec = spec
+                .resolve_sparsity(est_sparsity, train.nrows())
+                .unwrap_or_else(|| spec.clone_box());
+            let fitted = fit_spec.fit(&x_train, &y_train).unwrap();
+            if is_boost {
+                let r_est = fx["fit"]["sparsity"]["estimate"].as_f64().unwrap();
+                let r_dec = fx["fit"]["sparsity"]["decision"].as_str().unwrap() == "yes";
+                report.compare(
+                    id,
+                    eng,
+                    "L3",
+                    "recipe sparsity estimate (R samples 1000 rows; all rows here)",
+                    &[est_sparsity],
+                    &[r_est],
+                    (0.0, tol.get("-", "sparsity_estimate_abs")),
+                );
+                report.exact(
+                    id,
+                    eng,
+                    "L3",
+                    "sparse-data decision (zeros become missing)",
+                    &fitted
+                        .diagnostics()
+                        .note
+                        .unwrap()
+                        .contains("zeros as missing: true"),
+                    &r_dec,
+                );
+            }
             let r_names = strs(&fx["fit"]["coefficient_names"]);
             let aliased = fitted.diagnostics().aliased;
             if is_tree {
                 compare_tree(&mut report, &tol, id, eng, fitted.as_ref(), &fx["fit"]["tree"]);
             }
+            if is_boost {
+                compare_booster(
+                    &mut report,
+                    &tol,
+                    id,
+                    eng,
+                    "",
+                    fitted.as_ref(),
+                    &fx["fit"]["boost"],
+                    Some((&x_test, &fx["fit"]["margin_test"])),
+                );
+            }
             // One coefficient set for lm/glm; one per non-baseline level for multinom.
-            let sets: Vec<(Option<String>, Coefficients)> = if is_tree {
+            let sets: Vec<(Option<String>, Coefficients)> = if is_treelike {
                 Vec::new()
             } else if is_multi {
                 let cc = fitted.class_coefficients().unwrap();
@@ -765,7 +829,17 @@ fn differential_against_r_fixtures() {
                     "test predictions",
                     &ours,
                     &f64s(&fx["fit"]["predicted_test"]),
-                    tol.pair_eng(id, if is_tree { "tree_pred" } else { "ols_pred" }, eng),
+                    tol.pair_eng(
+                        id,
+                        if is_boost {
+                            "xgb_pred"
+                        } else if is_tree {
+                            "tree_pred"
+                        } else {
+                            "ols_pred"
+                        },
+                        eng,
+                    ),
                 );
             } else {
                 let (codes, levels, probs) = match &pred_test {
@@ -797,7 +871,9 @@ fn differential_against_r_fixtures() {
                             0.0,
                             tol.get_eng(
                                 id,
-                                if is_tree {
+                                if is_boost {
+                                    "xgb_prob_abs"
+                                } else if is_tree {
                                     "tree_prob_abs"
                                 } else if is_multi {
                                     "multinom_prob_abs"
@@ -818,7 +894,7 @@ fn differential_against_r_fixtures() {
                     &our_classes,
                     &strs(&fx["fit"]["class_test"]),
                 );
-                if !is_tree {
+                if !is_treelike {
                     let d = fitted.diagnostics();
                     report.exact(
                         id,
@@ -851,7 +927,7 @@ fn differential_against_r_fixtures() {
             // ---- Level 4: resampling with shared folds ----
             let folds = Folds::from_assignments(&u32s(&split["vfold"]["fold_of_row"])).unwrap();
             let wf = Workflow::from_boxed(build_recipe(task), spec);
-            if is_tree {
+            if is_treelike {
                 let fold_of_row = u32s(&split["vfold"]["fold_of_row"]);
                 let v = split["vfold"]["v"].as_u64().unwrap() as u32;
                 for k in 0..v {
@@ -862,9 +938,26 @@ fn differential_against_r_fixtures() {
                         .map(|(i, _)| i)
                         .collect();
                     let fw = wf.fit(&data.select_rows(&analysis).unwrap()).unwrap();
-                    let fxk = &fx["resample"]["fold_trees"][k as usize];
+                    let fxk = if is_boost {
+                        &fx["resample"]["fold_boosts"][k as usize]
+                    } else {
+                        &fx["resample"]["fold_trees"][k as usize]
+                    };
                     let label = format!("Fold{:02}", k + 1);
-                    compare_tree_structure(&mut report, &tol, id, eng, &label, fw.model(), fxk);
+                    if is_boost {
+                        compare_booster(
+                            &mut report,
+                            &tol,
+                            id,
+                            eng,
+                            &format!("{label} "),
+                            fw.model(),
+                            &fxk["booster"],
+                            None,
+                        );
+                    } else {
+                        compare_tree_structure(&mut report, &tol, id, eng, &label, fw.model(), fxk);
+                    }
                     // assessment predictions: ours vs R's, and the metrics recomputed on
                     // R's own predictions (isolates the metric port from the model)
                     let assess: Vec<usize> = fold_of_row
@@ -888,7 +981,7 @@ fn differential_against_r_fixtures() {
                                 &format!("{label} assessment predictions"),
                                 p,
                                 &r,
-                                tol.pair_eng(id, "tree_pred", eng),
+                                tol.pair_eng(id, if is_boost { "xgb_pred" } else { "tree_pred" }, eng),
                             );
                             Prediction::Numeric(r)
                         }
@@ -908,7 +1001,14 @@ fn differential_against_r_fixtures() {
                                 &format!("{label} assessment probabilities"),
                                 &flat_ours,
                                 &flat_r,
-                                (0.0, tol.get_eng(id, "tree_prob_abs", eng)),
+                                (
+                                    0.0,
+                                    tol.get_eng(
+                                        id,
+                                        if is_boost { "xgb_prob_abs" } else { "tree_prob_abs" },
+                                        eng,
+                                    ),
+                                ),
                             );
                             let r_class: Vec<String> = strs(&fxk["assess_class"]);
                             report.exact(
@@ -943,7 +1043,14 @@ fn differential_against_r_fixtures() {
                         _ => unreachable!(),
                     };
                     for m in metrics.evaluate(&truth, &r_pred).unwrap() {
-                        let theirs = fx["resample"]["per_fold"][&label][&m.name].as_f64();
+                        // boosters: the fold fit comes from fit() (sparsity toggle applied),
+                        // whose metrics R records next to it; fit_resamples() skips the
+                        // toggle in tune 2.1.0 and is compared separately below
+                        let theirs = if is_boost {
+                            fxk["assess_metrics"][&m.name].as_f64()
+                        } else {
+                            fx["resample"]["per_fold"][&label][&m.name].as_f64()
+                        };
                         match (m.value, theirs) {
                             (Some(a), Some(b)) => report.compare(
                                 id,
@@ -1807,4 +1914,163 @@ fn rsq_vec(t: &[f64], e: &[f64]) -> f64 {
 }
 fn rsq_trad_vec(t: &[f64], e: &[f64]) -> f64 {
     tidyrustmodels::metrics::rsq_trad(t, e).unwrap().unwrap()
+}
+
+fn i64s(v: &Value) -> Vec<i64> {
+    items(v).iter().map(|x| x.as_i64().unwrap()).collect()
+}
+
+/// xgboost writes `base_score` as a bracketed list in a string, e.g. `"[5.30775E-1]"`.
+fn parse_base_score(v: &Value) -> Vec<f64> {
+    let s = v.as_str().unwrap().trim();
+    s.trim_start_matches('[')
+        .trim_end_matches(']')
+        .split(',')
+        .map(|t| t.trim().parse::<f64>().unwrap())
+        .collect()
+}
+
+/// Booster check against xgboost's own model JSON (`xgb.save.raw(raw_format = "json")`):
+/// objective, tree count, every tree's children and split features exactly; split
+/// values, leaves, base weights, hessian sums and gains to the float32 bound; the base
+/// score; and, for the full fit, the raw margins on the test rows.
+#[allow(clippy::too_many_arguments)]
+fn compare_booster(
+    report: &mut Report,
+    tol: &Tolerances,
+    id: &str,
+    eng: &str,
+    label: &str,
+    fitted: &dyn FittedModel,
+    fxb: &Value,
+    margins: Option<(&DesignMatrix, &Value)>,
+) {
+    use tidyrustmodels::models::native::xgb::Objective;
+    let state = fitted.state().unwrap();
+    let m: tidyrustmodels::models::FittedBoostTree = serde_json::from_value(state).unwrap();
+    let b = &m.booster;
+    let lvl: &'static str = if label.is_empty() { "L3" } else { "L4" };
+    let obj = match b.objective {
+        Objective::SquaredError => "reg:squarederror",
+        Objective::Logistic => "binary:logistic",
+        Objective::Softprob { .. } => "multi:softprob",
+    };
+    report.exact(
+        id,
+        eng,
+        lvl,
+        &format!("{label}booster objective"),
+        &obj.to_string(),
+        &fxb["objective"].as_str().unwrap().to_string(),
+    );
+    let ours_base: Vec<f64> = b.base_score.iter().map(|v| f64::from(*v)).collect();
+    report.compare(
+        id,
+        eng,
+        lvl,
+        &format!("{label}base score"),
+        &ours_base,
+        &parse_base_score(&fxb["base_score"]),
+        tol.pair_eng(id, "xgb_tree", eng),
+    );
+    let r_trees = items(&fxb["trees"]);
+    // diagnostic dump of our trees (target/rust_outputs/<task>[_<label>]_booster.json)
+    {
+        let dir = root().join("target/rust_outputs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let tag = label.trim().to_lowercase();
+        let name = if tag.is_empty() {
+            format!("{id}_booster.json")
+        } else {
+            format!("{id}_{tag}_booster.json")
+        };
+        std::fs::write(dir.join(name), serde_json::to_string(&b).unwrap()).unwrap();
+    }
+    report.exact(
+        id,
+        eng,
+        lvl,
+        &format!("{label}number of trees"),
+        &b.trees.len(),
+        &r_trees.len(),
+    );
+    let mut ok = b.trees.len() == r_trees.len();
+    let (mut o_idx, mut r_idx) = (Vec::new(), Vec::new());
+    let (mut o_left, mut r_left, mut o_right, mut r_right) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut o_dl, mut r_dl): (Vec<i64>, Vec<i64>) = (Vec::new(), Vec::new());
+    let (mut o_cond, mut r_cond) = (Vec::new(), Vec::new());
+    let (mut o_w, mut r_w) = (Vec::new(), Vec::new());
+    let (mut o_h, mut r_h) = (Vec::new(), Vec::new());
+    let (mut o_l, mut r_l) = (Vec::new(), Vec::new());
+    if ok {
+        for (t, rt) in b.trees.iter().zip(&r_trees) {
+            let ri = i64s(&rt["split_indices"]);
+            if ri.len() != t.len() {
+                ok = false;
+                break;
+            }
+            o_idx.extend(t.split_indices.iter().map(|v| i64::from(*v)));
+            r_idx.extend(ri);
+            o_left.extend(t.left_children.iter().map(|v| i64::from(*v)));
+            r_left.extend(i64s(&rt["left_children"]));
+            o_right.extend(t.right_children.iter().map(|v| i64::from(*v)));
+            r_right.extend(i64s(&rt["right_children"]));
+            o_dl.extend(t.default_left.iter().map(|v| i64::from(*v)));
+            r_dl.extend(
+                items(&rt["default_left"])
+                    .iter()
+                    .map(|v| v.as_i64().or_else(|| v.as_bool().map(i64::from)).unwrap()),
+            );
+            o_cond.extend(t.split_conditions.iter().map(|v| f64::from(*v)));
+            r_cond.extend(f64s(&rt["split_conditions"]));
+            o_w.extend(t.base_weights.iter().map(|v| f64::from(*v)));
+            r_w.extend(f64s(&rt["base_weights"]));
+            o_h.extend(t.sum_hessian.iter().map(|v| f64::from(*v)));
+            r_h.extend(f64s(&rt["sum_hessian"]));
+            o_l.extend(t.loss_changes.iter().map(|v| f64::from(*v)));
+            r_l.extend(f64s(&rt["loss_changes"]));
+        }
+    }
+    let structure = ok && o_left == r_left && o_right == r_right;
+    report.exact(
+        id,
+        eng,
+        lvl,
+        &format!("{label}tree sizes and children ({} nodes)", o_left.len()),
+        &structure,
+        &true,
+    );
+    if structure {
+        report.exact(id, eng, lvl, &format!("{label}split features"), &o_idx, &r_idx);
+        report.exact(id, eng, lvl, &format!("{label}default directions"), &o_dl, &r_dl);
+        let bound = tol.pair_eng(id, "xgb_tree", eng);
+        report.compare(
+            id,
+            eng,
+            lvl,
+            &format!("{label}split values and leaves"),
+            &o_cond,
+            &r_cond,
+            bound,
+        );
+        report.compare(id, eng, lvl, &format!("{label}base weights"), &o_w, &r_w, bound);
+        report.compare(id, eng, lvl, &format!("{label}hessian sums"), &o_h, &r_h, bound);
+        report.compare(id, eng, lvl, &format!("{label}loss changes"), &o_l, &r_l, bound);
+    }
+    if let Some((x, rm)) = margins {
+        let r_flat: Vec<f64> = items(rm).into_iter().flat_map(f64s).collect();
+        let mut ours = Vec::with_capacity(r_flat.len());
+        for i in 0..x.nrows() {
+            ours.extend(b.margin(|f| x.get(i, f) as f32).iter().map(|v| f64::from(*v)));
+        }
+        report.compare(
+            id,
+            eng,
+            "L3",
+            "test margins",
+            &ours,
+            &r_flat,
+            tol.pair_eng(id, "xgb_pred", eng),
+        );
+    }
 }

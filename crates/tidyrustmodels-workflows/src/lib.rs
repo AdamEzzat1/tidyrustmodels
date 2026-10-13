@@ -48,7 +48,13 @@ impl Workflow {
     }
 
     /// Prep the recipe on `training`, then fit the model on the baked design matrix.
+    /// Like `workflows::fit()`, this applies the sparse-data decision
+    /// (`ModelSpec::resolve_sparsity`); `fit_resamples` does not, like tune.
     pub fn fit(&self, training: &Table) -> Result<FittedWorkflow> {
+        self.fit_with(training, true)
+    }
+
+    fn fit_with(&self, training: &Table, resolve_sparsity: bool) -> Result<FittedWorkflow> {
         let recipe = self.recipe.prep(training)?;
         let (x, y) = recipe.bake_matrix(training)?;
         let y = y.ok_or_else(|| {
@@ -58,7 +64,17 @@ impl Workflow {
             ))
         })?;
         check_capabilities(self.model.as_ref(), &y)?;
-        let model = self.model.fit(&x, &y)?;
+        // workflows::toggle_sparsity: models whose engine takes sparse input decide
+        // from the recipe's sparsity estimate (see ModelSpec::resolve_sparsity)
+        let spec = if resolve_sparsity {
+            let est = self.recipe.estimate_sparsity(training);
+            self.model
+                .resolve_sparsity(est, training.nrows())
+                .unwrap_or_else(|| self.model.clone_box())
+        } else {
+            self.model.clone_box()
+        };
+        let model = spec.fit(&x, &y)?;
         Ok(FittedWorkflow { recipe, model })
     }
 
@@ -85,7 +101,9 @@ impl Workflow {
             let split = &folds.splits[k];
             let train = data.select_rows(&split.train)?;
             let test = data.select_rows(&split.test)?;
-            let fitted = self.fit(&train).map_err(|e| in_fold(e, id))?;
+            // tune 2.1.0 fits folds through .fit_pre/.fit_model, which skip
+            // workflows' sparsity toggle; mirror that so resampling metrics match R's
+            let fitted = self.fit_with(&train, false).map_err(|e| in_fold(e, id))?;
             let (x_test, y_test) = fitted.recipe.bake_matrix(&test).map_err(|e| in_fold(e, id))?;
             let y_test =
                 y_test.ok_or_else(|| Error::SchemaMismatch("assessment rows lack the outcome".into()))?;

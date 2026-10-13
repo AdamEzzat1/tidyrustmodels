@@ -560,6 +560,159 @@
         "kap",
         "f_meas"
       ]
+    },
+    {
+      "id": "synth_reg_xgb",
+      "dataset": "synthetic_reg_small",
+      "type": "regression",
+      "outcome": "y",
+      "predictors": [
+        "x1",
+        "x2",
+        "x3",
+        "g"
+      ],
+      "steps": [
+        "impute_median_numeric",
+        "dummy_nominal"
+      ],
+      "model": "boost_tree",
+      "metrics": [
+        "rmse",
+        "rsq",
+        "mae",
+        "rsq_trad"
+      ]
+    },
+    {
+      "id": "ames_reg_xgb",
+      "dataset": "ames",
+      "type": "regression",
+      "outcome": "Sale_Price",
+      "predictors": [
+        "Gr_Liv_Area",
+        "Year_Built",
+        "Total_Bsmt_SF",
+        "Bldg_Type",
+        "Neighborhood"
+      ],
+      "steps": [
+        "dummy_nominal"
+      ],
+      "model": "boost_tree",
+      "model_args": {
+        "trees": 50,
+        "tree_depth": 3,
+        "learn_rate": 0.1,
+        "min_n": 5,
+        "loss_reduction": 0.5
+      },
+      "metrics": [
+        "rmse",
+        "rsq",
+        "mae"
+      ]
+    },
+    {
+      "id": "synth_clf_xgb",
+      "dataset": "synthetic_clf_small",
+      "type": "classification",
+      "outcome": "y",
+      "predictors": [
+        "x1",
+        "x2",
+        "g"
+      ],
+      "steps": [
+        "dummy_nominal"
+      ],
+      "model": "boost_tree",
+      "metrics": [
+        "accuracy",
+        "mn_log_loss",
+        "precision",
+        "recall",
+        "roc_auc",
+        "pr_auc",
+        "average_precision",
+        "f_meas",
+        "sens",
+        "spec",
+        "bal_accuracy",
+        "j_index",
+        "kap",
+        "mcc",
+        "brier_class"
+      ]
+    },
+    {
+      "id": "synth_multi_xgb",
+      "dataset": "synthetic_multi_small",
+      "type": "classification",
+      "outcome": "y",
+      "predictors": [
+        "x1",
+        "x2",
+        "x3",
+        "g"
+      ],
+      "steps": [
+        "dummy_nominal"
+      ],
+      "model": "boost_tree",
+      "model_args": {
+        "trees": 20,
+        "tree_depth": 4,
+        "learn_rate": 0.2
+      },
+      "metrics": [
+        "accuracy",
+        "mn_log_loss",
+        "precision",
+        "recall",
+        "roc_auc",
+        "pr_auc",
+        "average_precision",
+        "f_meas",
+        "sens",
+        "spec",
+        "bal_accuracy",
+        "j_index",
+        "kap",
+        "mcc",
+        "brier_class"
+      ]
+    },
+    {
+      "id": "penguins_species_xgb",
+      "dataset": "penguins",
+      "type": "classification",
+      "outcome": "species",
+      "predictors": [
+        "bill_length_mm",
+        "body_mass_g"
+      ],
+      "steps": [
+        "impute_median_numeric"
+      ],
+      "model": "boost_tree",
+      "metrics": [
+        "accuracy",
+        "mn_log_loss",
+        "precision",
+        "recall",
+        "roc_auc",
+        "pr_auc",
+        "average_precision",
+        "f_meas",
+        "sens",
+        "spec",
+        "bal_accuracy",
+        "j_index",
+        "kap",
+        "mcc",
+        "brier_class"
+      ]
     }
   ]
 }

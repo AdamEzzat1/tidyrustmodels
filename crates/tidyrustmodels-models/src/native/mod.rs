@@ -12,6 +12,7 @@ pub mod irls;
 pub mod multinom;
 pub mod qr;
 pub mod rpart;
+pub mod xgb;
 
 use crate::backends::{FitOutput, MultiFitOutput};
 use crate::multinom::MultinomOptions;

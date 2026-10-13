@@ -44,6 +44,16 @@ VERIFICATION.md; nothing is claimed beyond those records.
   least 98 % of seed-averaged predictions row-wise; a 60-seed follow-up on penguins
   reproduced a bimodal log loss at the same rate (7/60) on both sides. Python:
   `RandForest`.
+- `BoostTreeSpec` (`boost_tree`, engine xgboost; ADR-0011 Amendment B): a port of
+  xgboost 3.2.1's CPU `hist` booster (quantile sketch, float32 gains and leaves,
+  depth-wise growth, squared error / logistic / softprob). tidymodels' sparse-data
+  decision is reproduced: `Recipe::estimate_sparsity`, `Step::sparse_adjustments`,
+  `ModelSpec::resolve_sparsity` and `core::sparsity::should_use_sparsity`; on the
+  sparse path every exact zero is a missing value, as xgboost sees it from a
+  `dgCMatrix`. Five reference tasks: trees, margins and predictions match xgboost's
+  model JSON (details in VERIFICATION.md Phase 8f). Python: `BoostTree`.
+- `reference/tidymodels-r/run_reference.R` takes `TRM_TASKS=id1,id2` to regenerate a
+  subset of fixtures.
 - Workflows: `fit`, `predict`, `fit_resamples` with per-fold prep and serial-identical
   parallel execution; versioned JSON round trip.
 - Tuning: `grid_regular`, `grid_random`, `tune_grid`, `show_best`.

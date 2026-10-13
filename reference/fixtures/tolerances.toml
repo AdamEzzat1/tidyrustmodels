@@ -58,6 +58,21 @@ tree_pred_rel = 1e-13
 tree_pred_abs = 1e-13
 tree_prob_abs = 1e-13
 
+# Boosted trees (Phase 8f), measured 2026-10-13. The port mirrors xgboost's float32
+# arithmetic, so margins, predictions and probabilities agree EXACTLY (max 0) on the
+# five tasks; the tree values differ only by xgboost's JSON printing of floats with
+# ~8 significant digits (max 1.40e-7 relative). Classification tasks get a one-ulp
+# allowance on exp-dependent quantities for other platforms' expf (R and Rust share
+# the C runtime's expf on Windows, where 0 was measured); see the task tables.
+xgb_tree_rel = 2e-7
+xgb_tree_abs = 1e-6
+xgb_pred_rel = 0.0
+xgb_pred_abs = 0.0
+xgb_prob_abs = 0.0
+# workflows' sparsity estimate: R counts zeros on a random sample of 1000 rows when
+# the data is larger, Rust on every row; the decision itself is compared exactly.
+sparsity_estimate_abs = 2e-2
+
 # Level 5: stochastic models (random forests). R and Rust each fit S seeds; a metric
 # passes when |mean_R - mean_Rust| <= rf_z * sqrt(var_R/S + var_Rust/S), and the
 # seed-averaged test predictions pass when at least rf_row_fraction of the rows are
@@ -121,3 +136,33 @@ native_resample_metric_rel = 1e-6
 native_resample_metric_abs = 1e-7
 native_summary_rel = 1e-6
 native_summary_abs = 1e-7
+
+# Boosted-tree classification tasks: logistic / softprob gradients and outputs go
+# through expf; measured 0 on Windows (shared C runtime), one float ulp allowed for
+# platforms whose expf rounds differently (2e-7 relative, 1e-6 absolute).
+[tasks.synth_clf_xgb]
+xgb_pred_rel = 2e-7
+xgb_pred_abs = 1e-6
+xgb_prob_abs = 1e-6
+resample_metric_rel = 1e-6
+resample_metric_abs = 1e-6
+native_resample_metric_rel = 1e-6
+native_resample_metric_abs = 1e-6
+
+[tasks.synth_multi_xgb]
+xgb_pred_rel = 2e-7
+xgb_pred_abs = 1e-6
+xgb_prob_abs = 1e-6
+resample_metric_rel = 1e-6
+resample_metric_abs = 1e-6
+native_resample_metric_rel = 1e-6
+native_resample_metric_abs = 1e-6
+
+[tasks.penguins_species_xgb]
+xgb_pred_rel = 2e-7
+xgb_pred_abs = 1e-6
+xgb_prob_abs = 1e-6
+resample_metric_rel = 1e-6
+resample_metric_abs = 1e-6
+native_resample_metric_rel = 1e-6
+native_resample_metric_abs = 1e-6

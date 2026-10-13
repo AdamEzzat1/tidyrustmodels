@@ -41,6 +41,42 @@ impl Recipe {
         &self.steps
     }
 
+    /// recipes' `.recipes_estimate_sparsity()` (recipes 1.3.2): the share of exact
+    /// zeros in the numeric columns of the template (all columns, outcome included),
+    /// adjusted for the columns that sparse-capable steps (`step_dummy`) will create.
+    /// workflows feeds this to `ModelSpec::resolve_sparsity`. R samples 1000 rows for
+    /// the zero count when the template is larger; this counts every row.
+    pub fn estimate_sparsity(&self, template: &Table) -> f64 {
+        let n_rows = template.nrows();
+        if n_rows == 0 {
+            return 0.0;
+        }
+        let mut n_cols = template.ncols() as f64;
+        let n_rows_f = n_rows as f64;
+        let zeros: f64 = template
+            .iter()
+            .map(|(_, c)| match c.as_numeric() {
+                Some(v) => v
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, x)| **x == 0.0 && !c.is_missing(*i))
+                    .count() as f64,
+                None => 0.0,
+            })
+            .sum();
+        let est = zeros / (n_rows_f * n_cols);
+        let mut zeroes = est * n_rows_f * n_cols;
+        if let Ok(schema) = template.schema_with_outcome(&self.outcome, Role::Predictor) {
+            for step in &self.steps {
+                for (cols, sparsity) in step.sparse_adjustments(template, &schema) {
+                    zeroes += n_rows_f * sparsity * cols as f64;
+                    n_cols = n_cols + cols as f64 - 1.0;
+                }
+            }
+        }
+        zeroes / (n_rows_f * n_cols)
+    }
+
     /// Estimate every step on `training` in sequence (each step sees the output of the
     /// previous one, exactly as recipes' `prep`).
     pub fn prep(&self, training: &Table) -> Result<FittedRecipe> {

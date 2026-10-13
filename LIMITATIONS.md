@@ -4,9 +4,17 @@
 
 - Estimators: linear regression, binary logistic regression, multinomial regression
   rpart-style decision trees (continuous predictors only; no surrogates, categorical
-  splits or custom priors) and ranger-style random forests (statistically verified
+  splits or custom priors), ranger-style random forests (statistically verified
   only: a forest is never the same forest as R's; no importance, OOB error or
-  `max.depth`). No penalized paths (`glmnet`), no boosted trees yet, no case weights.
+  `max.depth`) and xgboost-style boosted trees (dense or zeros-as-missing designs;
+  no `subsample`, `colsample`, early stopping, NA predictors or constraints). No
+  penalized paths (`glmnet`), no case weights.
+- Boosted trees reproduce tidymodels' sparse-data decision, under which xgboost
+  treats every exact zero as missing. recipes estimates the sparsity on a random
+  1000-row sample; this crate uses every row, so a design on the decision boundary
+  can be fitted sparse by one and dense by the other. As in tune 2.1.0, the
+  decision applies to `fit` but not to `fit_resamples`, so on a sparse design the
+  resampled models and the final model are not the same model.
 - Precision: `f64` only.
 - Preprocessing: select, mean/median imputation, normalize, dummy, zv, nzv, corr, other,
   novel, unknown. No `step_interact`, `step_pca`, splines.

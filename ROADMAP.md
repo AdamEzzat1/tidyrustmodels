@@ -80,7 +80,8 @@ three engines, ADR-0010, two reference tasks against nnet; VERIFICATION.md Phase
 (d) tree models — decision tree **done** (rpart 4.1.23 port, five tasks exact against
 R, ADR-0011; VERIFICATION.md Phase 8d), random forest **done** (ranger 0.18.0 rules under
 the framework's RNG, verified statistically on five tasks, ADR-0011 A; VERIFICATION.md
-Phase 8e), boosted tree pending; (d) tree models via backends; (e) case weights; (f) bootstrap,
+Phase 8e), boosted tree **done** (xgboost 3.2.1 hist port incl. workflows' sparse-data
+decision, five tasks against xgboost's model JSON, ADR-0011 B; VERIFICATION.md Phase 8f); (d) tree models via backends; (e) case weights; (f) bootstrap,
 repeated/grouped CV, time-series splits; (g) `select_best` / `finalize_workflow` /
 `last_fit`; (h) Arrow/Polars/sparse inputs; (i) workflowsets.
 

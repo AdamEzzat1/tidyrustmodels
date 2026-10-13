@@ -50,6 +50,24 @@ impl Step for StepDummy {
         "dummy"
     }
 
+    /// `.recipes_estimate_sparsity.step_dummy`: each selected factor with `k` levels
+    /// becomes `k - 1` (or `k` with one-hot) columns of sparsity `1 - 1/k`.
+    fn sparse_adjustments(&self, training: &Table, schema: &Schema) -> Vec<(usize, f64)> {
+        let Ok(cols) = self.selector.resolve(schema) else {
+            return Vec::new();
+        };
+        cols.iter()
+            .filter_map(|name| training.column(name).and_then(|c| c.as_categorical()))
+            .map(|(_, levels)| {
+                let k = levels.len();
+                (
+                    if self.one_hot { k } else { k.saturating_sub(1) },
+                    1.0 - 1.0 / k as f64,
+                )
+            })
+            .collect()
+    }
+
     fn prep(&self, training: &Table, schema: &Schema) -> Result<Box<dyn FittedStep>> {
         let cols = self.selector.resolve(schema)?;
         let mut encodings = Vec::with_capacity(cols.len());

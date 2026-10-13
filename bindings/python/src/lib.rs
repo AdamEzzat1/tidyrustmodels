@@ -362,7 +362,51 @@ impl PyRandForest {
     }
 }
 
+/// `parsnip::boost_tree()` with engine `xgboost` semantics (native port of xgboost
+/// 3.2.1's hist booster, ADR-0011): `trees` (15), `tree_depth` (6), `learn_rate`
+/// (0.3), `min_n` (1), `loss_reduction` (0), `lambda` (1), `alpha` (0);
+/// `zeros_as_missing` None = decide as workflows does from the recipe's sparsity
+/// (inside a Workflow; a standalone fit is dense), True/False to force it.
+#[pyclass(name = "BoostTree", module = "tidyrustmodels._native", from_py_object)]
+#[derive(Clone)]
+struct PyBoostTree {
+    inner: BoostTreeSpec,
+}
+
+#[pymethods]
+impl PyBoostTree {
+    #[new]
+    #[pyo3(signature = (trees = 15, tree_depth = 6, learn_rate = 0.3, min_n = 1.0, loss_reduction = 0.0, lambda = 1.0, alpha = 0.0, zeros_as_missing = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        trees: usize,
+        tree_depth: usize,
+        learn_rate: f64,
+        min_n: f64,
+        loss_reduction: f64,
+        lambda: f64,
+        alpha: f64,
+        zeros_as_missing: Option<bool>,
+    ) -> PyResult<Self> {
+        let mut s = BoostTreeSpec::new()
+            .trees(trees)
+            .tree_depth(tree_depth)
+            .learn_rate(learn_rate)
+            .min_n(min_n)
+            .loss_reduction(loss_reduction)
+            .lambda(lambda)
+            .alpha(alpha);
+        if let Some(z) = zeros_as_missing {
+            s = s.zeros_as_missing(z);
+        }
+        Ok(PyBoostTree { inner: s })
+    }
+}
+
 fn model_from_py(model: &Bound<'_, PyAny>) -> PyResult<Box<dyn ModelSpec>> {
+    if let Ok(m) = model.extract::<PyBoostTree>() {
+        return Ok(Box::new(m.inner));
+    }
     if let Ok(m) = model.extract::<PyRandForest>() {
         return Ok(Box::new(m.inner));
     }
@@ -378,7 +422,7 @@ fn model_from_py(model: &Bound<'_, PyAny>) -> PyResult<Box<dyn ModelSpec>> {
     if let Ok(m) = model.extract::<PyLogisticReg>() {
         return Ok(Box::new(m.inner));
     }
-    Err(InvalidArgumentError::new_err("model must be a LinearReg, LogisticReg, MultinomReg, DecisionTree or RandForest"))
+    Err(InvalidArgumentError::new_err("model must be a LinearReg, LogisticReg, MultinomReg, DecisionTree, RandForest or BoostTree"))
 }
 
 // ---------------------------------------------------------------- Resampling
@@ -789,6 +833,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMultinomReg>()?;
     m.add_class::<PyDecisionTree>()?;
     m.add_class::<PyRandForest>()?;
+    m.add_class::<PyBoostTree>()?;
     m.add_class::<PyFolds>()?;
     m.add_class::<PyWorkflow>()?;
     m.add_class::<PyFittedWorkflow>()?;

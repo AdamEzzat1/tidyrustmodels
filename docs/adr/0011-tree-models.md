@@ -90,3 +90,77 @@ two samples from one distribution, so that is what can be verified.
   case weights, class weights, `splitrule` variants (extratrees, hellinger, maxstat)
   and categorical splits are not implemented; the recipe dummy-encodes nominals.
 
+## Amendment B (2026-10-13): boosted trees
+
+### Context
+`parsnip::boost_tree()` with engine `xgboost` fits xgboost 3.2.1 with
+`tree_method = "auto"`, which on the CPU is the histogram method
+(`grow_quantile_histmaker`). xgboost has no R-level randomness with parsnip's
+defaults (`subsample = 1`, `colsample_* = 1`), computes in float32, and ships its
+model as JSON, so unlike ranger it *can* be reproduced exactly. What cannot be
+reproduced from the outside is the quantile sketch that chooses the 256 bin edges per
+feature: it is a deterministic but intricate algorithm whose pruning decides every
+split value when a feature has more than 256 distinct values.
+
+A second, tidymodels-level fact decides what the model even is. Before fitting,
+`workflows` estimates the sparsity of the baked design from the recipe
+(`recipes::.recipes_estimate_sparsity`) and, for xgboost, applies a fitted decision
+rule (`workflows:::should_use_sparsity`); when it says "yes", `step_dummy()` emits
+sparse columns, parsnip passes a `dgCMatrix`, and **xgboost treats every exact zero of
+the design as a missing value**, including zeros in numeric columns (a zero basement
+area), with a default direction learned per split. The Ames task takes that path and
+its trees are different trees. The same recipe and model fitted on a data frame
+(`fit_xy()`) are dense.
+
+### Decision
+1. **`BoostTreeSpec`** is a port of xgboost 3.2.1's single-threaded CPU `hist`
+   booster for dense or zero-as-missing designs: the weighted quantile sketch and cut
+   points (`quantile.cc`), bin search and histogram accumulation (`hist_util`),
+   forward and backward split scans with the gain `G²/(H + λ)` and the split-entry
+   replacement rule (`evaluate_splits.h`, `param.h`), depth-wise expansion with
+   `kRtEps` and `gamma` stops (`driver.h`, `updater_quantile_hist.cc`), the
+   subtraction trick for the larger child (`histogram.cc`), the squared-error,
+   logistic and softprob gradients with their base scores (`regression_obj.cu`,
+   `multiclass_obj.cu`, `init_estimation.cc`) and the float32 predictor. Each
+   quantity is computed in xgboost's precision (float32 gradients, gains, weights and
+   predictions; float64 histogram sums) in xgboost's single-thread order.
+2. **Parameters** map as parsnip does: `trees` → `nrounds` (15), `tree_depth` →
+   `max_depth` (6), `learn_rate` → `eta` (0.3), `min_n` → `min_child_weight` (1,
+   capped at the row count), `loss_reduction` → `gamma` (0); `lambda` (1) and
+   `alpha` (0) are exposed as engine arguments. `mtry`, `sample_size` and
+   `stop_iter` are not offered: the first two draw from xgboost's generator, the
+   third needs a validation split.
+3. **Sparse-data decision.** `ModelSpec::resolve_sparsity` is a new hook that a
+   `Workflow` calls with the recipe's sparsity estimate (`Recipe::estimate_sparsity`,
+   a port of recipes' estimate; `Step::sparse_adjustments` lets `StepDummy` report
+   the columns it will create) and the row count. `BoostTreeSpec`'s default policy
+   `Auto` applies `core::sparsity::should_use_sparsity`, a transcription of
+   workflows 1.3.0's rule, and fits with zeros as missing when it says so; a
+   standalone fit is dense; `zeros_as_missing(bool)` forces either. The decision is
+   recorded in the fit diagnostics and checked against R's in the differential
+   suite.
+4. **Verification (level 3/4)** compares the booster with xgboost's own model JSON:
+   objective, tree count, every tree's children, split features and default
+   directions exactly; split values, leaves, base weights, hessian sums and gains to
+   the float32 bound; the base score; the raw margins and transformed predictions on
+   the test rows; the same per fold on the five resampling folds; then metrics as for
+   every model.
+5. **Engines.** `native` only (Decision 5 above).
+
+### Consequences
+- Two tidymodels behaviours that users rarely see are now explicit API: the
+  sparse-data decision (and its consequence that zeros become missing values) and
+  xgboost's float32 arithmetic, which bounds agreement with any double-precision
+  reimplementation at about 1e-7 relative.
+- recipes samples 1000 rows for its sparsity estimate when the data is larger;
+  the Rust estimate counts every row, so a design whose estimate sits within the
+  sampling noise of the decision boundary can be fitted sparse by one and dense by
+  the other. The suite compares the decision exactly and the estimate within 2e-2.
+- Missing values in the predictors themselves (NA) are still rejected; only the
+  zero-as-missing convention of the sparse path is implemented.
+- tune 2.1.0 fits resamples through `.fit_pre()`/`.fit_model()`, which skip the
+  toggle: `fit_resamples()` and `tune_grid()` fit xgboost dense where `fit()` on the
+  same workflow fits it sparse. `Workflow::fit_resamples` mirrors that (the hook is
+  applied by `fit` only), so resampling metrics match R's and a final fit matches
+  R's final fit, even though the two are different models on a sparse design.
+

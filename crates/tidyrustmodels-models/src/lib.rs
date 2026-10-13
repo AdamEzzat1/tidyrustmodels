@@ -10,6 +10,7 @@
 
 pub mod alias;
 pub mod backends;
+pub mod boost_tree;
 pub mod diag;
 pub mod fitted;
 pub mod linear;
@@ -20,6 +21,7 @@ pub mod rand_forest;
 pub mod tree;
 
 pub use backends::Engine;
+pub use boost_tree::{BoostTreeSpec, FittedBoostTree, SparsePolicy};
 pub use fitted::{fitted_model_from_state, FittedLinear, FittedLogistic, FittedMultinom};
 pub use linear::LinearRegSpec;
 pub use logistic::LogisticRegSpec;
