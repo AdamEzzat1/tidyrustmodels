@@ -33,12 +33,23 @@ yardstick 1.4.0, tune 2.1.0.
 | `logistic_reg() %>% set_engine("glm")` | `LogisticRegSpec` engine `native` | **same algorithm**: `glm.fit` IRLS, clamped logit link, deviance criterion `epsilon = 1e-8`, `maxit = 25` | tested (L3, 3.3e-13 rel; probabilities 4e-15 abs; `converged` exact) |
 | `glm` coefficient sign convention | log-odds of the second level | identical | tested |
 | `logistic_reg(penalty = λ) %>% set_engine("glmnet")` | not supported | glmnet scales by 1/n and mixes L1/L2; `penalty` here is unscaled L2 | **not equivalent** |
-| `initial_split(prop, strata)` | `initial_split` | same algorithm family; different RNG | semantic only |
-| `vfold_cv(v, strata)` | `vfold_cv` | balanced assignment, per-stratum; different RNG | semantic only |
-| `make_strata` on numeric outcome | `strata_from_numeric` | type-7 quantile bins, `include.lowest` | intended |
-| `rsample::manual_rset` from ids | `Folds::from_assignments` | exact membership | tested (L4) |
-| `fit_resamples()` | `Workflow::fit_resamples` | prep inside each fold | tested (L4, 210 fold metrics) |
-| `collect_metrics()` | `ResampleResults::summary` | mean, `sd/sqrt(n)`, n over defined folds | tested (L4) |
+| `initial_split(prop, strata)` | `initial_split` | `floor(n * prop)` per stratum; different RNG | semantic only |
+| `initial_validation_split(prop = c(a, b))`, `validation_set()` | `initial_validation_split`, `ThreeWaySplit::validation_set` | train `floor(n a)`, then `b / (1 - a)` of the rest; one resample `validation` | semantic only |
+| `initial_time_split(prop)` | `initial_time_split` | first `floor(n * prop)` rows | tested (exact, 4 tasks) |
+| `vfold_cv(v, repeats, strata)` | `vfold_cv`, `vfold_cv_repeated` | `sample(rep(1:v, length.out = n))` per stratum; `v == n` refused as rsample; ids `names0` (`Fold1`, `Repeat1.Fold1`) | ids tested exactly; memberships semantic; metrics on shared rsets tested (L4) |
+| `bootstraps(times, strata)` | `bootstraps` | draws kept in draw order, sorted within a stratum; assessment = out-of-bag; ids `Bootstrap01` | ids exact; metrics on shared rsets tested (L4, incl. xgboost) |
+| `mc_cv(prop, times, strata)` | `mc_cv` | `floor(n * prop)` unsorted draws; ids `Resample1` | ids exact; metrics on shared rsets tested (L4) |
+| `loo_cv()` | `loo_cv` | one row out, random order; ids `Resample1`. tune refuses `loo_cv` (`check_rset`); `fit_resamples`/`tune_grid` here accept it | ids per `names0` (unit); **difference**: not refused |
+| `group_vfold_cv(group, v, repeats, balance)` | `group_vfold_cv(…, GroupBalance)` | `balance = "groups"` / `"observations"`; `v = NULL` leave-one-group-out; ids `Resample1` | balance rules exact on R's permutations (fixture); metrics on shared rsets tested (L4) |
+| `group_bootstraps(group, times)`, `group_mc_cv(group, prop, times)`, `group_initial_split` | same names | `balance = "prop"` cut-off rule; repeated groups' rows adjacent in row order; empty assessment refused | cut-off rule exact on R's draws (fixture); metrics tested (L4) |
+| `rolling_origin(initial, assess, cumulative, skip, lag)` | `rolling_origin` | identical windows; ids `Slice1` | tested (exact memberships, 2 tasks) |
+| `sliding_window(lookback, assess_start, assess_stop, complete, step, skip)` | `sliding_window` | identical windows (slider rules, `Inf` = `None`) | tested (exact memberships) |
+| `sliding_index(index, …)` on a numeric index | `sliding_index` | identical windows; an assessment window with no rows stays empty, as slider | tested (exact memberships) |
+| `sliding_period()` | not supported | needs a date index | unsupported |
+| `make_strata(x, breaks, pool, depth)` | `make_strata_categorical`, `make_strata_numeric`, `strata_from_numeric` | pooling below `pool` by random reassignment; `breaks <= floor(n / depth)`; type-7 quantile bins, `include.lowest`; NAs to a random bin | unit-tested rules |
+| `rsample::make_splits()` + `manual_rset()` | `Split::new`, `Folds::from_splits` | analysis order kept, repeats allowed, assessment sorted, may be empty | tested (L4, every task) |
+| `fit_resamples()` | `Workflow::fit_resamples` | prep inside each resample; empty assessment set is an error (rsample warns, tune fails) | tested (L4, 53 tasks) |
+| `collect_metrics()` | `ResampleResults::summary` | mean, `sd/sqrt(n)`, n over defined resamples (repeats pooled) | tested (L4) |
 | `tune_grid()` + `grid_regular()`/`grid_random()` | `tune_grid`, `grid_regular`, `grid_random` | same search semantics; different random points | intended |
 | `rmse`, `mae` | `rmse`, `mae` | identical formulas | tested (L2) |
 | `rsq` | `rsq` | **squared Pearson correlation** | tested (L2) |
@@ -83,7 +94,7 @@ yardstick 1.4.0, tune 2.1.0.
 
 ## Unsupported in v0.1
 
-workflowsets, bootstraps, repeated CV, grouped resampling, case weights for
+workflowsets, `sliding_period`, `nested_cv`, `permutations`, `apparent`, case weights for
 `multinom_reg` and for the linfa/smartcore engines, `step_filter_missing`,
 glmnet-equivalent penalization, `tailor` post-processing,
 `step_zv(group =)`, `step_corr(method = "spearman"/"kendall")`,

@@ -1,6 +1,6 @@
 {
  "schema_version": 1,
- "notes": "Single source of truth for the differential suite. R (reference/tidymodels-r/run_reference.R), Python (reference/fixtures/generate_splits.py) and Rust (crates/tidyrustmodels/tests/differential.rs) all read this file. Step vocabulary: impute_median_numeric, impute_mean_numeric, normalize_numeric, dummy_nominal, zv, nzv, corr_numeric (threshold 0.9), other_nominal (threshold 0.05), novel_nominal, unknown_nominal (recipes defaults). Splits: initial = 75/25 (stratified by outcome for classification), vfold5 = 5-fold (stratified by outcome for classification). Classification tasks whose outcome has more than two levels are fitted with multinom_reg (R: nnet with maxit = 10000, reltol = 1e-15; Rust: MultinomRegSpec) and use yardstick's multiclass estimator defaults. A task's optional `model` (`decision_tree`; default: linear_reg / logistic_reg / multinom_reg by outcome) and `model_args` (parsnip argument names) select the estimator in all three systems. Tree tasks keep predictors on their raw scale: trees are invariant to monotone transforms, and normalising would make exact ties at split points depend on the last bit of the baked values, which differs between R and Rust. `rand_forest` tasks are stochastic: R fits ranger with seeds 1..10 and records per-seed test metrics and predictions; Rust does the same with its own streams and the suite compares the seed means statistically (level 5), not individual forests. A task's optional `case_weights` {column, kind} names a numeric column of the dataset used as `workflows::add_case_weights()` with `hardhat::frequency_weights()` (kind `frequency`, whole numbers, zeros allowed) or `hardhat::importance_weights()` (kind `importance`); the column is never a predictor. R fixtures then carry the weighted fit, and for frequency weights the resampling metrics are weighted (tune passes frequency weights to yardstick) and `test_metrics_weighted` holds the test metrics with `case_weights =`. `multinom_reg` (nnet) takes no case weights, so no weighted multinom task exists.",
+ "notes": "Single source of truth for the differential suite. R (reference/tidymodels-r/run_reference.R), Python (reference/fixtures/generate_splits.py) and Rust (crates/tidyrustmodels/tests/differential.rs) all read this file. Step vocabulary: impute_median_numeric, impute_mean_numeric, normalize_numeric, dummy_nominal, zv, nzv, corr_numeric (threshold 0.9), other_nominal (threshold 0.05), novel_nominal, unknown_nominal (recipes defaults). Splits: initial = 75/25 (stratified by outcome for classification), vfold5 = 5-fold (stratified by outcome for classification). Classification tasks whose outcome has more than two levels are fitted with multinom_reg (R: nnet with maxit = 10000, reltol = 1e-15; Rust: MultinomRegSpec) and use yardstick's multiclass estimator defaults. A task's optional `model` (`decision_tree`; default: linear_reg / logistic_reg / multinom_reg by outcome) and `model_args` (parsnip argument names) select the estimator in all three systems. Tree tasks keep predictors on their raw scale: trees are invariant to monotone transforms, and normalising would make exact ties at split points depend on the last bit of the baked values, which differs between R and Rust. `rand_forest` tasks are stochastic: R fits ranger with seeds 1..10 and records per-seed test metrics and predictions; Rust does the same with its own streams and the suite compares the seed means statistically (level 5), not individual forests. A task's optional `case_weights` {column, kind} names a numeric column of the dataset used as `workflows::add_case_weights()` with `hardhat::frequency_weights()` (kind `frequency`, whole numbers, zeros allowed) or `hardhat::importance_weights()` (kind `importance`); the column is never a predictor. R fixtures then carry the weighted fit, and for frequency weights the resampling metrics are weighted (tune passes frequency weights to yardstick) and `test_metrics_weighted` holds the test metrics with `case_weights =`. `multinom_reg` (nnet) takes no case weights, so no weighted multinom task exists. A task's optional `resampling` {scheme, ...} replaces the default 5-fold set for level 4 (ADR-0013): `vfold_cv` {v, repeats}, `bootstraps` {times}, `mc_cv` {prop, times} (all stratified by the outcome for classification), `group_vfold_cv` {group, v, repeats, balance}, `group_bootstraps` {group, times}, `group_mc_cv` {group, prop, times} (the group column is never a predictor), and the deterministic `rolling_origin` {initial, assess, cumulative, skip, lag}, `sliding_window` {lookback, assess_start, assess_stop, complete, step, skip} and `sliding_index` {index, lookback, ...} (the index column is never a predictor; time-series tasks use `initial_time_split` for the 75/25 split). The shared split file carries the resample memberships under `rset` (ids follow rsample's `names0`: Fold1, Bootstrap01, Resample1, Repeat1.Fold1, Slice1); R builds the rset with `make_splits()` + `manual_rset()` and additionally records the ids (and, for the deterministic schemes, the memberships) that rsample's own function produces, which Rust's generators must reproduce exactly.",
  "tasks": [
   {
    "id": "synth_reg",
@@ -1070,6 +1070,448 @@
     "kap",
     "mcc",
     "brier_class"
+   ]
+  },
+  {
+   "id": "synth_reg_boot",
+   "dataset": "synthetic_reg_small",
+   "type": "regression",
+   "outcome": "y",
+   "predictors": [
+    "x1",
+    "x2",
+    "x3",
+    "g"
+   ],
+   "steps": [
+    "impute_median_numeric",
+    "normalize_numeric",
+    "dummy_nominal"
+   ],
+   "resampling": {
+    "scheme": "bootstraps",
+    "times": 10
+   },
+   "metrics": [
+    "rmse",
+    "rsq",
+    "mae"
+   ]
+  },
+  {
+   "id": "synth_clf_boot",
+   "dataset": "synthetic_clf_small",
+   "type": "classification",
+   "outcome": "y",
+   "predictors": [
+    "x1",
+    "x2",
+    "g"
+   ],
+   "steps": [
+    "normalize_numeric",
+    "dummy_nominal"
+   ],
+   "resampling": {
+    "scheme": "bootstraps",
+    "times": 10
+   },
+   "metrics": [
+    "accuracy",
+    "mn_log_loss",
+    "roc_auc",
+    "brier_class"
+   ]
+  },
+  {
+   "id": "synth_reg_xgb_boot",
+   "dataset": "synthetic_reg_small",
+   "type": "regression",
+   "outcome": "y",
+   "predictors": [
+    "x1",
+    "x2",
+    "x3",
+    "g"
+   ],
+   "steps": [
+    "impute_median_numeric",
+    "dummy_nominal"
+   ],
+   "model": "boost_tree",
+   "resampling": {
+    "scheme": "bootstraps",
+    "times": 5
+   },
+   "metrics": [
+    "rmse",
+    "rsq",
+    "mae"
+   ]
+  },
+  {
+   "id": "synth_reg_rep",
+   "dataset": "synthetic_reg_small",
+   "type": "regression",
+   "outcome": "y",
+   "predictors": [
+    "x1",
+    "x2",
+    "x3",
+    "g"
+   ],
+   "steps": [
+    "impute_median_numeric",
+    "normalize_numeric",
+    "dummy_nominal"
+   ],
+   "resampling": {
+    "scheme": "vfold_cv",
+    "v": 5,
+    "repeats": 3
+   },
+   "metrics": [
+    "rmse",
+    "rsq",
+    "mae"
+   ]
+  },
+  {
+   "id": "synth_clf_tree_rep",
+   "dataset": "synthetic_clf_small",
+   "type": "classification",
+   "outcome": "y",
+   "predictors": [
+    "x1",
+    "x2",
+    "g"
+   ],
+   "steps": [
+    "dummy_nominal"
+   ],
+   "model": "decision_tree",
+   "resampling": {
+    "scheme": "vfold_cv",
+    "v": 5,
+    "repeats": 2
+   },
+   "metrics": [
+    "accuracy",
+    "mn_log_loss",
+    "roc_auc",
+    "brier_class"
+   ]
+  },
+  {
+   "id": "synth_reg_mc",
+   "dataset": "synthetic_reg_small",
+   "type": "regression",
+   "outcome": "y",
+   "predictors": [
+    "x1",
+    "x2",
+    "x3",
+    "g"
+   ],
+   "steps": [
+    "impute_median_numeric",
+    "normalize_numeric",
+    "dummy_nominal"
+   ],
+   "resampling": {
+    "scheme": "mc_cv",
+    "prop": 0.7,
+    "times": 8
+   },
+   "metrics": [
+    "rmse",
+    "rsq",
+    "mae"
+   ]
+  },
+  {
+   "id": "synth_clf_mc",
+   "dataset": "synthetic_clf_small",
+   "type": "classification",
+   "outcome": "y",
+   "predictors": [
+    "x1",
+    "x2",
+    "g"
+   ],
+   "steps": [
+    "normalize_numeric",
+    "dummy_nominal"
+   ],
+   "resampling": {
+    "scheme": "mc_cv",
+    "prop": 0.7,
+    "times": 6
+   },
+   "metrics": [
+    "accuracy",
+    "mn_log_loss",
+    "roc_auc",
+    "brier_class"
+   ]
+  },
+  {
+   "id": "synth_group",
+   "dataset": "synthetic_group_reg",
+   "type": "regression",
+   "outcome": "y",
+   "predictors": [
+    "x1",
+    "x2",
+    "x3"
+   ],
+   "steps": [
+    "normalize_numeric"
+   ],
+   "resampling": {
+    "scheme": "group_vfold_cv",
+    "group": "site",
+    "v": 4,
+    "balance": "groups"
+   },
+   "metrics": [
+    "rmse",
+    "rsq",
+    "mae"
+   ]
+  },
+  {
+   "id": "synth_group_obs",
+   "dataset": "synthetic_group_reg",
+   "type": "regression",
+   "outcome": "y",
+   "predictors": [
+    "x1",
+    "x2",
+    "x3"
+   ],
+   "steps": [
+    "normalize_numeric"
+   ],
+   "resampling": {
+    "scheme": "group_vfold_cv",
+    "group": "site",
+    "v": 4,
+    "balance": "observations"
+   },
+   "metrics": [
+    "rmse",
+    "rsq",
+    "mae"
+   ]
+  },
+  {
+   "id": "synth_group_rep",
+   "dataset": "synthetic_group_reg",
+   "type": "regression",
+   "outcome": "y",
+   "predictors": [
+    "x1",
+    "x2",
+    "x3"
+   ],
+   "steps": [
+    "normalize_numeric"
+   ],
+   "resampling": {
+    "scheme": "group_vfold_cv",
+    "group": "site",
+    "v": 3,
+    "repeats": 2,
+    "balance": "groups"
+   },
+   "metrics": [
+    "rmse",
+    "rsq",
+    "mae"
+   ]
+  },
+  {
+   "id": "synth_group_boot",
+   "dataset": "synthetic_group_reg",
+   "type": "regression",
+   "outcome": "y",
+   "predictors": [
+    "x1",
+    "x2",
+    "x3"
+   ],
+   "steps": [
+    "normalize_numeric"
+   ],
+   "resampling": {
+    "scheme": "group_bootstraps",
+    "group": "site",
+    "times": 6
+   },
+   "metrics": [
+    "rmse",
+    "rsq",
+    "mae"
+   ]
+  },
+  {
+   "id": "synth_group_mc",
+   "dataset": "synthetic_group_reg",
+   "type": "regression",
+   "outcome": "y",
+   "predictors": [
+    "x1",
+    "x2",
+    "x3"
+   ],
+   "steps": [
+    "normalize_numeric"
+   ],
+   "resampling": {
+    "scheme": "group_mc_cv",
+    "group": "site",
+    "prop": 0.7,
+    "times": 6
+   },
+   "metrics": [
+    "rmse",
+    "rsq",
+    "mae"
+   ]
+  },
+  {
+   "id": "synth_group_tree",
+   "dataset": "synthetic_group_reg",
+   "type": "regression",
+   "outcome": "y",
+   "predictors": [
+    "x1",
+    "x2",
+    "x3"
+   ],
+   "steps": [],
+   "model": "decision_tree",
+   "resampling": {
+    "scheme": "group_vfold_cv",
+    "group": "site",
+    "v": 4,
+    "balance": "observations"
+   },
+   "metrics": [
+    "rmse",
+    "rsq",
+    "mae"
+   ]
+  },
+  {
+   "id": "synth_ts_roll",
+   "dataset": "synthetic_ts",
+   "type": "regression",
+   "outcome": "y",
+   "predictors": [
+    "t",
+    "x1",
+    "x2"
+   ],
+   "steps": [
+    "normalize_numeric"
+   ],
+   "resampling": {
+    "scheme": "rolling_origin",
+    "initial": 60,
+    "assess": 12,
+    "cumulative": true,
+    "skip": 11,
+    "lag": 0
+   },
+   "metrics": [
+    "rmse",
+    "rsq",
+    "mae"
+   ]
+  },
+  {
+   "id": "synth_ts_slide",
+   "dataset": "synthetic_ts",
+   "type": "regression",
+   "outcome": "y",
+   "predictors": [
+    "t",
+    "x1",
+    "x2"
+   ],
+   "steps": [
+    "normalize_numeric"
+   ],
+   "resampling": {
+    "scheme": "sliding_window",
+    "lookback": 47,
+    "assess_start": 1,
+    "assess_stop": 12,
+    "complete": true,
+    "step": 12,
+    "skip": 0
+   },
+   "metrics": [
+    "rmse",
+    "rsq",
+    "mae"
+   ]
+  },
+  {
+   "id": "synth_ts_index",
+   "dataset": "synthetic_ts",
+   "type": "regression",
+   "outcome": "y",
+   "predictors": [
+    "t",
+    "x1",
+    "x2"
+   ],
+   "steps": [
+    "normalize_numeric"
+   ],
+   "resampling": {
+    "scheme": "sliding_index",
+    "index": "day",
+    "lookback": 60,
+    "assess_start": 1,
+    "assess_stop": 15,
+    "complete": true,
+    "step": 10,
+    "skip": 0
+   },
+   "metrics": [
+    "rmse",
+    "rsq",
+    "mae"
+   ]
+  },
+  {
+   "id": "synth_ts_tree_roll",
+   "dataset": "synthetic_ts",
+   "type": "regression",
+   "outcome": "y",
+   "predictors": [
+    "t",
+    "x1",
+    "x2"
+   ],
+   "steps": [],
+   "model": "decision_tree",
+   "resampling": {
+    "scheme": "rolling_origin",
+    "initial": 60,
+    "assess": 12,
+    "cumulative": false,
+    "skip": 11,
+    "lag": 0
+   },
+   "metrics": [
+    "rmse",
+    "rsq",
+    "mae"
    ]
   }
  ]

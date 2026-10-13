@@ -19,7 +19,7 @@ crates/
   tidyrustmodels-core       data contracts, schemas, errors, RNG policy, traits
   tidyrustmodels-recipes    preprocessing steps (prep on training data only, then bake)
   tidyrustmodels-models     estimator specs + backend adapters (linfa, smartcore)
-  tidyrustmodels-resample   splits, k-fold, stratified k-fold, fixture-loaded folds
+  tidyrustmodels-resample   rsplits/rsets: v-fold (+repeats), bootstraps, Monte-Carlo, LOO, grouped, time-series windows, strata; fixture-loaded rsets
   tidyrustmodels-metrics    yardstick-compatible metric definitions
   tidyrustmodels-workflows  recipe + model composition; fit_resamples
   tidyrustmodels-tune       grid / random search over resamples

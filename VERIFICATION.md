@@ -499,6 +499,85 @@ Not covered: `step_filter_missing`, weighted `step_pca`/`step_classdist`
 (not implemented), case weights on the linfa/smartcore engines, nnet weights
 (unsupported upstream), weighted `roc_curve(thresholds =)`.
 
+## Resampling schemes (Phase 8h)
+
+Executed 2026-10-13. rsample 1.3.2's generators were ported as algorithms under the
+framework's RNG and `Split`/`Folds` became an rsplit/rset (ADR-0013). Because R's
+draws cannot be reproduced, the verification is split by what can be compared:
+
+- **Deterministic schemes** (`rolling_origin`, `sliding_window`, `sliding_index`,
+  `initial_time_split`): the R runner records the memberships rsample's own function
+  produces; the Rust generator and the shared split file must equal them row for row.
+- **Random schemes**: the shared file (Python, ADR-0006) carries the memberships
+  under `rset`; R builds the rset with `make_splits()` + `manual_rset()` and runs
+  `fit_resamples()`; Rust loads the same rows with `Folds::from_splits`. The *ids*
+  rsample's function produces are recorded and compared exactly with the Rust ids,
+  and the structural invariants of the scheme (balanced folds, out-of-bag assessment,
+  no group on both sides, `floor(n * prop)` analysis rows, ascending repeated rows for
+  grouped bootstraps) are asserted on both the Rust draw and the shared one.
+- **Balance rules** (`balance_observations_helper`, `balance_prop_helper`): R records
+  the permutation / draws its RNG produced under a seed, replayed with the same
+  `sample.int` call, and the assignment rsample derived from them
+  (`reference/tidymodels-r/group_balance_fixture.R` → `group_balance.json`, four
+  group layouts incl. one skewed 30/1/1/2/1/3/1/1); the Rust rules reproduce all of
+  them exactly (`group_balance_rules_match_rsample`).
+
+Two datasets were added (`synthetic_group_reg`: 12 sites of 3-20 rows, shuffled;
+`synthetic_ts`: 120 ordered rows with an irregular `day` index) and 17 tasks; the ids
+of every pre-existing fixture changed from the harness's `Fold01` to rsample's
+`names0` (`Fold1`), which is the only change to those fixtures.
+
+| task | scheme | model | ids vs rsample | memberships | L4 metrics (max rel, per engine) |
+|---|---|---|---|---|---|
+| `synth_reg_boot` | `bootstraps(times = 10)` | lm | exact | shared (structure checked) | 1.2e-14 / 9.2e-15 / 4.7e-15 (linfa / smartcore / native) |
+| `synth_clf_boot` | `bootstraps(10, strata = y)` | glm | exact | shared | 1.2e-8 / 1.3e-8 / 1.1e-15 |
+| `synth_reg_xgb_boot` | `bootstraps(5)` | xgboost | exact | shared | fold boosters: structure exact, values <= 5.8e-8 rel (JSON printing); metrics to round-off |
+| `synth_reg_rep` | `vfold_cv(5, repeats = 3)` | lm | exact (`Repeat1.Fold1`) | shared | 3.9e-15 / 5.4e-15 / 1.6e-15; summary `n = 15` |
+| `synth_clf_tree_rep` | `vfold_cv(5, repeats = 2, strata = y)` | rpart | exact | shared | 10 fold trees exact; 5.1e-16 |
+| `synth_reg_mc` | `mc_cv(0.7, 8)` | lm | exact | shared (28 analysis rows each) | 5.6e-15 / 6.5e-15 / 4.5e-15 |
+| `synth_clf_mc` | `mc_cv(0.7, 6, strata = y)` | glm | exact | shared | 7.8e-10 / 6.0e-9 / 1.1e-15 |
+| `synth_group` | `group_vfold_cv(site, v = 4, balance = "groups")` | lm | exact | shared (no group straddles) | 1.3e-15 / 1.8e-15 / 2.1e-15 |
+| `synth_group_obs` | `group_vfold_cv(site, 4, "observations")` | lm | exact | shared | 1.3e-15 / 5.7e-16 / 1.8e-15 |
+| `synth_group_rep` | `group_vfold_cv(site, 3, repeats = 2)` | lm | exact (`Repeat1.Resample1`) | shared | 2.4e-15 / 1.6e-15 / 1.6e-15 |
+| `synth_group_boot` | `group_bootstraps(site, 6)` | lm | exact (`Bootstrap1`) | shared (ascending repeated rows, OOB) | 8.7e-16 / 1.2e-15 / 7.8e-16 |
+| `synth_group_mc` | `group_mc_cv(site, 0.7, 6)` | lm | exact | shared | 2.4e-15 / 2.7e-15 / 2.2e-15 |
+| `synth_group_tree` | `group_vfold_cv(site, 4, "observations")` | rpart | exact | shared | 4 fold trees exact; 7.8e-16 |
+| `synth_ts_roll` | `rolling_origin(60, 12, cumulative, skip 11)` | lm | exact (`Slice1`) | **exact** (5 slices, Rust = rsample = file) + `initial_time_split` exact | 6.9e-15 / 5.3e-15 / 7.1e-15 |
+| `synth_ts_slide` | `sliding_window(47, 1..12, step 12)` | lm | exact | **exact** (6 slices) | 2.9e-15 / 4.0e-15 / 1.7e-15 |
+| `synth_ts_index` | `sliding_index(day, 60, 1..15, step 10)` | lm | exact | **exact** (9 slices in day units) | 2.1e-15 / 7.0e-15 / 2.6e-15 |
+| `synth_ts_tree_roll` | `rolling_origin(60, 12, non-cumulative, skip 11)` | rpart | exact | **exact** | 5 fold trees exact; 2.8e-15 |
+
+Differential suite after this phase: 9457 comparisons, 0 failures, 2230 of them on
+the new tasks (`target/differential_report.md`); the 5343 level-4 comparisons of the
+pre-existing tasks are unchanged (max 6.65e-7 rel, the xgboost JSON bound). All new
+tasks run under the default tolerances; no bound was added or relaxed. Python: the
+same generators through the bindings (`python/tests/test_resampling.py`: rsample id
+conventions, out-of-bag bootstraps, stratified draw order, grouped invariants, the
+three time-series probes from the R dumps, `make_strata` rules, `Folds.from_splits`
+round-trip of a shared rset, refusal of an empty assessment set); parity suite 158
+passed, 66 skipped.
+
+Findings:
+
+1. **The harness's fold ids were not rsample's.** `sprintf("Fold%02d")` gave `Fold01`
+   for `v = 5`, where `names0()` gives `Fold1`; both sides now use `names0` and the
+   Rust ids are compared with the ids rsample's own function produces on every task.
+2. **`step_nzv`/`kappa` on unimputed xgboost folds.** The first bootstrap xgboost task
+   omitted imputation (xgboost handles `NA`); the R runner's condition-number probe
+   (`kappa(crossprod(X))`) then failed on the baked matrix. The task now imputes like
+   the other xgboost tasks (a harness constraint, not a semantic difference).
+3. **rsample's grouped draws repeat rows in row order, not draw order.**
+   `collapse_groups` joins the drawn groups back with `left_join(multiple = "all")`,
+   so a group drawn twice contributes its rows twice, adjacently, in original order;
+   the port and the Python generator do the same (checked structurally on
+   `synth_group_boot`), where a naive "concatenate the draws" would have changed the
+   round-off of the fits.
+
+Not covered: `sliding_period`, `nested_cv`, `permutations`, `apparent`, tune's
+refusal of `loo_cv`, `make_strata` pooling on a reference task (unit-tested only),
+`initial_validation_split` against R (unit-tested sizes only: 8 rows, (0.5, 0.25) →
+4/2/2 as the R probe).
+
 ## Test inventory
 
 | suite | location | runs in CI | needs R |
@@ -512,6 +591,7 @@ Not covered: `step_filter_missing`, weighted `step_pca`/`step_classdist`
 | random-forest baselines | `crates/tidyrustmodels-models/tests/forest.rs` | yes | no |
 | boosted-tree baselines | `crates/tidyrustmodels-models/tests/boost.rs` | yes | no |
 | differential vs pinned R fixtures | `crates/tidyrustmodels/tests/differential.rs` | yes | no (fixtures committed) |
+| grouped balance rules vs rsample (Phase 8h) | `crates/tidyrustmodels/tests/differential.rs::group_balance_rules_match_rsample` | yes | no (`group_balance.json` committed) |
 | fixture regeneration | `reference/tidymodels-r/` | scheduled job only | yes |
 | Python parity | `python/tests/` | yes (python job) | no |
 | benchmarks | `benchmarks/` | manual / dedicated machine | yes |

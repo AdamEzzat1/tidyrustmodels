@@ -76,15 +76,51 @@ pub struct LogisticRegSpec { engine: Engine, intercept: bool, penalty: f64 /* L2
 ## tidyrustmodels-resample
 
 ```rust
+// an rsample rsplit (ADR-0013): analysis rows in draw order (repeats allowed),
+// assessment rows sorted (may be empty); rows may be in neither set
 pub struct Split { pub train: Vec<usize>, pub test: Vec<usize> }
-pub fn initial_split(n: usize, prop: f64, strata: Option<&[u32]>, seed: Seed) -> Result<Split>;
-pub struct Folds { pub splits: Vec<Split>, pub ids: Vec<String> }
-pub fn vfold_cv(n: usize, v: usize, strata: Option<&[u32]>, seed: Seed) -> Result<Folds>;
-impl Folds { pub fn from_assignments(fold_of_row: &[u32]) -> Result<Folds>; }   // fixture loader
+impl Split {
+    pub fn from_ids(train, test, n) -> Result<Split>;   // strict partition (initial split)
+    pub fn new(train, test, n) -> Result<Split>;        // rsample::make_splits(list(analysis, assessment))
+    pub fn is_partition(&self, n: usize) -> bool;
+}
+// an rset: rsample ids follow names0 (Fold1, Fold01, Bootstrap01, Resample1, Slice1, Repeat1.Fold1)
+pub struct Folds { pub splits: Vec<Split>, pub ids: Vec<String>, pub n: usize }
+impl Folds {
+    pub fn from_assignments(fold_of_row: &[u32]) -> Result<Folds>;              // v-fold from a fold index per row
+    pub fn from_splits(splits: Vec<Split>, ids: Vec<String>, n: usize) -> Result<Folds>;   // manual_rset
+    pub fn assignments(&self) -> Vec<u32>; pub fn is_partition(&self) -> bool;
+}
+pub fn names0(num: usize, prefix: &str) -> Vec<String>;
+// random schemes (framework RNG; rsample's algorithms)
+pub fn initial_split(n, prop, strata: Option<&[u32]>, seed) -> Result<Split>;
+pub fn initial_validation_split(n, (prop_train, prop_val), strata, seed) -> Result<ThreeWaySplit>;  // .validation_set()
+pub fn vfold_cv(n, v, strata, seed) -> Result<Folds>;
+pub fn vfold_cv_repeated(n, v, repeats, strata, seed) -> Result<Folds>;
+pub fn bootstraps(n, times, strata, seed) -> Result<Folds>;      // assessment = out-of-bag
+pub fn mc_cv(n, prop, times, strata, seed) -> Result<Folds>;
+pub fn loo_cv(n, seed) -> Result<Folds>;
+pub fn group_vfold_cv(groups: &[u32], v: Option<usize>, repeats, balance: GroupBalance, seed) -> Result<Folds>;
+pub fn group_bootstraps(groups, times, seed) -> Result<Folds>;
+pub fn group_mc_cv(groups, prop, times, seed) -> Result<Folds>;
+pub fn group_initial_split(groups, prop, seed) -> Result<Split>;
+pub fn balance_observations(table, perm, v, n_obs) -> Vec<usize>;   // rsample's rules on a given permutation
+pub fn balance_prop(table, draws, prop) -> Vec<usize>;
+// deterministic schemes (reproduce rsample exactly)
+pub fn rolling_origin(n, initial, assess, cumulative, skip, lag) -> Result<Folds>;
+pub fn sliding_window(n, lookback: Option<usize>, assess_start, assess_stop, complete, step, skip) -> Result<Folds>;
+pub fn sliding_index(index: &[f64], lookback: Option<f64>, assess_start, assess_stop, complete, step, skip) -> Result<Folds>;
+pub fn initial_time_split(n, prop) -> Result<Split>;
+// strata
+pub fn make_strata_categorical(codes: &[Option<u32>], levels, pool, seed) -> Result<Vec<u32>>;
+pub fn make_strata_numeric(values: &[Option<f64>], breaks, depth, seed) -> Result<Vec<u32>>;
+pub fn strata_from_numeric(values: &[f64], breaks) -> Result<Vec<u32>>;
 ```
 
-Invariants (property-tested): train ∩ test = ∅, train ∪ test = 0..n, |fold sizes| differ
-by ≤ 1, stratified folds preserve per-stratum balance within ±1.
+Invariants (unit-tested): v-fold assessment sets partition `0..n` with sizes differing
+by ≤ 1 per stratum; bootstraps draw `n` rows and assess the out-of-bag rows; grouped
+schemes never place a group on both sides; time-series windows equal rsample's
+(checked against R, Phase 8h).
 
 ## tidyrustmodels-metrics
 

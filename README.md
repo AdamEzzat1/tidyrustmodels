@@ -47,6 +47,8 @@ let recipe = Recipe::new("sex")
 let wf = Workflow::new(recipe, LogisticRegSpec::new());
 // case weights as `add_case_weights()`: .case_weights("w", WeightKind::Frequency)
 let folds = vfold_cv(data.nrows(), 5, None, Seed(7))?;
+// or bootstraps(n, 25, None, seed), group_vfold_cv(&groups, Some(4), 1, GroupBalance::Groups, seed),
+// rolling_origin(n, 60, 12, true, 11, 0) ... (rsample 1.3.2 semantics, ADR-0013)
 let cv = wf.fit_resamples(&data, &folds, &MetricSet::classification_defaults(), Parallelism::threads(4))?;
 ```
 

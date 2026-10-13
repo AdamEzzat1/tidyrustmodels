@@ -134,7 +134,9 @@ def test_python_matches_rust_bitwise(task, engine):
         assert proba.flatten().tolist() == rust["prob_test"]
         assert fitted.predict(test) == rust["class_test"]
 
-    folds = trm.Folds.from_assignments(split["vfold"]["fold_of_row"])
+    rset = split["rset"]
+    folds = trm.Folds.from_splits(list(zip(rset["analysis"], rset["assessment"])), rset["ids"], split["n"])
+    assert folds.ids == rset["ids"]
     res = _workflow(task, model).fit_resamples(data, folds, task["metrics"], threads=4)
     for ours, theirs in zip(res["per_fold"], rust["per_fold"]):
         assert ours["id"] == theirs["id"]

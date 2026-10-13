@@ -85,8 +85,11 @@ decision, five tasks against xgboost's model JSON, ADR-0011 B; VERIFICATION.md P
 (frequency / importance kinds with tidymodels' per-package rules, native engines for
 lm, glm, rpart, ranger and xgboost, weighted recipe statistics and yardstick metrics,
 eleven reference tasks, ADR-0012; VERIFICATION.md Phase 8g); (f) bootstrap,
-repeated/grouped CV, time-series splits; (g) `select_best` / `finalize_workflow` /
-`last_fit`; (h) Arrow/Polars/sparse inputs; (i) workflowsets.
+repeated/grouped CV, time-series splits — **done** (rsample 1.3.2 generators as
+algorithms, rsplit semantics for `Split`/`Folds`, 17 reference tasks on shared rsets,
+exact memberships for the deterministic schemes and exact balance rules on R's
+permutations, ADR-0013; VERIFICATION.md Phase 8h); (g) `select_best` /
+`finalize_workflow` / `last_fit`; (h) Arrow/Polars/sparse inputs; (i) workflowsets.
 
 ## Phase 7 — Native algorithms (2026-10-12) — first two solvers complete, pending review
 

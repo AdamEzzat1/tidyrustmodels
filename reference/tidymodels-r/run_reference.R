@@ -85,7 +85,17 @@ columns_as_list <- function(df) {
 run_task <- function(task) {
   cat("== task", task$id, "\n")
   df <- read_dataset(task$dataset, task)
-  split <- fromJSON(file.path(root, "reference", "fixtures", "splits", paste0(task$id, ".json")))
+  # simplifyMatrix = FALSE keeps rset$analysis / rset$assessment as lists of integer
+  # vectors even when every resample has the same size
+  split <- fromJSON(file.path(root, "reference", "fixtures", "splits", paste0(task$id, ".json")), simplifyMatrix = FALSE)
+  # the raw CSV for the columns the recipe never sees (grouping / index variables)
+  raw <- read.csv(file.path(root, "reference", "fixtures", "datasets", paste0(task$dataset, ".csv")),
+                  stringsAsFactors = FALSE, na.strings = "", check.names = FALSE)
+  stopifnot(nrow(raw) == nrow(df))
+  if (identical(split$initial$scheme, "initial_time_split")) {
+    its <- initial_time_split(df, prop = split$initial$prop)
+    stopifnot(identical(as.integer(its$in_id), as.integer(split$initial$train + 1L)))
+  }
   train <- df[split$initial$train + 1, , drop = FALSE]
   test  <- df[split$initial$test + 1, , drop = FALSE]
   rownames(train) <- NULL; rownames(test) <- NULL
@@ -278,13 +288,42 @@ run_task <- function(task) {
     cat("   wrote", file.path(out_dir, paste0(task$id, ".json")), "(forest: seed sweep, no resampling)\n")
     return(invisible(NULL))
   }
-  fold_of_row <- split$vfold$fold_of_row
-  v <- split$vfold$v
-  splits <- lapply(seq_len(v) - 1, function(k) {
-    assess <- which(fold_of_row == k)
-    make_splits(list(analysis = setdiff(seq_len(nrow(df)), assess), assessment = assess), data = df)
-  })
-  rset <- manual_rset(splits, sprintf("Fold%02d", seq_len(v)))
+  # ---- the shared rset (ADR-0013): memberships from the split file, ids as rsample names them ----
+  rs <- split$rset
+  splits <- Map(function(a, s) make_splits(list(analysis = as.integer(unlist(a)) + 1L, assessment = as.integer(unlist(s)) + 1L), data = df),
+                rs$analysis, rs$assessment)
+  rset <- manual_rset(unname(splits), unlist(rs$ids))
+  # what rsample's own function produces for the same scheme: the ids always (Rust
+  # must name resamples identically) and, for the deterministic time-series schemes,
+  # the memberships too (which must equal the shared file exactly)
+  p <- rs$params
+  rs_or <- function(x, d) if (is.null(x)) d else x
+  # classification tasks stratify by the outcome, as the shared file does
+  with_strata <- function(fn, ...) if (task$type == "classification") fn(df, ..., strata = all_of(task$outcome)) else fn(df, ...)
+  native <- switch(rs$scheme,
+    vfold_cv = with_strata(vfold_cv, v = p$v, repeats = rs_or(p$repeats, 1)),
+    bootstraps = with_strata(bootstraps, times = p$times),
+    mc_cv = with_strata(mc_cv, prop = p$prop, times = p$times),
+    group_vfold_cv = group_vfold_cv(raw, group = p$group, v = p$v, repeats = rs_or(p$repeats, 1), balance = rs_or(p$balance, "groups")),
+    group_bootstraps = group_bootstraps(raw, group = p$group, times = p$times),
+    group_mc_cv = group_mc_cv(raw, group = p$group, prop = p$prop, times = p$times),
+    rolling_origin = rolling_origin(df, initial = p$initial, assess = p$assess, cumulative = rs_or(p$cumulative, TRUE), skip = rs_or(p$skip, 0), lag = rs_or(p$lag, 0)),
+    sliding_window = sliding_window(df, lookback = rs_or(p$lookback, 0), assess_start = rs_or(p$assess_start, 1), assess_stop = rs_or(p$assess_stop, 1),
+                                    complete = rs_or(p$complete, TRUE), step = rs_or(p$step, 1), skip = rs_or(p$skip, 0)),
+    sliding_index = sliding_index(raw, index = !!rlang::sym(p$index), lookback = rs_or(p$lookback, 0), assess_start = rs_or(p$assess_start, 1),
+                                  assess_stop = rs_or(p$assess_stop, 1), complete = rs_or(p$complete, TRUE), step = rs_or(p$step, 1), skip = rs_or(p$skip, 0)),
+    stop("unknown resampling scheme ", rs$scheme))
+  native_ids <- if ("id2" %in% names(native)) paste(native$id, native$id2, sep = ".") else native$id
+  stopifnot(identical(native_ids, unlist(rs$ids)))
+  deterministic <- rs$scheme %in% c("rolling_origin", "sliding_window", "sliding_index")
+  native_members <- if (deterministic) {
+    an <- lapply(native$splits, function(x) as.integer(x$in_id) - 1L)
+    as <- lapply(native$splits, function(x) as.integer(rsample::complement(x)) - 1L)
+    stopifnot(identical(an, lapply(rs$analysis, function(a) as.integer(unlist(a)))),
+              identical(as, lapply(rs$assessment, function(a) as.integer(unlist(a)))))
+    list(analysis = an, assessment = as)
+  } else NULL
+  rsample_native <- list(scheme = rs$scheme, ids = native_ids, members = native_members)
   tree_frame <- function(e) {
     fr <- e$frame; nn <- nrow(fr); leaf <- fr$var == "<leaf>"
     idx <- 1L + c(0L, cumsum((!leaf) + fr$ncompete + fr$nsurrogate))[-(nn + 1L)]; idx[leaf] <- NA
@@ -340,7 +379,8 @@ run_task <- function(task) {
     fit = fit_info,
     test_metrics = test_metrics,
     test_metrics_weighted = test_metrics_weighted,
-    resample = list(ids = names(per_fold_list), per_fold = per_fold_list, summary = summary_list, fold_trees = fold_trees, fold_boosts = fold_boosts)
+    resample = list(ids = names(per_fold_list), per_fold = per_fold_list, summary = summary_list, fold_trees = fold_trees, fold_boosts = fold_boosts,
+                    rsample_native = rsample_native)
   )
   write_json(out, file.path(out_dir, paste0(task$id, ".json")), auto_unbox = TRUE, digits = I(17), na = "null", null = "null", pretty = FALSE)
   cat("   wrote", file.path(out_dir, paste0(task$id, ".json")), "\n")

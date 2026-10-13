@@ -19,8 +19,13 @@
 - Precision: `f64` only.
 - Preprocessing: select, mean/median imputation, normalize, dummy, zv, nzv, corr, other,
   novel, unknown. No `step_interact`, `step_pca`, splines.
-- Resampling: initial split, v-fold (optionally stratified). No bootstraps, repeats,
-  grouped or time-based resampling.
+- Resampling: rsample's generators are ported as algorithms (ADR-0013) but draw from
+  the framework's RNG, so a Rust resample never equals an R one row for row; only the
+  deterministic time-series schemes reproduce rsample exactly. Not ported:
+  `sliding_period` (date index), `nested_cv`, `permutations`, `apparent`, the random
+  relabelling of folds in grouped schemes (`collapse_groups`), and tune's refusal of
+  `loo_cv`. An empty assessment set (possible with bootstraps, grouped bootstraps and
+  `sliding_index` gaps) is an error in `fit_resamples`, where rsample only warns.
 - Metrics: the yardstick set listed in COMPATIBILITY.md, with case weights. Weighted
   `rsq` is undefined with fewer than two non-zero-weight rows (`cov.wt`).
 - Case weights follow tidymodels' split semantics: frequency weights change the

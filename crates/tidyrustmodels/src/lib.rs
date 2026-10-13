@@ -52,7 +52,12 @@ pub mod prelude {
         Recipe, Selector, StepCorr, StepDummy, StepImputeMean, StepImputeMedian, StepNormalize, StepNovel,
         StepNzv, StepOther, StepSelect, StepUnknown, StepZv,
     };
-    pub use tidyrustmodels_resample::{initial_split, strata_from_numeric, vfold_cv, Folds, Split};
+    pub use tidyrustmodels_resample::{
+        balance_observations, balance_prop, bootstraps, freq_table, group_bootstraps, group_initial_split,
+        group_mc_cv, group_vfold_cv, initial_split, initial_time_split, initial_validation_split, loo_cv,
+        make_strata_categorical, make_strata_numeric, mc_cv, rolling_origin, sliding_index, sliding_window,
+        strata_from_numeric, vfold_cv, vfold_cv_repeated, Folds, GroupBalance, Split, ThreeWaySplit,
+    };
     pub use tidyrustmodels_tune::{grid_random, grid_regular, tune_grid, Grid, ParamRange, TuneResults};
     pub use tidyrustmodels_workflows::{FittedWorkflow, ResampleResults, Workflow};
 }

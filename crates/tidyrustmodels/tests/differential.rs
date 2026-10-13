@@ -271,6 +271,272 @@ fn u32s(v: &Value) -> Vec<u32> {
     items(v).into_iter().map(|x| x.as_u64().unwrap() as u32).collect()
 }
 
+fn usizes(v: &Value) -> Vec<usize> {
+    items(v)
+        .into_iter()
+        .map(|x| x.as_u64().unwrap() as usize)
+        .collect()
+}
+
+/// The shared resamples of a split file (`rset`: analysis rows in rsample's order,
+/// assessment rows ascending, rsample ids), as `manual_rset()` builds them in R.
+fn folds_from_split(split: &Value) -> Folds {
+    let rset = &split["rset"];
+    let n = split["n"].as_u64().unwrap() as usize;
+    let splits: Vec<Split> = items(&rset["analysis"])
+        .iter()
+        .zip(items(&rset["assessment"]))
+        .map(|(a, s)| Split::new(usizes(a), usizes(s), n).unwrap())
+        .collect();
+    Folds::from_splits(splits, strs(&rset["ids"]), n).unwrap()
+}
+
+/// The full dataset, including columns the recipe never sees (group / index).
+fn full_table(task: &Value) -> Table {
+    read_csv(root().join(format!(
+        "reference/fixtures/datasets/{}.csv",
+        task["dataset"].as_str().unwrap()
+    )))
+    .unwrap()
+}
+
+/// Level 4, resampling schemes (ADR-0013): run the Rust generator for the task's
+/// scheme and compare its ids with the ids rsample's own function produced in R (and
+/// with the shared file); for the deterministic time-series schemes compare the
+/// memberships exactly with both; for the random schemes check the structural
+/// invariants of the shared memberships that R and Rust both evaluate.
+fn check_resampling(report: &mut Report, task: &Value, split: &Value, fx: &Value, data: &Table) {
+    let id = task["id"].as_str().unwrap();
+    let n = data.nrows();
+    let rset = &split["rset"];
+    let scheme = rset["scheme"].as_str().unwrap();
+    let p = &rset["params"];
+    let full = full_table(task);
+    let outcome = task["outcome"].as_str().unwrap();
+    let strata: Option<Vec<u32>> = if task["type"] == "classification" {
+        data.column(outcome)
+            .unwrap()
+            .as_categorical()
+            .map(|(c, _)| c.to_vec())
+    } else {
+        None
+    };
+    let groups: Option<Vec<u32>> = p["group"]
+        .as_str()
+        .map(|g| full.column(g).unwrap().as_categorical().unwrap().0.to_vec());
+    let index: Option<Vec<f64>> = p["index"]
+        .as_str()
+        .map(|c| full.column(c).unwrap().as_numeric().unwrap().to_vec());
+    let u = |k: &str, d: u64| p[k].as_u64().unwrap_or(d) as usize;
+    let b = |k: &str, d: bool| p[k].as_bool().unwrap_or(d);
+    let f = |k: &str, d: f64| p[k].as_f64().unwrap_or(d);
+    let seed = Seed(1);
+    let ours = match scheme {
+        "vfold_cv" => {
+            if u("repeats", 1) > 1 {
+                vfold_cv_repeated(n, u("v", 10), u("repeats", 1), strata.as_deref(), seed)
+            } else {
+                vfold_cv(n, u("v", 10), strata.as_deref(), seed)
+            }
+        }
+        "bootstraps" => bootstraps(n, u("times", 25), strata.as_deref(), seed),
+        "mc_cv" => mc_cv(n, f("prop", 0.75), u("times", 25), strata.as_deref(), seed),
+        "group_vfold_cv" => group_vfold_cv(
+            groups.as_deref().unwrap(),
+            p["v"].as_u64().map(|v| v as usize),
+            u("repeats", 1),
+            if p["balance"] == "observations" {
+                GroupBalance::Observations
+            } else {
+                GroupBalance::Groups
+            },
+            seed,
+        ),
+        "group_bootstraps" => group_bootstraps(groups.as_deref().unwrap(), u("times", 25), seed),
+        "group_mc_cv" => group_mc_cv(groups.as_deref().unwrap(), f("prop", 0.75), u("times", 25), seed),
+        "rolling_origin" => rolling_origin(
+            n,
+            u("initial", 5),
+            u("assess", 1),
+            b("cumulative", true),
+            u("skip", 0),
+            u("lag", 0),
+        ),
+        "sliding_window" => sliding_window(
+            n,
+            Some(u("lookback", 0)),
+            u("assess_start", 1),
+            u("assess_stop", 1),
+            b("complete", true),
+            u("step", 1),
+            u("skip", 0),
+        ),
+        "sliding_index" => sliding_index(
+            index.as_deref().unwrap(),
+            Some(f("lookback", 0.0)),
+            f("assess_start", 1.0),
+            f("assess_stop", 1.0),
+            b("complete", true),
+            u("step", 1),
+            u("skip", 0),
+        ),
+        other => panic!("{id}: unknown resampling scheme {other}"),
+    }
+    .unwrap();
+    let native = &fx["resample"]["rsample_native"];
+    assert_eq!(native["scheme"], scheme, "{id}: R ran a different scheme");
+    report.exact(
+        id,
+        "-",
+        "L4",
+        &format!("{scheme} ids vs rsample"),
+        &ours.ids,
+        &strs(&native["ids"]),
+    );
+    report.exact(
+        id,
+        "-",
+        "L4",
+        &format!("{scheme} ids vs shared file"),
+        &ours.ids,
+        &strs(&rset["ids"]),
+    );
+    let shared = folds_from_split(split);
+    assert_eq!(ours.n, n);
+    assert_eq!(ours.len(), shared.len(), "{id}: {scheme} resample count");
+    let deterministic = matches!(scheme, "rolling_origin" | "sliding_window" | "sliding_index");
+    if deterministic {
+        let our_an: Vec<Vec<usize>> = ours.splits.iter().map(|s| s.train.clone()).collect();
+        let our_as: Vec<Vec<usize>> = ours.splits.iter().map(|s| s.test.clone()).collect();
+        let r_an: Vec<Vec<usize>> = items(&native["members"]["analysis"])
+            .iter()
+            .map(|a| usizes(a))
+            .collect();
+        let r_as: Vec<Vec<usize>> = items(&native["members"]["assessment"])
+            .iter()
+            .map(|a| usizes(a))
+            .collect();
+        report.exact(
+            id,
+            "-",
+            "L4",
+            &format!("{scheme} analysis rows vs rsample"),
+            &our_an,
+            &r_an,
+        );
+        report.exact(
+            id,
+            "-",
+            "L4",
+            &format!("{scheme} assessment rows vs rsample"),
+            &our_as,
+            &r_as,
+        );
+        report.exact(
+            id,
+            "-",
+            "L4",
+            &format!("{scheme} splits vs shared file"),
+            &ours.splits,
+            &shared.splits,
+        );
+        let prop = split["initial"]["prop"].as_f64().unwrap();
+        let its = initial_time_split(n, prop).unwrap();
+        report.exact(
+            id,
+            "-",
+            "L4",
+            "initial_time_split train rows",
+            &its.train,
+            &usizes(&split["initial"]["train"]),
+        );
+        report.exact(
+            id,
+            "-",
+            "L4",
+            "initial_time_split test rows",
+            &its.test,
+            &usizes(&split["initial"]["test"]),
+        );
+    } else {
+        // the same structure on both draws: ours and the shared one R evaluated
+        for (label, folds) in [("rust", &ours), ("shared", &shared)] {
+            let mut sizes: Vec<(usize, usize)> = Vec::new();
+            for s in &folds.splits {
+                sizes.push((s.train.len(), s.test.len()));
+                assert!(!s.test.is_empty(), "{id} {label}: empty assessment set");
+                if let Some(g) = &groups {
+                    let test_groups: std::collections::BTreeSet<u32> = s.test.iter().map(|i| g[*i]).collect();
+                    assert!(
+                        s.train.iter().all(|i| !test_groups.contains(&g[*i])),
+                        "{id} {label}: a group straddles a split"
+                    );
+                }
+                match scheme {
+                    "vfold_cv" | "mc_cv" | "group_vfold_cv" | "group_mc_cv" => {
+                        assert!(
+                            s.is_partition(n),
+                            "{id} {label}: {scheme} split is not a partition"
+                        )
+                    }
+                    "bootstraps" => {
+                        assert_eq!(s.train.len(), n, "{id} {label}: bootstrap draws n rows");
+                        let mut seen = vec![false; n];
+                        for &i in &s.train {
+                            seen[i] = true;
+                        }
+                        let oob: Vec<usize> = (0..n).filter(|i| !seen[*i]).collect();
+                        assert_eq!(s.test, oob, "{id} {label}: assessment is the out-of-bag set");
+                    }
+                    "group_bootstraps" => {
+                        assert!(
+                            s.train.windows(2).all(|w| w[0] <= w[1]),
+                            "{id} {label}: rows ascend"
+                        );
+                        let mut seen = vec![false; n];
+                        for &i in &s.train {
+                            seen[i] = true;
+                        }
+                        let oob: Vec<usize> = (0..n).filter(|i| !seen[*i]).collect();
+                        assert_eq!(s.test, oob, "{id} {label}: assessment is the out-of-bag set");
+                    }
+                    _ => {}
+                }
+            }
+            if scheme == "vfold_cv" || scheme == "group_vfold_cv" {
+                let v = ours.len() / u("repeats", 1);
+                for r in 0..u("repeats", 1) {
+                    let total: usize = folds.splits[r * v..(r + 1) * v]
+                        .iter()
+                        .map(|s| s.test.len())
+                        .sum();
+                    assert_eq!(
+                        total, n,
+                        "{id} {label}: repeat {r} assessment sets partition the rows"
+                    );
+                }
+                if scheme == "vfold_cv" {
+                    let v_sizes: Vec<usize> = sizes.iter().map(|s| s.1).collect();
+                    assert!(
+                        v_sizes.iter().max().unwrap() - v_sizes.iter().min().unwrap()
+                            <= strata
+                                .as_ref()
+                                .map_or(1, |s| *s.iter().max().unwrap() as usize + 1),
+                        "{id} {label}: fold sizes {v_sizes:?}"
+                    );
+                }
+            }
+            if scheme == "mc_cv" && strata.is_none() {
+                let want = (n as f64 * f("prop", 0.75)).floor() as usize;
+                assert!(
+                    sizes.iter().all(|s| s.0 == want),
+                    "{id} {label}: mc_cv analysis size {sizes:?} != {want}"
+                );
+            }
+        }
+    }
+}
+
 fn build_recipe(task: &Value) -> Recipe {
     let mut rec = Recipe::new(task["outcome"].as_str().unwrap());
     for s in task["steps"].as_array().unwrap() {
@@ -425,6 +691,9 @@ fn differential_against_r_fixtures() {
         let train = data.select_rows(&train_ids).unwrap();
         let test = data.select_rows(&test_ids).unwrap();
         assert_eq!(train.nrows() as u64, fx["n_train"].as_u64().unwrap());
+        if !fx["resample"].is_null() {
+            check_resampling(&mut report, task, &split, &fx, &data);
+        }
         let is_reg = task["type"] == "regression";
         let outcome = task["outcome"].as_str().unwrap();
 
@@ -1035,29 +1304,21 @@ fn differential_against_r_fixtures() {
                 }
             }
 
-            // ---- Level 4: resampling with shared folds ----
-            let folds = Folds::from_assignments(&u32s(&split["vfold"]["fold_of_row"])).unwrap();
+            // ---- Level 4: resampling with the shared rset ----
+            let folds = folds_from_split(&split);
             let mut wf = Workflow::from_boxed(build_recipe(task), spec);
             if let Some((col, kind)) = cw_spec {
                 wf = wf.case_weights(col, kind);
             }
             if is_treelike {
-                let fold_of_row = u32s(&split["vfold"]["fold_of_row"]);
-                let v = split["vfold"]["v"].as_u64().unwrap() as u32;
-                for k in 0..v {
-                    let analysis: Vec<usize> = fold_of_row
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, f)| **f != k)
-                        .map(|(i, _)| i)
-                        .collect();
-                    let fw = wf.fit(&data.select_rows(&analysis).unwrap()).unwrap();
+                for (k, fold_split) in folds.splits.iter().enumerate() {
+                    let fw = wf.fit(&data.select_rows(&fold_split.train).unwrap()).unwrap();
                     let fxk = if is_boost {
-                        &fx["resample"]["fold_boosts"][k as usize]
+                        &fx["resample"]["fold_boosts"][k]
                     } else {
-                        &fx["resample"]["fold_trees"][k as usize]
+                        &fx["resample"]["fold_trees"][k]
                     };
-                    let label = format!("Fold{:02}", k + 1);
+                    let label = folds.ids[k].clone();
                     if is_boost {
                         compare_booster(
                             &mut report,
@@ -1074,13 +1335,7 @@ fn differential_against_r_fixtures() {
                     }
                     // assessment predictions: ours vs R's, and the metrics recomputed on
                     // R's own predictions (isolates the metric port from the model)
-                    let assess: Vec<usize> = fold_of_row
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, f)| **f == k)
-                        .map(|(i, _)| i)
-                        .collect();
-                    let assess_data = data.select_rows(&assess).unwrap();
+                    let assess_data = data.select_rows(&fold_split.test).unwrap();
                     let w_assess = weights_of(task, &assess_data);
                     let ours = fw.predict(&assess_data).unwrap();
                     let truth =
@@ -2196,4 +2451,54 @@ fn compare_booster(
             tol.pair_eng(id, "xgb_pred", eng),
         );
     }
+}
+
+/// rsample's grouped-resampling balance rules on the permutations / draws R produced
+/// (`reference/fixtures/r/group_balance.json`, from group_balance_fixture.R): the
+/// greedy `balance_observations_helper` assignment and the `balance_prop_helper`
+/// cut-off, with and without replacement, must agree exactly.
+#[test]
+fn group_balance_rules_match_rsample() {
+    let fx = load_json("reference/fixtures/r/group_balance.json");
+    let mut checked = 0;
+    for (name, case) in fx["cases"].as_object().unwrap() {
+        let sizes = usizes(&case["sizes"]);
+        let groups: Vec<u32> = sizes
+            .iter()
+            .enumerate()
+            .flat_map(|(g, s)| std::iter::repeat_n(g as u32, *s))
+            .collect();
+        let table = freq_table(&groups);
+        let v = case["v"].as_u64().unwrap() as usize;
+        let n_obs = case["n_obs"].as_u64().unwrap() as usize;
+        assert_eq!(n_obs, groups.len());
+        let obs = &case["observations"];
+        assert_eq!(
+            balance_observations(&table, &usizes(&obs["perm"]), v, n_obs),
+            usizes(&obs["assignment"]),
+            "{name}: observation balance"
+        );
+        let prop = case["prop"].as_f64().unwrap();
+        let wo = &case["prop_without_replacement"];
+        assert_eq!(
+            balance_prop(&table, &usizes(&wo["draws"]), prop),
+            usizes(&wo["kept"]),
+            "{name}: prop balance"
+        );
+        let wr = &case["prop_with_replacement"];
+        let min = *sizes.iter().min().unwrap();
+        let n_draw = ((sizes.len() * n_obs) as f64 / min as f64).ceil() as usize;
+        assert_eq!(
+            n_draw as u64,
+            wr["n_draw"].as_u64().unwrap(),
+            "{name}: bootstrap draw count"
+        );
+        assert_eq!(
+            balance_prop(&table, &usizes(&wr["draws"]), 1.0),
+            usizes(&wr["kept"]),
+            "{name}: bootstrap balance"
+        );
+        checked += 1;
+    }
+    assert!(checked >= 4);
 }

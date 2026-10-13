@@ -23,6 +23,10 @@
   "rows": 150,
   "sha256": "3c41ea3ba26ec9b3e31bdc9dd1f62da1698862e01e18dbf1e45f3d210fbf26a9"
  },
+ "synthetic_group_reg": {
+  "rows": 119,
+  "sha256": "1fd3f7a98949d9cb6b5733317f0747c6853c091ba601f7bea73e3b9d0248015a"
+ },
  "synthetic_multi_small": {
   "rows": 180,
   "sha256": "b99265e06670ba9557b6a6b6b987532d2aecf5f0f20f650be608ca281f483ffc"
@@ -30,5 +34,9 @@
  "synthetic_reg_small": {
   "rows": 40,
   "sha256": "5f4372066e5cb2ebdf0bcf3474324a0b264db5b3836f75f679997f5b4e86ab2c"
+ },
+ "synthetic_ts": {
+  "rows": 120,
+  "sha256": "3591b3568576e1280de32e597c83fcc39941444789ebf9b7a513150022d3350e"
  }
 }

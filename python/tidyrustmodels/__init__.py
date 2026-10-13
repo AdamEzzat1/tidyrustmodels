@@ -41,6 +41,19 @@ from ._native import (
 
 vfold_cv = _native.py_vfold_cv
 initial_split = _native.py_initial_split
+bootstraps = _native.py_bootstraps
+mc_cv = _native.py_mc_cv
+loo_cv = _native.py_loo_cv
+group_vfold_cv = _native.py_group_vfold_cv
+group_bootstraps = _native.py_group_bootstraps
+group_mc_cv = _native.py_group_mc_cv
+group_initial_split = _native.py_group_initial_split
+rolling_origin = _native.py_rolling_origin
+sliding_window = _native.py_sliding_window
+sliding_index = _native.py_sliding_index
+initial_time_split = _native.py_initial_time_split
+initial_validation_split = _native.py_initial_validation_split
+make_strata = _native.py_make_strata
 tune_grid = _native.py_tune_grid
 grid_regular = _native.py_grid_regular
 class_metrics = _native.py_class_metrics
@@ -59,6 +72,19 @@ __all__ = [
     "Folds",
     "vfold_cv",
     "initial_split",
+    "bootstraps",
+    "mc_cv",
+    "loo_cv",
+    "group_vfold_cv",
+    "group_bootstraps",
+    "group_mc_cv",
+    "group_initial_split",
+    "rolling_origin",
+    "sliding_window",
+    "sliding_index",
+    "initial_time_split",
+    "initial_validation_split",
+    "make_strata",
     "tune_grid",
     "grid_regular",
     "class_metrics",

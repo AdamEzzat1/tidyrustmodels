@@ -130,8 +130,47 @@ def synthetic_filter_reg():
     write_csv("synthetic_filter_reg", ["x1", "x2", "x3", "x4", "x5", "g", "h", "y", "w_freq", "w_imp"], rows)
 
 
+def synthetic_group_reg():
+    """Twelve sites of very different sizes (3 to 20 rows) with a random site intercept,
+    for grouped resampling: every row of a site must stay on one side of a split. Rows
+    are shuffled so sites interleave, as field data would."""
+    rng = random.Random(20261016)
+    sizes = [14, 3, 9, 20, 6, 11, 4, 17, 8, 12, 5, 10]
+    rows = []
+    for k, size in enumerate(sizes):
+        site = f"s{k + 1:02d}"
+        effect = rng.gauss(0.0, 1.5)
+        for _ in range(size):
+            x1 = rng.gauss(0.0, 1.0)
+            x2 = rng.uniform(-2.0, 2.0)
+            x3 = rng.gauss(3.0, 1.0)
+            y = 1.0 + effect + 1.5 * x1 - 0.8 * x2 + 0.3 * x3 + rng.gauss(0.0, 0.5)
+            rows.append([round(x1, 6), round(x2, 6), round(x3, 6), site, round(y, 6)])
+    rng.shuffle(rows)
+    write_csv("synthetic_group_reg", ["x1", "x2", "x3", "site", "y"], rows)
+
+
+def synthetic_ts():
+    """120 ordered observations: `t` is the row clock, `day` an irregular calendar index
+    (gaps of 1 to 3 days, for sliding_index), x1 a noisy yearly cycle, x2 an AR(1)
+    series, and y a trend plus both. Only the order matters for the time-series splits."""
+    rng = random.Random(20261017)
+    rows = []
+    day = 1
+    x2 = 0.0
+    for t in range(1, 121):
+        x1 = math.sin(2.0 * math.pi * t / 12.0) + rng.gauss(0.0, 0.3)
+        x2 = 0.7 * x2 + rng.gauss(0.0, 0.5)
+        y = 0.5 + 0.05 * t + 2.0 * x1 + 0.7 * x2 + rng.gauss(0.0, 0.4)
+        rows.append([t, day, round(x1, 6), round(x2, 6), round(y, 6)])
+        day += rng.choice([1, 2, 3])
+    write_csv("synthetic_ts", ["t", "day", "x1", "x2", "y"], rows)
+
+
 if __name__ == "__main__":
     synthetic_reg_small()
     synthetic_clf_small()
     synthetic_filter_reg()
     synthetic_multi_small()
+    synthetic_group_reg()
+    synthetic_ts()

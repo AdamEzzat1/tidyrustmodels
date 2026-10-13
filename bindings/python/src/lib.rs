@@ -442,9 +442,33 @@ impl PyFolds {
         Ok(PyFolds { inner: Folds::from_assignments(&fold_of_row).py()? })
     }
 
+    /// Build from explicit `(analysis_rows, assessment_rows)` pairs with their ids over
+    /// `n` rows (rsample's `manual_rset()`): analysis rows keep their order and may
+    /// repeat, assessment rows are sorted and may be empty.
+    #[staticmethod]
+    fn from_splits(splits: Vec<(Vec<usize>, Vec<usize>)>, ids: Vec<String>, n: usize) -> PyResult<Self> {
+        let splits = splits
+            .into_iter()
+            .map(|(a, s)| Split::new(a, s, n))
+            .collect::<Result<Vec<_>>>()
+            .py()?;
+        Ok(PyFolds { inner: Folds::from_splits(splits, ids, n).py()? })
+    }
+
     #[getter]
     fn ids(&self) -> Vec<String> {
         self.inner.ids.clone()
+    }
+
+    /// Number of rows the resamples index.
+    #[getter]
+    fn n(&self) -> usize {
+        self.inner.n
+    }
+
+    /// Whether every resample partitions the rows (v-fold style).
+    fn is_partition(&self) -> bool {
+        self.inner.is_partition()
     }
 
     /// Fold index per row.
@@ -482,12 +506,192 @@ fn strata_codes(strata: Option<Vec<Option<String>>>) -> PyResult<Option<Vec<u32>
     }
 }
 
-/// rsample-style v-fold cross-validation (seeded, optionally stratified by labels).
+fn ids_pair<'py>(py: Python<'py>, s: &Split) -> (Bound<'py, PyArray1<u64>>, Bound<'py, PyArray1<u64>>) {
+    let tr: Vec<u64> = s.train.iter().map(|&i| i as u64).collect();
+    let te: Vec<u64> = s.test.iter().map(|&i| i as u64).collect();
+    (tr.into_pyarray(py), te.into_pyarray(py))
+}
+
+/// Group labels (one per row, none missing) as codes.
+fn group_codes(groups: Vec<Option<String>>) -> PyResult<Vec<u32>> {
+    strata_codes(Some(groups))?.ok_or_else(|| InvalidArgumentError::new_err("groups must not be empty"))
+}
+
+/// rsample-style v-fold cross-validation (seeded, optionally stratified by labels,
+/// `repeats` independent assignments with ids `Repeat1.Fold1`, ...).
 #[pyfunction]
-#[pyo3(signature = (n, v, seed, strata = None))]
-fn py_vfold_cv(n: usize, v: usize, seed: u64, strata: Option<Vec<Option<String>>>) -> PyResult<PyFolds> {
+#[pyo3(signature = (n, v, seed, strata = None, repeats = 1))]
+fn py_vfold_cv(n: usize, v: usize, seed: u64, strata: Option<Vec<Option<String>>>, repeats: usize) -> PyResult<PyFolds> {
     let codes = strata_codes(strata)?;
-    Ok(PyFolds { inner: vfold_cv(n, v, codes.as_deref(), Seed(seed)).py()? })
+    let inner = if repeats > 1 {
+        vfold_cv_repeated(n, v, repeats, codes.as_deref(), Seed(seed)).py()?
+    } else {
+        vfold_cv(n, v, codes.as_deref(), Seed(seed)).py()?
+    };
+    Ok(PyFolds { inner })
+}
+
+/// rsample-style bootstrap resamples: `times` draws of `n` rows with replacement
+/// (sorted within each stratum when stratified); the assessment set is out-of-bag.
+#[pyfunction]
+#[pyo3(signature = (n, times, seed, strata = None))]
+fn py_bootstraps(n: usize, times: usize, seed: u64, strata: Option<Vec<Option<String>>>) -> PyResult<PyFolds> {
+    let codes = strata_codes(strata)?;
+    Ok(PyFolds { inner: bootstraps(n, times, codes.as_deref(), Seed(seed)).py()? })
+}
+
+/// rsample-style Monte-Carlo cross-validation: `times` random `prop` splits.
+#[pyfunction]
+#[pyo3(signature = (n, prop, times, seed, strata = None))]
+fn py_mc_cv(n: usize, prop: f64, times: usize, seed: u64, strata: Option<Vec<Option<String>>>) -> PyResult<PyFolds> {
+    let codes = strata_codes(strata)?;
+    Ok(PyFolds { inner: mc_cv(n, prop, times, codes.as_deref(), Seed(seed)).py()? })
+}
+
+/// rsample-style leave-one-out cross-validation (ids `Resample1`, ...).
+#[pyfunction]
+fn py_loo_cv(n: usize, seed: u64) -> PyResult<PyFolds> {
+    Ok(PyFolds { inner: loo_cv(n, Seed(seed)).py()? })
+}
+
+/// rsample-style grouped v-fold cross-validation: every row of a group stays on one
+/// side; `v=None` leaves one group out per resample; `balance` is `"groups"` or
+/// `"observations"`.
+#[pyfunction]
+#[pyo3(signature = (groups, seed, v = None, repeats = 1, balance = "groups"))]
+fn py_group_vfold_cv(
+    groups: Vec<Option<String>>,
+    seed: u64,
+    v: Option<usize>,
+    repeats: usize,
+    balance: &str,
+) -> PyResult<PyFolds> {
+    let balance = match balance {
+        "groups" => GroupBalance::Groups,
+        "observations" => GroupBalance::Observations,
+        other => return Err(InvalidArgumentError::new_err(format!("balance must be 'groups' or 'observations', got {other:?}"))),
+    };
+    let codes = group_codes(groups)?;
+    Ok(PyFolds { inner: group_vfold_cv(&codes, v, repeats, balance, Seed(seed)).py()? })
+}
+
+/// rsample-style grouped bootstraps: groups drawn with replacement until their rows
+/// cover the data; out-of-group rows assess.
+#[pyfunction]
+fn py_group_bootstraps(groups: Vec<Option<String>>, times: usize, seed: u64) -> PyResult<PyFolds> {
+    let codes = group_codes(groups)?;
+    Ok(PyFolds { inner: group_bootstraps(&codes, times, Seed(seed)).py()? })
+}
+
+/// rsample-style grouped Monte-Carlo cross-validation.
+#[pyfunction]
+fn py_group_mc_cv(groups: Vec<Option<String>>, prop: f64, times: usize, seed: u64) -> PyResult<PyFolds> {
+    let codes = group_codes(groups)?;
+    Ok(PyFolds { inner: group_mc_cv(&codes, prop, times, Seed(seed)).py()? })
+}
+
+/// rsample-style grouped initial split; returns `(train_rows, test_rows)`.
+#[pyfunction]
+fn py_group_initial_split<'py>(
+    py: Python<'py>,
+    groups: Vec<Option<String>>,
+    prop: f64,
+    seed: u64,
+) -> PyResult<(Bound<'py, PyArray1<u64>>, Bound<'py, PyArray1<u64>>)> {
+    let codes = group_codes(groups)?;
+    Ok(ids_pair(py, &group_initial_split(&codes, prop, Seed(seed)).py()?))
+}
+
+/// rsample's `rolling_origin()`: analysis windows of `initial` rows (growing when
+/// `cumulative`), assessed on the next `assess` rows, advancing `skip + 1` rows.
+#[pyfunction]
+#[pyo3(signature = (n, initial, assess, cumulative = true, skip = 0, lag = 0))]
+fn py_rolling_origin(n: usize, initial: usize, assess: usize, cumulative: bool, skip: usize, lag: usize) -> PyResult<PyFolds> {
+    Ok(PyFolds { inner: rolling_origin(n, initial, assess, cumulative, skip, lag).py()? })
+}
+
+/// rsample's `sliding_window()`: per row, `lookback` preceding rows (`None` = all,
+/// rsample's `Inf`) assessed on rows `assess_start..=assess_stop` ahead.
+#[pyfunction]
+#[pyo3(signature = (n, lookback = Some(0), assess_start = 1, assess_stop = 1, complete = true, step = 1, skip = 0))]
+fn py_sliding_window(
+    n: usize,
+    lookback: Option<usize>,
+    assess_start: usize,
+    assess_stop: usize,
+    complete: bool,
+    step: usize,
+    skip: usize,
+) -> PyResult<PyFolds> {
+    Ok(PyFolds { inner: sliding_window(n, lookback, assess_start, assess_stop, complete, step, skip).py()? })
+}
+
+/// rsample's `sliding_index()` over a sorted numeric index: windows in index units.
+#[pyfunction]
+#[pyo3(signature = (index, lookback = Some(0.0), assess_start = 1.0, assess_stop = 1.0, complete = true, step = 1, skip = 0))]
+fn py_sliding_index(
+    index: Vec<f64>,
+    lookback: Option<f64>,
+    assess_start: f64,
+    assess_stop: f64,
+    complete: bool,
+    step: usize,
+    skip: usize,
+) -> PyResult<PyFolds> {
+    Ok(PyFolds { inner: sliding_index(&index, lookback, assess_start, assess_stop, complete, step, skip).py()? })
+}
+
+/// rsample's `initial_time_split()`: the first `floor(n * prop)` rows train.
+#[pyfunction]
+fn py_initial_time_split<'py>(py: Python<'py>, n: usize, prop: f64) -> PyResult<(Bound<'py, PyArray1<u64>>, Bound<'py, PyArray1<u64>>)> {
+    Ok(ids_pair(py, &initial_time_split(n, prop).py()?))
+}
+
+/// rsample's `initial_validation_split()`: `(train_rows, validation_rows, test_rows)`
+/// with proportions `prop_train` and `prop_val` of all rows.
+#[pyfunction]
+#[pyo3(signature = (n, prop_train, prop_val, seed, strata = None))]
+fn py_initial_validation_split<'py>(
+    py: Python<'py>,
+    n: usize,
+    prop_train: f64,
+    prop_val: f64,
+    seed: u64,
+    strata: Option<Vec<Option<String>>>,
+) -> PyResult<(Bound<'py, PyArray1<u64>>, Bound<'py, PyArray1<u64>>, Bound<'py, PyArray1<u64>>)> {
+    let codes = strata_codes(strata)?;
+    let s = initial_validation_split(n, (prop_train, prop_val), codes.as_deref(), Seed(seed)).py()?;
+    let conv = |v: &[usize]| v.iter().map(|&i| i as u64).collect::<Vec<u64>>().into_pyarray(py);
+    Ok((conv(&s.train), conv(&s.validation), conv(&s.test)))
+}
+
+/// rsample's `make_strata()`: stratum codes for numeric values (`breaks` quantile bins,
+/// at most `floor(n / depth)`) or labels (classes below `pool` are pooled at random).
+#[pyfunction]
+#[pyo3(signature = (values, breaks = 4, pool = 0.1, depth = 20, seed = 0))]
+fn py_make_strata<'py>(
+    py: Python<'py>,
+    values: &Bound<'py, PyAny>,
+    breaks: usize,
+    pool: f64,
+    depth: usize,
+    seed: u64,
+) -> PyResult<Bound<'py, PyArray1<u32>>> {
+    let codes = if let Ok(nums) = values.extract::<Vec<Option<f64>>>() {
+        let opt: Vec<Option<f64>> = nums.into_iter().map(|v| v.filter(|x| !x.is_nan())).collect();
+        make_strata_numeric(&opt, breaks, depth, Seed(seed)).py()?
+    } else {
+        let labels: Vec<Option<String>> = values.extract()?;
+        let mut levels: Vec<String> = labels.iter().flatten().cloned().collect();
+        levels.sort();
+        levels.dedup();
+        let codes: Vec<Option<u32>> = labels
+            .iter()
+            .map(|l| l.as_ref().map(|l| levels.iter().position(|x| x == l).unwrap() as u32))
+            .collect();
+        make_strata_categorical(&codes, &levels, pool, Seed(seed)).py()?
+    };
+    Ok(codes.into_pyarray(py))
 }
 
 /// rsample-style initial split; returns `(train_rows, test_rows)`.
@@ -501,10 +705,7 @@ fn py_initial_split<'py>(
     strata: Option<Vec<Option<String>>>,
 ) -> PyResult<(Bound<'py, PyArray1<u64>>, Bound<'py, PyArray1<u64>>)> {
     let codes = strata_codes(strata)?;
-    let s = initial_split(n, prop, codes.as_deref(), Seed(seed)).py()?;
-    let tr: Vec<u64> = s.train.iter().map(|&i| i as u64).collect();
-    let te: Vec<u64> = s.test.iter().map(|&i| i as u64).collect();
-    Ok((tr.into_pyarray(py), te.into_pyarray(py)))
+    Ok(ids_pair(py, &initial_split(n, prop, codes.as_deref(), Seed(seed)).py()?))
 }
 
 // ---------------------------------------------------------------- Workflow
@@ -867,6 +1068,19 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyFittedWorkflow>()?;
     m.add_function(wrap_pyfunction!(py_vfold_cv, m)?)?;
     m.add_function(wrap_pyfunction!(py_initial_split, m)?)?;
+    m.add_function(wrap_pyfunction!(py_bootstraps, m)?)?;
+    m.add_function(wrap_pyfunction!(py_mc_cv, m)?)?;
+    m.add_function(wrap_pyfunction!(py_loo_cv, m)?)?;
+    m.add_function(wrap_pyfunction!(py_group_vfold_cv, m)?)?;
+    m.add_function(wrap_pyfunction!(py_group_bootstraps, m)?)?;
+    m.add_function(wrap_pyfunction!(py_group_mc_cv, m)?)?;
+    m.add_function(wrap_pyfunction!(py_group_initial_split, m)?)?;
+    m.add_function(wrap_pyfunction!(py_rolling_origin, m)?)?;
+    m.add_function(wrap_pyfunction!(py_sliding_window, m)?)?;
+    m.add_function(wrap_pyfunction!(py_sliding_index, m)?)?;
+    m.add_function(wrap_pyfunction!(py_initial_time_split, m)?)?;
+    m.add_function(wrap_pyfunction!(py_initial_validation_split, m)?)?;
+    m.add_function(wrap_pyfunction!(py_make_strata, m)?)?;
     m.add_function(wrap_pyfunction!(py_tune_grid, m)?)?;
     m.add_function(wrap_pyfunction!(py_grid_regular, m)?)?;
     m.add_function(wrap_pyfunction!(py_class_metrics, m)?)?;

@@ -118,6 +118,13 @@ impl Workflow {
     /// `metrics`, weighted by the assessment rows' case weights when those are
     /// frequency weights (`.use_case_weights_with_yardstick()`).
     pub fn fit_fold(&self, train: &Table, test: &Table, metrics: &MetricSet) -> Result<Vec<MetricValue>> {
+        if test.nrows() == 0 {
+            // rsample warns when a bootstrap or grouped resample has no assessment rows
+            // and tune cannot score it; refuse instead of returning empty metrics
+            return Err(Error::InvalidArgument(
+                "the assessment set has no rows; choose more resamples or a different scheme".into(),
+            ));
+        }
         let fitted = self.fit_with(train, false)?;
         let (x_test, y_test) = fitted.recipe.bake_matrix(test)?;
         let y_test =

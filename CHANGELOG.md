@@ -16,6 +16,17 @@ VERIFICATION.md; nothing is claimed beyond those records.
   backend-independent gradient convergence check and separation warning.
 - Resampling: `initial_split`, `vfold_cv` (optionally stratified), `Folds::from_assignments`,
   numeric strata binning.
+- Resampling schemes with rsample 1.3.2 semantics (ADR-0013): `Split` is an rsplit
+  (analysis rows in draw order, repeats allowed; sorted, possibly empty assessment),
+  `Folds` an rset with `names0` ids and `Folds::from_splits` (`manual_rset`);
+  `vfold_cv_repeated`, `bootstraps`, `mc_cv`, `loo_cv`, `initial_validation_split`,
+  `group_vfold_cv` (`GroupBalance::{Groups, Observations}`, leave-one-group-out,
+  repeats), `group_bootstraps`, `group_mc_cv`, `group_initial_split`, `rolling_origin`,
+  `sliding_window`, `sliding_index`, `initial_time_split`, `make_strata_categorical` /
+  `make_strata_numeric`; `fit_resamples` refuses an empty assessment set. Python:
+  the same generators, `vfold_cv(repeats=)`, `Folds.from_splits`, `make_strata`.
+  Verified on 17 new reference tasks (VERIFICATION.md Phase 8h). The shared split files
+  now carry an `rset` section and rsample ids (`Fold1`, not `Fold01`).
 - Metrics: rmse, mae, rsq (squared correlation, as yardstick), rsq_trad, accuracy, precision,
   recall, mn_log_loss (eps-clamped, as yardstick); `MetricSet`.
 - Classification metrics with yardstick 1.4.0 semantics: `ConfusionMatrix` (sens, spec,

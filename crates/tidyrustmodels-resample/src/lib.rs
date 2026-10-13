@@ -1,27 +1,52 @@
-//! Reproducible resampling with rsample semantics.
+//! Reproducible resampling with rsample 1.3.2 semantics.
 //!
 //! Membership is never random beyond the explicit [`Seed`]. R's RNG and ChaCha cannot
-//! agree, so parity tests load shared row ids through [`Folds::from_assignments`]
-//! (ADR-0006); the generators here reproduce rsample's *algorithms*.
+//! agree, so parity tests load shared row ids through [`Folds::from_assignments`] /
+//! [`Folds::from_splits`] (ADR-0006); the generators here reproduce rsample's
+//! *algorithms* (ADR-0013): `vfold_cv` (with repeats), `bootstraps`, `mc_cv`, `loo_cv`,
+//! `group_vfold_cv` / `group_bootstraps` / `group_mc_cv` / `group_initial_split`,
+//! `rolling_origin`, `sliding_window`, `sliding_index`, `initial_split`,
+//! `initial_time_split`, `initial_validation_split` and `make_strata`.
+//!
+//! An rsplit keeps its analysis rows in the order rsample draws them (bootstrap and
+//! Monte-Carlo draws are unsorted; v-fold complements ascend), because row order
+//! changes the last bits of a fit.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, rust_2018_idioms)]
 
-use rand::seq::SliceRandom;
-use serde::{Deserialize, Serialize};
-use tidyrustmodels_core::{Error, Result, Seed};
+mod groups;
+mod random;
+mod strata;
+mod time;
 
-/// One analysis/assessment partition of row indices.
+pub use groups::{
+    balance_observations, balance_prop, freq_table, group_bootstraps, group_initial_split, group_mc_cv,
+    group_vfold_cv, GroupBalance,
+};
+pub use random::{
+    bootstraps, initial_split, initial_validation_split, loo_cv, mc_cv, vfold_cv, vfold_cv_repeated,
+    ThreeWaySplit,
+};
+pub use strata::{make_strata_categorical, make_strata_numeric, strata_from_numeric};
+pub use time::{initial_time_split, rolling_origin, sliding_index, sliding_window};
+
+use serde::{Deserialize, Serialize};
+use tidyrustmodels_core::{Error, Result};
+
+/// One analysis/assessment pair of row indices (an rsample `rsplit`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Split {
-    /// Analysis (training) rows, ascending.
+    /// Analysis (training) rows in rsample's order; a bootstrap repeats rows.
     pub train: Vec<usize>,
-    /// Assessment (test) rows, ascending.
+    /// Assessment (test) rows, ascending; may be empty (rsample warns, `fit_resamples`
+    /// errors).
     pub test: Vec<usize>,
 }
 
 impl Split {
-    /// Build from explicit ids and verify they partition `0..n`.
+    /// Build a *partition* from explicit ids: every row of `0..n` in exactly one of the
+    /// two sets, both non-empty, both sorted.
     pub fn from_ids(mut train: Vec<usize>, mut test: Vec<usize>, n: usize) -> Result<Split> {
         train.sort_unstable();
         test.sort_unstable();
@@ -53,32 +78,70 @@ impl Split {
         }
         Ok(Split { train, test })
     }
+
+    /// Build an rsplit as `rsample::make_splits(list(analysis, assessment))` does: the
+    /// analysis rows keep their order and may repeat, the assessment rows are sorted;
+    /// both must be in range and the analysis set non-empty. Rows may belong to
+    /// neither set (time-series windows) or to both (`apparent`).
+    pub fn new(train: Vec<usize>, mut test: Vec<usize>, n: usize) -> Result<Split> {
+        if train.is_empty() {
+            return Err(Error::InvalidArgument(
+                "at least one row should be selected for the analysis set".into(),
+            ));
+        }
+        for (label, ids) in [("analysis", &train), ("assessment", &test)] {
+            if let Some(&i) = ids.iter().find(|i| **i >= n) {
+                return Err(Error::InvalidArgument(format!(
+                    "{label} row {i} out of range for {n} rows"
+                )));
+            }
+        }
+        test.sort_unstable();
+        Ok(Split { train, test })
+    }
+
+    /// Whether the two sets partition `0..n` with no repeats.
+    pub fn is_partition(&self, n: usize) -> bool {
+        if self.train.len() + self.test.len() != n {
+            return false;
+        }
+        let mut seen = vec![false; n];
+        for &i in self.train.iter().chain(&self.test) {
+            if i >= n || seen[i] {
+                return false;
+            }
+            seen[i] = true;
+        }
+        true
+    }
 }
 
-/// A set of cross-validation splits.
+/// A set of resamples (an rsample `rset`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Folds {
-    /// One split per fold.
+    /// One split per resample.
     pub splits: Vec<Split>,
-    /// rsample-style ids (`Fold01`, `Fold02`, ...).
+    /// rsample ids (`Fold1`, `Bootstrap01`, `Resample3`, `Slice2`; repeated v-fold
+    /// joins rsample's `id` and `id2` as `Repeat1.Fold1`).
     pub ids: Vec<String>,
-    /// Number of rows the folds partition.
+    /// Number of rows the resamples index.
     pub n: usize,
 }
 
 impl Folds {
-    /// Number of folds.
+    /// Number of resamples.
     pub fn len(&self) -> usize {
         self.splits.len()
     }
 
-    /// Whether there are no folds.
+    /// Whether there are no resamples.
     pub fn is_empty(&self) -> bool {
         self.splits.is_empty()
     }
 
     /// Build folds from a fold index per row (0-based). This is how shared fixture
-    /// assignments are loaded so R and Rust evaluate on identical rows.
+    /// assignments are loaded so R and Rust evaluate on identical rows. Analysis rows
+    /// ascend (`setdiff(1:n, assessment)`), as rsample's v-fold complement.
     pub fn from_assignments(fold_of_row: &[u32]) -> Result<Folds> {
         let n = fold_of_row.len();
         if n == 0 {
@@ -109,12 +172,40 @@ impl Folds {
             .collect();
         Ok(Folds {
             splits,
-            ids: fold_ids(v),
+            ids: names0(v, "Fold"),
             n,
         })
     }
 
-    /// Fold index per row (inverse of [`Folds::from_assignments`]).
+    /// `rsample::manual_rset`: explicit splits with their ids.
+    pub fn from_splits(splits: Vec<Split>, ids: Vec<String>, n: usize) -> Result<Folds> {
+        if splits.is_empty() {
+            return Err(Error::InvalidArgument("no resamples".into()));
+        }
+        if splits.len() != ids.len() {
+            return Err(Error::InvalidArgument(format!(
+                "{} splits but {} ids",
+                splits.len(),
+                ids.len()
+            )));
+        }
+        for s in &splits {
+            if let Some(&i) = s.train.iter().chain(&s.test).find(|i| **i >= n) {
+                return Err(Error::InvalidArgument(format!(
+                    "row {i} out of range for {n} rows"
+                )));
+            }
+            if s.train.is_empty() {
+                return Err(Error::InvalidArgument(
+                    "at least one row should be selected for the analysis set".into(),
+                ));
+            }
+        }
+        Ok(Folds { splits, ids, n })
+    }
+
+    /// Fold index per row (inverse of [`Folds::from_assignments`]); only meaningful
+    /// when the assessment sets partition the rows (v-fold).
     pub fn assignments(&self) -> Vec<u32> {
         let mut out = vec![0u32; self.n];
         for (k, s) in self.splits.iter().enumerate() {
@@ -124,14 +215,22 @@ impl Folds {
         }
         out
     }
+
+    /// Whether every split partitions the rows (v-fold style).
+    pub fn is_partition(&self) -> bool {
+        self.splits.iter().all(|s| s.is_partition(self.n))
+    }
 }
 
-fn fold_ids(v: usize) -> Vec<String> {
-    let width = v.to_string().len().max(2);
-    (1..=v).map(|k| format!("Fold{k:0width$}")).collect()
+/// `rsample:::names0`: `prefix` followed by the number, zero-padded to the width of
+/// the largest (`Fold1`…`Fold5`, `Fold01`…`Fold10`).
+pub fn names0(num: usize, prefix: &str) -> Vec<String> {
+    let width = num.to_string().len();
+    (1..=num).map(|k| format!("{prefix}{k:0width$}")).collect()
 }
 
-fn check_strata(strata: Option<&[u32]>, n: usize) -> Result<Vec<Vec<usize>>> {
+/// Rows grouped by stratum code (`None` = one stratum), in code order.
+pub(crate) fn strata_groups(strata: Option<&[u32]>, n: usize) -> Result<Vec<Vec<usize>>> {
     match strata {
         None => Ok(vec![(0..n).collect()]),
         Some(s) => {
@@ -152,120 +251,19 @@ fn check_strata(strata: Option<&[u32]>, n: usize) -> Result<Vec<Vec<usize>>> {
     }
 }
 
-/// rsample's `vfold_cv`: fold labels `rep(1:v, length.out = n)` randomly permuted,
-/// independently within each stratum when `strata` is given. Fold sizes differ by at
-/// most one overall, and by at most one within each stratum.
-pub fn vfold_cv(n: usize, v: usize, strata: Option<&[u32]>, seed: Seed) -> Result<Folds> {
-    if v < 2 {
-        return Err(Error::InvalidArgument(format!("v must be at least 2, got {v}")));
-    }
-    if v > n {
-        return Err(Error::InvalidArgument(format!(
-            "v = {v} exceeds the number of rows {n}"
-        )));
-    }
-    let groups = check_strata(strata, n)?;
-    let mut rng = seed.rng();
-    let mut fold_of_row = vec![0u32; n];
-    for g in &groups {
-        let mut labels: Vec<u32> = (0..g.len()).map(|i| (i % v) as u32).collect();
-        labels.shuffle(&mut rng);
-        for (row, f) in g.iter().zip(labels) {
-            fold_of_row[*row] = f;
-        }
-    }
-    // With tiny strata some folds could be empty; rsample would then also produce
-    // uneven folds. We require every fold to have at least one assessment row.
-    let mut counts = vec![0usize; v];
-    for f in &fold_of_row {
-        counts[*f as usize] += 1;
-    }
-    if counts.contains(&0) {
-        return Err(Error::InvalidArgument(
-            "stratification left a fold with no assessment rows; reduce v or drop strata".into(),
-        ));
-    }
-    Folds::from_assignments(&fold_of_row)
-}
-
-/// rsample's `initial_split` / `mc_cv` with `times = 1`: `floor(n * prop)` analysis
-/// rows drawn without replacement, per stratum when `strata` is given.
-pub fn initial_split(n: usize, prop: f64, strata: Option<&[u32]>, seed: Seed) -> Result<Split> {
-    if !(prop > 0.0 && prop < 1.0) {
-        return Err(Error::InvalidArgument(format!(
-            "prop must be in (0, 1), got {prop}"
-        )));
-    }
-    let groups = check_strata(strata, n)?;
-    let mut rng = seed.rng();
-    let mut train = Vec::with_capacity((n as f64 * prop) as usize);
-    for g in &groups {
-        let k = (g.len() as f64 * prop).floor() as usize;
-        let mut rows = g.clone();
-        rows.shuffle(&mut rng);
-        train.extend_from_slice(&rows[..k]);
-    }
-    let in_train = {
-        let mut m = vec![false; n];
-        for &i in &train {
-            m[i] = true;
-        }
-        m
-    };
-    let test: Vec<usize> = (0..n).filter(|i| !in_train[*i]).collect();
-    Split::from_ids(train, test, n)
-}
-
-/// Bin a numeric variable into `breaks` quantile groups for stratification, as
-/// rsample's `make_strata` does for numeric columns (type-7 quantiles,
-/// `cut(include.lowest = TRUE)`). Returns a group code per row.
-pub fn strata_from_numeric(values: &[f64], breaks: usize) -> Result<Vec<u32>> {
-    if breaks < 2 {
-        return Err(Error::InvalidArgument("breaks must be at least 2".into()));
-    }
-    if values.iter().any(|v| !v.is_finite()) {
-        return Err(Error::InvalidValue("strata values must be finite".into()));
-    }
-    let mut sorted = values.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).expect("finite"));
-    let n = sorted.len();
-    if n == 0 {
-        return Err(Error::InvalidArgument("no rows".into()));
-    }
-    // type-7 quantiles at probs k/breaks
-    let mut cuts: Vec<f64> = (0..=breaks)
-        .map(|k| {
-            let h = (n as f64 - 1.0) * (k as f64 / breaks as f64);
-            let lo = h.floor() as usize;
-            let hi = (lo + 1).min(n - 1);
-            sorted[lo] + (h - lo as f64) * (sorted[hi] - sorted[lo])
-        })
-        .collect();
-    cuts.dedup();
-    let groups = cuts.len() - 1;
-    if groups < 1 {
-        return Ok(vec![0; n]);
-    }
-    Ok(values
-        .iter()
-        .map(|v| {
-            // intervals (c_k, c_{k+1}], first interval closed on the left
-            let mut g = 0usize;
-            for k in 0..groups {
-                let lo_ok = if k == 0 { *v >= cuts[0] } else { *v > cuts[k] };
-                if lo_ok && *v <= cuts[k + 1] {
-                    g = k;
-                    break;
-                }
-            }
-            g as u32
-        })
-        .collect())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tidyrustmodels_core::Seed;
+
+    #[test]
+    fn ids_follow_names0() {
+        assert_eq!(names0(5, "Fold"), ["Fold1", "Fold2", "Fold3", "Fold4", "Fold5"]);
+        assert_eq!(names0(10, "Fold")[0], "Fold01");
+        assert_eq!(names0(10, "Fold")[9], "Fold10");
+        assert_eq!(names0(25, "Bootstrap")[0], "Bootstrap01");
+        assert!(names0(0, "x").is_empty());
+    }
 
     #[test]
     fn vfold_is_balanced_and_reproducible() {
@@ -276,51 +274,24 @@ mod tests {
         let sizes: Vec<usize> = a.splits.iter().map(|s| s.test.len()).collect();
         assert_eq!(sizes.iter().sum::<usize>(), 23);
         assert!(sizes.iter().max().unwrap() - sizes.iter().min().unwrap() <= 1);
-        assert_eq!(a.ids[0], "Fold01");
+        assert_eq!(a.ids[0], "Fold1");
+        assert!(a.is_partition());
         assert_eq!(Folds::from_assignments(&a.assignments()).unwrap(), a);
     }
 
     #[test]
-    fn stratified_vfold_balances_within_strata() {
-        let strata: Vec<u32> = (0..40).map(|i| u32::from(i % 4 == 0)).collect(); // 10 ones, 30 zeros
-        let f = vfold_cv(40, 5, Some(&strata), Seed(3)).unwrap();
-        for s in &f.splits {
-            let ones = s.test.iter().filter(|i| strata[**i] == 1).count();
-            assert_eq!(ones, 2);
-            assert_eq!(s.test.len(), 8);
-        }
-    }
-
-    #[test]
-    fn initial_split_sizes_and_strata() {
-        let s = initial_split(100, 0.75, None, Seed(9)).unwrap();
-        assert_eq!(s.train.len(), 75);
-        assert_eq!(s.test.len(), 25);
-        let strata: Vec<u32> = (0..100).map(|i| u32::from(i < 20)).collect();
-        let s = initial_split(100, 0.75, Some(&strata), Seed(9)).unwrap();
-        assert_eq!(s.train.iter().filter(|i| strata[**i] == 1).count(), 15);
-        assert!(initial_split(10, 1.0, None, Seed(0)).is_err());
-    }
-
-    #[test]
-    fn invalid_inputs() {
-        assert!(vfold_cv(5, 1, None, Seed(0)).is_err());
-        assert!(vfold_cv(5, 6, None, Seed(0)).is_err());
+    fn splits_validate() {
         assert!(Folds::from_assignments(&[0, 0, 2]).is_err());
         assert!(Split::from_ids(vec![0, 1], vec![1, 2], 3).is_err());
         assert!(Split::from_ids(vec![0], vec![2], 3).is_err());
-    }
-
-    #[test]
-    fn numeric_strata_quartiles() {
-        let v: Vec<f64> = (1..=20).map(|i| i as f64).collect();
-        let s = strata_from_numeric(&v, 4).unwrap();
-        let mut counts = [0; 4];
-        for g in &s {
-            counts[*g as usize] += 1;
-        }
-        assert_eq!(counts, [5, 5, 5, 5]);
-        assert_eq!(s[0], 0);
-        assert_eq!(s[19], 3);
+        let s = Split::new(vec![2, 2, 0], vec![1], 3).unwrap();
+        assert_eq!(s.train, vec![2, 2, 0]);
+        assert!(!s.is_partition(3));
+        assert!(Split::new(vec![], vec![1], 3).is_err());
+        assert!(Split::new(vec![3], vec![1], 3).is_err());
+        assert!(Split::new(vec![0], vec![], 3).is_ok());
+        assert!(Folds::from_splits(vec![s.clone()], vec!["A".into(), "B".into()], 3).is_err());
+        let f = Folds::from_splits(vec![s], vec!["A".into()], 3).unwrap();
+        assert!(!f.is_partition());
     }
 }
