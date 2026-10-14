@@ -410,7 +410,7 @@ impl WorkflowSet {
             })
             .collect();
         // arrange(rank): stable, NA last
-        rows.sort_by_key(|r| r.rank.map_or(usize::MAX, |k| k));
+        rows.sort_by_key(|r| r.rank.unwrap_or(usize::MAX));
         Ok(rows)
     }
 
