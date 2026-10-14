@@ -56,17 +56,30 @@ Gate:
 - [x] Runner executes both systems with recorded hardware/config; `benchmarks/results/2026-10-12-win11-i7-11390H/{results.csv,env.json,report.md}` committed (270/270 trials ok).
 - [x] Framework-overhead and workflow-level categories reported separately (BENCHMARKS.md).
 - [x] Any optimization merged in this phase has a before/after benchmark: none merged; the run is the baseline.
-- [ ] Protocol as specified: ≥10 trials, ≥30 warm iterations, 10 folds, 20-point grid, 1e6-row point, allocation counts, power plan recorded. First run used 5/10/5/5, no 1e6, no A1.
+- [x] Protocol as specified for the linear / logistic core: 10 trials, 30 warm iterations, 10 folds, 20-point grid, allocation counts (Rust: count + bytes per phase; R: R-level bytes), power plan and source in `env.json` (run `…-g`, 2026-10-13; 13 valid configurations, 3 disturbed ones re-queued as run `…-k`).
+- [ ] The same protocol for trees, forests, boosting, case weights, bootstrap / repeated CV (run `…-i`), workflow sets (`…-j`) and the 1e6-row point (`…-h`): drivers and tasks written and smoke-tested, runs queued behind an idle gate (the host was in use by other processes when the first chain ran; see the disturbance log in BENCHMARKS.md).
+- [ ] Driver A/B on record (`alloc_zeroed` forwarding in the counting allocator; runs `…-ab-old` / `…-ab-new`, queued).
 - [x] Rust peak memory captured for sub-150 ms processes (`PeakWorkingSetSize` via retained handles; run `…-b`, no missing cell).
 - [x] Python wrapper measured as a third system (runs `…-b` and `…-d`, all nine tasks incl. 100k rows; bitwise-identical CV results to the Rust binary).
 - [x] Trial interleaving across systems after run `…-c` showed machine-state drift (kept on record, labelled invalid for timing).
 - [ ] Run on a second platform (Linux CI runner at minimum).
 - [ ] Independent reviewer sign-off recorded.
 
-## Phase 6 — v0.1.0 release — not started
+## Phase 6 — v0.1.0 release (2026-10-13) — candidate prepared, gated
 
-Gate: docs, examples (Rust + Python), feature matrix, compatibility report, benchmark
-report, limitations, install instructions, release notes. Reviewer approval.
+Gate:
+- [x] API documentation: `cargo doc --workspace --no-deps` (CI step; rendered locally), `docs/specs/api-spec.md`, Python docstrings on every binding.
+- [x] Examples in Rust and Python beyond the penguins workflow: `ames_tuning` (tuning, selection rules, `last_fit`, `fit_best`) and `ames_workflow_sets` (workflow sets), in both languages, run end to end (see VERIFICATION.md / CHANGELOG).
+- [x] Supported feature matrix: `docs/FEATURES.md`.
+- [x] Compatibility report: COMPATIBILITY.md (status column from tests).
+- [x] Benchmark report: BENCHMARKS.md incl. the Phase 5 protocol runs.
+- [x] Known limitations: LIMITATIONS.md.
+- [x] Installation instructions: README.md (Rust from git, Python from source; no published artifacts yet).
+- [x] Release notes: `docs/releases/0.1.0.md` (candidate).
+- [x] Packaging workflow defined: `.github/workflows/release.yml` (wheels for Linux / Windows / macOS, sdist, crate packaging dry run, API docs).
+- [ ] Packaging workflow and CI matrix **executed** on Linux and macOS (never run yet; everything is verified on Windows only).
+- [ ] Independent reviewer sign-off recorded (the only review on file, phases 1–4, was written in the same session as the code).
+- [ ] Tag `v0.1.0` (after the two items above).
 
 ## Phase 8 — Breadth (started 2026-10-12)
 

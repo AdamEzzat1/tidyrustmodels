@@ -16,9 +16,10 @@ Each trial is a fresh process (cold start). The orchestrator measures:
   * the per-phase timings the process itself reports on its `BENCH_RESULT` line.
 
 Usage (from the repository root, inside the venv):
-    python -I benchmarks/run_benchmarks.py --run-id 2026-10-12a --trials 5 --warm 10 \
-        --tasks penguins_reg,penguins_clf,ames_reg,synth_1000_reg,synth_10000_reg \
-        --threads 1,4 --systems r,rust,python
+    python -I benchmarks/run_benchmarks.py --run-id <id> --trials 10 --warm 30 --v 10 --tune-levels 20 \
+        --tasks penguins_reg,penguins_clf,ames_reg,ames_tree_reg,ames_xgb_reg,synth_10000_reg_wfs \
+        --threads 1,4 --systems r,rust,python --engines native
+    (task ids: benchmarks/tasks.py)
 
 Results: benchmarks/results/<run_id>/results.csv and env.json. Then run report.py.
 """
@@ -43,42 +44,12 @@ BENCH_BIN = ROOT / "benchmarks" / "rust" / "target" / "release" / ("trm-bench.ex
 PY_DRIVER = ROOT / "benchmarks" / "python" / "bench_task.py"
 RUSAGE_WRAP = ROOT / "benchmarks" / "_rusage_wrap.py"
 
-REFERENCE_TASKS = {t["id"]: t for t in json.loads((ROOT / "reference" / "tasks.json").read_text())["tasks"]}
+sys.path.insert(0, str(ROOT / "benchmarks"))
+from tasks import driver_flags, task_spec  # noqa: E402
 
 
-def task_spec(task_id: str) -> dict:
-    if task_id in REFERENCE_TASKS:
-        t = REFERENCE_TASKS[task_id]
-        return {
-            "id": task_id,
-            "dataset": str(ROOT / "reference" / "fixtures" / "datasets" / f"{t['dataset']}.csv"),
-            "outcome": t["outcome"],
-            "type": t["type"],
-            "predictors": t["predictors"],
-            "steps": t["steps"],
-            "metrics": t["metrics"],
-        }
-    if task_id.startswith("synth_"):
-        n = int(task_id.split("_")[1])
-        kind = task_id.split("_")[2] if task_id.count("_") == 2 else "reg"
-        return {
-            "id": task_id,
-            "dataset": str(ROOT / "benchmarks" / "data" / f"synth_{n}_{kind}.csv"),
-            "outcome": "y",
-            "type": "regression" if kind == "reg" else "classification",
-            "predictors": ["x1", "x2", "x3", "x4", "x5", "g"],
-            "steps": ["impute_median_numeric", "normalize_numeric", "dummy_nominal"],
-            "metrics": ["rmse", "rsq"] if kind == "reg" else ["accuracy", "mn_log_loss"],
-        }
-    raise SystemExit(f"unknown task {task_id}")
-
-
-def command(system: str, spec: dict, engine: str, threads: int, warm: int) -> list[str]:
-    common = [
-        "--dataset", spec["dataset"], "--outcome", spec["outcome"], "--type", spec["type"],
-        "--predictors", ",".join(spec["predictors"]), "--steps", ",".join(spec["steps"]),
-        "--metrics", ",".join(spec["metrics"]), "--threads", str(threads), "--warm", str(warm),
-    ]
+def command(system: str, spec: dict, engine: str, threads: int, warm: int, v: int, tune_levels: int) -> list[str]:
+    common = driver_flags(spec, threads, warm, v, tune_levels)
     if system == "rust":
         return [str(BENCH_BIN), "--engine", engine, *common]
     if system == "python":
@@ -198,7 +169,19 @@ def environment() -> dict:
         "trial_order": "blocked" if "--blocked" in sys.argv else "interleaved",
         "peak_memory_method": "Windows PeakWorkingSetSize via retained handles, max over every process seen in the tree (exact per process)" if os.name == "nt"
                               else "POSIX ru_maxrss of RUSAGE_CHILDREN via wrapper (exact, largest descendant)",
+        "protocol": {a: getattr(ARGS, a) for a in ("trials", "warm", "v", "tune_levels", "threads", "timeout")} if ARGS else None,
+        "rust_binary": str(BENCH_BIN),
     }
+    try:
+        bat = psutil.sensors_battery()
+        env["power_source"] = "unknown" if bat is None else ("AC" if bat.power_plugged else "battery")
+    except Exception:  # noqa: BLE001
+        env["power_source"] = "unknown"
+    if os.name == "nt":
+        try:
+            env["power_plan"] = subprocess.run(["powercfg", "/getactivescheme"], capture_output=True, text=True).stdout.strip()
+        except OSError:
+            pass
     try:
         env["rustc"] = subprocess.run(["rustc", "--version"], capture_output=True, text=True).stdout.strip()
         env["r"] = subprocess.run([RSCRIPT, "--version"], capture_output=True, text=True).stdout.strip() or subprocess.run([RSCRIPT, "--version"], capture_output=True, text=True).stderr.strip()
@@ -208,11 +191,14 @@ def environment() -> dict:
 
 
 FIELDS = [
-    "run_id", "timestamp", "system", "engine", "task", "task_type", "threads", "trial", "status",
-    "wall_s", "peak_rss_tree_mb", "peak_wset_mb", "n_rows", "n_features",
-    "load_s", "prep_s", "bake_s", "fit_s", "wf_fit_s", "predict_s", "cv_s", "tune_s", "library_load_s",
-    "warm_iters", "warm_prep_bake_s", "warm_fit_s", "warm_wf_fit_s", "warm_predict_s", "cv_summary", "stderr",
+    "run_id", "timestamp", "system", "engine", "model", "task", "task_type", "threads", "trial", "status",
+    "wall_s", "peak_rss_tree_mb", "peak_wset_mb", "n_rows", "n_features", "n_resamples",
+    "load_s", "prep_s", "bake_s", "fit_s", "wf_fit_s", "predict_s", "cv_s", "tune_s", "select_s", "wfs_s", "library_load_s",
+    "alloc_wf_fit_count", "alloc_wf_fit_mb", "alloc_cv_count", "alloc_cv_mb",
+    "warm_iters", "warm_prep_bake_s", "warm_fit_s", "warm_wf_fit_s", "warm_predict_s",
+    "tune_candidates", "select_params", "wfs_best", "cv_summary", "stderr",
 ]
+ARGS = None
 
 
 def main() -> None:
@@ -220,18 +206,26 @@ def main() -> None:
     ap.add_argument("--run-id", required=True)
     ap.add_argument("--tasks", required=True, help="comma-separated task ids")
     ap.add_argument("--systems", default="r,rust,python")
-    ap.add_argument("--engines", default="linfa,smartcore", help="Rust/Python engines")
+    ap.add_argument("--engines", default="native", help="Rust/Python engines")
     ap.add_argument("--threads", default="1")
-    ap.add_argument("--trials", type=int, default=5)
-    ap.add_argument("--warm", type=int, default=10)
+    ap.add_argument("--trials", type=int, default=10)
+    ap.add_argument("--warm", type=int, default=30)
+    ap.add_argument("--v", type=int, default=10, help="folds (vfold / repeated)")
+    ap.add_argument("--tune-levels", type=int, default=20, help="points of the 1-D penalty grid (2-D grids are 4 x 5)")
     ap.add_argument("--timeout", type=float, default=600.0)
     ap.add_argument("--blocked", action="store_true", help="run each system's trials back to back instead of interleaving")
+    ap.add_argument("--rust-binary", default=None, help="alternative Rust driver binary (A/B of the driver itself); recorded in env.json")
     a = ap.parse_args()
+    global ARGS
+    ARGS = a
     systems = a.systems.split(",")
 
     out_dir = ROOT / "benchmarks" / "results" / a.run_id
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "env.json").write_text(json.dumps(environment(), indent=1))
+    global BENCH_BIN
+    if a.rust_binary:
+        BENCH_BIN = Path(a.rust_binary).resolve()
     if "rust" in systems and not BENCH_BIN.exists():
         raise SystemExit(f"build the bench binary first: cargo build --release --manifest-path benchmarks/rust/Cargo.toml ({BENCH_BIN})")
     if "python" in systems:
@@ -254,7 +248,7 @@ def main() -> None:
             for threads in [int(t) for t in a.threads.split(",")]:
                 configs = []
                 if "r" in systems:
-                    configs.append(("r", "lm" if spec["type"] == "regression" else "glm"))
+                    configs.append(("r", spec["r_engine"]))
                 for system in ("rust", "python"):
                     if system in systems:
                         configs += [(system, e) for e in a.engines.split(",")]
@@ -267,11 +261,11 @@ def main() -> None:
                     order = [(system, engine, trial) for trial in range(a.trials) for system, engine in configs]
                 for system, engine, trial in order:
                     if True:
-                        cmd = command(system, spec, engine, threads, a.warm)
+                        cmd = command(system, spec, engine, threads, a.warm, a.v, a.tune_levels)
                         res = run_trial(cmd, a.timeout)
                         row = {
                             "run_id": a.run_id, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                            "system": system, "engine": engine, "task": task_id, "task_type": spec["type"],
+                            "system": system, "engine": engine, "model": spec["model"], "task": task_id, "task_type": spec["type"],
                             "threads": threads, "trial": trial, "status": res["status"],
                             "wall_s": round(res.get("wall_s", float("nan")), 4),
                             "peak_rss_tree_mb": res.get("peak_rss_tree_mb"), "peak_wset_mb": res.get("peak_wset_mb"),
@@ -281,21 +275,31 @@ def main() -> None:
                         if p:
                             ph = p["phases"]
                             wm = p["warm"]
+                            al = p.get("allocs") or {}
+                            mb = lambda b: (b / 2**20) if isinstance(b, (int, float)) else None  # noqa: E731
                             row.update({
-                                "n_rows": p["n_rows"], "n_features": p["n_features"],
+                                "n_rows": p["n_rows"], "n_features": p["n_features"], "n_resamples": p.get("n_resamples"),
                                 "load_s": ph.get("load_s"), "prep_s": ph.get("prep_s"), "bake_s": ph.get("bake_s"),
                                 "fit_s": ph.get("fit_s"), "wf_fit_s": ph.get("wf_fit_s"), "predict_s": ph.get("predict_s"),
-                                "cv_s": ph.get("cv_s"), "tune_s": ph.get("tune_s"), "library_load_s": ph.get("library_load_s"),
+                                "cv_s": ph.get("cv_s"), "tune_s": ph.get("tune_s"), "select_s": ph.get("select_s"),
+                                "wfs_s": ph.get("wfs_s"), "library_load_s": ph.get("library_load_s"),
+                                "alloc_wf_fit_count": (al.get("wf_fit") or {}).get("count"),
+                                "alloc_wf_fit_mb": mb((al.get("wf_fit") or {}).get("bytes")),
+                                "alloc_cv_count": (al.get("cv") or {}).get("count"),
+                                "alloc_cv_mb": mb((al.get("cv") or {}).get("bytes")),
                                 "warm_iters": wm["iters"], "warm_prep_bake_s": wm.get("prep_bake_s_median"),
                                 "warm_fit_s": wm.get("fit_s_median"), "warm_wf_fit_s": wm.get("wf_fit_s_median"),
                                 "warm_predict_s": wm.get("predict_s_median"),
+                                "tune_candidates": p.get("tune_candidates"),
+                                "select_params": json.dumps(p.get("select_params")) if p.get("select_params") is not None else "",
+                                "wfs_best": p.get("wfs_best") or "",
                                 "cv_summary": json.dumps(p.get("cv_summary")),
                             })
                         w.writerow(row)
                         fh.flush()
-                        print(f"{task_id:<16} {system:<6} {engine:<9} t={threads} trial={trial} {res['status']:<8} "
+                        print(f"{task_id:<24} {system:<6} {engine:<9} t={threads} trial={trial} {res['status']:<8} "
                               f"wall={row['wall_s']}s wf_fit={row.get('wf_fit_s')} cv={row.get('cv_s')} "
-                              f"peak_ws={row.get('peak_wset_mb')}")
+                              f"tune={row.get('tune_s')} peak_ws={row.get('peak_wset_mb')}", flush=True)
     print("wrote", path)
 
 

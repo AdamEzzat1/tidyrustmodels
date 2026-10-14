@@ -23,9 +23,13 @@ from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+import sys
+sys.path.insert(0, str(ROOT / "benchmarks"))
+from tasks import category, task_spec  # noqa: E402
+
 PHASES = ["wall_s", "library_load_s", "load_s", "prep_s", "bake_s", "fit_s", "wf_fit_s", "predict_s", "cv_s", "tune_s",
-          "warm_prep_bake_s", "warm_fit_s", "warm_wf_fit_s", "warm_predict_s", "peak_rss_tree_mb", "peak_wset_mb"]
-VERIFIED = {"synth_reg", "synth_clf", "iris_clf", "penguins_reg", "penguins_clf", "ames_reg"}
+          "select_s", "wfs_s", "warm_prep_bake_s", "warm_fit_s", "warm_wf_fit_s", "warm_predict_s",
+          "alloc_wf_fit_count", "alloc_wf_fit_mb", "alloc_cv_count", "alloc_cv_mb", "peak_rss_tree_mb", "peak_wset_mb"]
 
 
 def f(x):
@@ -81,31 +85,40 @@ def main():
     out = [f"# Benchmark report `{a.run_id}`", ""]
     out.append("Environment: " + ", ".join(f"{k}={v}" for k, v in env.items()))
     out.append("")
-    out.append("Category: *framework-overhead* = same algorithm class and objective (OLS vs OLS); "
-               "*workflow-level* = different optimizer or algorithm (R IRLS `glm` vs L-BFGS; "
-               "R `glmnet` ridge vs unscaled-L2 L-BFGS for tuning). Medians over cold trials (fresh "
-               "process each) with IQR, min and n. Ratio = R / candidate (>1 favours the candidate "
-               "under these conditions). `wf_fit` = prep + bake + model fit from the raw training "
-               "table, the like-for-like fit comparison; `fit` = model only on a baked design.")
+    out.append("Category: *framework-overhead* = the same algorithm on both sides (lm / glm / rpart / xgboost "
+               "vs their ports); *workflow-level* = different algorithms (ranger vs the forest port; glmnet "
+               "ridge vs penalised IRLS when tuning logistic regression; linfa / smartcore solvers). Medians "
+               "over cold trials (fresh process each) with IQR, min and n. Ratio = R / candidate (>1 favours "
+               "the candidate under these conditions). `wf_fit` = prep + bake + model fit from the raw "
+               "training table; `cv` = resampling over the task's scheme; `tune` = grid x resamples; "
+               "`select` = select_best + finalize + last_fit; `wfs` = workflow set map + rank + fit_best.")
     out.append("")
-    out.append("| Dataset | Category | Threads | Candidate | R wall | cand. wall | ratio | R wf_fit | cand. wf_fit | ratio | R cv | cand. cv | ratio | R tune | cand. tune | ratio | R peak WS | cand. peak WS | ratio | Numerical parity |")
-    out.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    out.append("| Dataset | Model | Category | Threads | Candidate | R wall | cand. wall | ratio | R wf_fit | cand. wf_fit | ratio | R cv | cand. cv | ratio | R tune | cand. tune | ratio | R select | cand. select | ratio | R wfs | cand. wfs | ratio | R peak WS | cand. peak WS | ratio | Numerical parity |")
+    out.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for task, threads in tasks:
         r_rows = [r for r in ok if r["task"] == task and int(r["threads"]) == threads and r["system"] == "r"]
-        ttype = next((r["task_type"] for r in rows if r["task"] == task), "?")
-        category = "framework-overhead (OLS vs OLS)" if ttype == "regression" else "workflow-level (IRLS vs L-BFGS)"
-        parity = "VERIFICATION.md Phase 4 (L3/L4 pass)" if task in VERIFIED else "unverified (synthetic scaling data)"
+        try:
+            spec = task_spec(task)
+        except SystemExit:
+            spec = None
+        model = spec["model"] if spec else next((r.get("model") for r in rows if r["task"] == task), "?")
+        parity = spec["parity"] if spec else "unverified"
+        if spec and spec["dataset"].endswith(("_reg.csv", "_clf.csv")) and "benchmarks" in spec["dataset"]:
+            parity += "; scaling data itself unverified"
         for system, engine in candidates:
             c_rows = [r for r in ok if r["task"] == task and int(r["threads"]) == threads
                       and r["system"] == system and r["engine"] == engine]
             if not c_rows:
                 continue
+            cat = category(spec, engine) if spec else "?"
             out.append("| " + " | ".join([
-                task, category, str(threads), f"{system}/{engine}",
+                task, model, cat, str(threads), f"{system}/{engine}",
                 fmt([f(r.get("wall_s")) for r in r_rows], "s"), fmt([f(r.get("wall_s")) for r in c_rows], "s"), ratio(r_rows, c_rows, "wall_s"),
                 fmt([f(r.get("wf_fit_s")) for r in r_rows], "s"), fmt([f(r.get("wf_fit_s")) for r in c_rows], "s"), ratio(r_rows, c_rows, "wf_fit_s"),
                 fmt([f(r.get("cv_s")) for r in r_rows], "s"), fmt([f(r.get("cv_s")) for r in c_rows], "s"), ratio(r_rows, c_rows, "cv_s"),
                 fmt([f(r.get("tune_s")) for r in r_rows], "s"), fmt([f(r.get("tune_s")) for r in c_rows], "s"), ratio(r_rows, c_rows, "tune_s"),
+                fmt([f(r.get("select_s")) for r in r_rows], "s"), fmt([f(r.get("select_s")) for r in c_rows], "s"), ratio(r_rows, c_rows, "select_s"),
+                fmt([f(r.get("wfs_s")) for r in r_rows], "s"), fmt([f(r.get("wfs_s")) for r in c_rows], "s"), ratio(r_rows, c_rows, "wfs_s"),
                 fmt([f(r.get("peak_wset_mb")) for r in r_rows], " MB"), fmt([f(r.get("peak_wset_mb")) for r in c_rows], " MB"), ratio(r_rows, c_rows, "peak_wset_mb"),
                 parity,
             ]) + " |")
@@ -128,7 +141,9 @@ def main():
     out.append("")
     out.append("Notes: `wall_s` includes process start, interpreter/library load (`library_load_s`: R "
                "tidymodels attach; Python import of tidyrustmodels+numpy+pandas) and CSV parsing. "
-               "`tune_s` is R glmnet ridge vs L-BFGS with unscaled L2 (workflow-level only). "
+               "`alloc_*`: Rust counts every allocation (count and MB requested) during the phase; R "
+               "reports R-level bytes allocated by the workflow fit (`bench::bench_memory`, Rprofmem: not "
+               "the engines' C-level mallocs), count n/a. "
                "`peak_wset_mb` is the OS-reported exact peak of the root process; `peak_rss_tree_mb` "
                "is the 1 ms-sampled maximum of the summed process tree (lower bound; `not run` when "
                "the process exited before the first sample).")

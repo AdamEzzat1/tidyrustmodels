@@ -101,6 +101,33 @@
   R's warm IRLS fit. The 100k logistic bottleneck is the solver, not the wrapper.
 - R's model-only `glm` fit is within 1.3× of L-BFGS already at 10k rows (run B).
 
+## Findings from the Phase 5 protocol runs (run `2026-10-13-win11-i7-11390H-g`, BENCHMARKS.md)
+
+- Native engine vs R, 10 cold trials, 30 warm iterations, 10 folds: workflow fit
+  350–930× faster than R on 150–342-row tasks, 16–17× at 2930–10k rows, 12× at 100k
+  (cold); 10-fold CV 610–2200× / 28–63× / 7.5×. The ratio is a fixed orchestration cost
+  on R's side divided by a growing arithmetic cost; at 100k rows the OLS warm workflow
+  fit is 4.7× and the IRLS warm fit about 4×.
+- Logistic tuning (20 penalties × 10 folds) vs glmnet ridge: 2.5× at 10k rows, 59–360×
+  on the small tasks; glmnet fits a penalty path per fold, the port one IRLS per
+  candidate (workflow-level category).
+- R at 4 `multisession` workers is slower than sequential on every task up to 100k
+  rows (12–49 s of worker start-up inside the CV phase). Rust / Python gain 1.7–2× on
+  CV and 2.3× on tuning at 10k rows, nothing at 342 rows.
+- Peak working set: R 357–651 MB, Python wrapper 77–144 MB, Rust binary 5–73 MB.
+  Allocation counts (Rust): 235–817 per workflow fit, 3.4k–12k per 10-fold CV. R
+  allocates 1.5–3.2× the bytes at the R level alone for the same workflow fit.
+- The Python wrapper equals the Rust binary within ±10% on compute-bound phases and is
+  15–28% *faster* on the OLS workflows; the suspect is the bench binary's counting
+  allocator (no `alloc_zeroed` forwarding, fixed; A/B queued). Until the A/B is on
+  record, the Python column is the cleaner timing of the native code on OLS tasks.
+- The host is a laptop that other people and tools use: run G was disturbed from
+  about 15:51 by Chrome, a service host and the Malicious Software Removal Tool, one R
+  trial timed out, three configurations were invalidated and re-queued. Windows'
+  processor-time counters are unusable as an idle gate on this machine (they read
+  90–100% with ~1.5 of 8 cores busy); the relaunched chain gates on per-process
+  CPU-time deltas instead.
+
 ## Risk register
 
 | id | risk | likelihood | impact | status / mitigation |
@@ -116,6 +143,7 @@
 | R9 | Rayon oversubscription when backends are also threaded | low | medium | Scoped pool; backends are single-threaded |
 | R10 | Windows peak-RSS sampling misses short-lived peaks | **occurred, fixed** | low | 81/180 Rust rows not captured in run A. Harness now retains a handle per tree process and reads `PeakWorkingSetSize` after exit; run B has no missing cell. POSIX path (`ru_maxrss` wrapper) untested |
 | R14 | Machine-state drift during long benchmark runs (laptop) | **occurred** (run C) | high for between-system ratios | Interleaved trial order; canary trial before/after; invalid runs kept on record and labelled, never averaged in |
+| R16 | Benchmark host in use by other people or tools during unattended runs (browser, other agents, Windows maintenance) | **occurred** (run G, 2026-10-13) | high: trials slow 1.5–5×, timeouts | Per-trial timestamps and IQRs in every report; disturbed configurations invalidated and re-queued; runs gated on per-process CPU-time idleness (Windows' processor-time counters misread on this host); a dedicated or CI machine remains the real fix (Phase 5 second platform) |
 | R13 | L-BFGS logistic solver loses to IRLS/glmnet at large n | **resolved by default** | low | Native IRLS engine is the default (ADR-0009): 4× faster than linfa at 1e5 rows, 3.6–4.9× faster than `glm` cross-run. L-BFGS engines remain available and still lose at large n |
 | R15 | Native OLS is slower than linfa on wide designs | **measured** | low | Ames (34 columns): 2.06 vs 1.35 ms per fit. Unblocked Householder loop; blocked QR is the follow-up if wide designs matter |
 | R11 | tidymodels semantics misread | was medium | high | **mitigated**: every row in COMPATIBILITY.md marked "tested" is backed by a fixture comparison |

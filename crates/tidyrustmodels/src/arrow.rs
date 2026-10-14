@@ -1,5 +1,5 @@
 //! Arrow interop (feature `arrow`; ADR-0003, ADR-0015): column-wise conversion
-//! between an [`arrow_array::RecordBatch`] and a [`Table`]. Numeric Arrow types
+//! between an [`arrow_array::RecordBatch`] and a [`Table`](tidyrustmodels_core::Table). Numeric Arrow types
 //! (integers, floats) become `f64` columns with nulls as missing values; `Utf8`,
 //! `LargeUtf8`, dictionary-encoded strings and booleans become categorical columns
 //! (levels sorted bytewise, as every other constructor). Nothing is zero-copy: the

@@ -795,6 +795,35 @@ Differential suite after this phase: 17541 comparisons, 0 failures, 70 tasks.
 Python: 208 passed (`python/tests/test_workflowsets.py` covers ids, default names,
 pairing, mapping, ranking, `fit_best` and `extract_*`).
 
+## Release examples and API documentation (Phase 6, 2026-10-13)
+
+Commands run from the repository root after the Phase 8k commit (`172d04c`) with the
+example sources added for the release:
+
+- `cargo build --release --examples -p tidyrustmodels`, then
+  `target/release/examples/ames_tuning.exe` (0.64 s wall) and
+  `target/release/examples/ames_workflow_sets.exe` (0.50 s wall);
+  `python examples/ames_tuning.py` and `python examples/ames_workflow_sets.py` against
+  the bindings built from the same commit.
+- Rust and Python print identical results. `ames_tuning` (2930 Ames rows, rpart-style
+  tree, 3 × 3 `cost_complexity` × `min_n` grid, 5-fold CV repeated twice, seed 11):
+  `show_best(rmse)` = config 2 (cp 1e-4, min_n 20) 35134 ± 703, config 4 (cp 1e-3,
+  min_n 5) 35704 ± 1146, config 3 (cp 1e-4, min_n 50) 36210 ± 814, each n = 10;
+  `select_best` → (1e-4, 20); `select_by_one_std_err` with `desc(cost_complexity),
+  desc(min_n)` → (1e-3, 5); `last_fit` on the 75% initial split (seed 2024): rmse
+  33881.8831, rsq 0.8342, 733 assessment rows, final tree 52 splits; `fit_best` JSON
+  round trip reproduces its predictions exactly (Rust `assert_eq!`, Python `.all()`).
+  `ames_workflow_sets` (two recipes × lm / tree / xgb(50 trees), 5-fold CV seed 3):
+  `rank_results(select_best = true)` ranks plain_xgb (rmse 29496, rsq 0.8643),
+  pooled_xgb (30680), plain_tree (35401, config `pre0_mod1_post0`), pooled_tree
+  (35504), plain_lm (35677), pooled_lm (38839); `fit_best` refits plain_xgb on all
+  2930 rows, first prediction 165654 in both languages.
+- `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features`: clean
+  after fixing two broken intra-doc links (`Seed` in the resample crate docs, `Table` in
+  the Arrow module docs). `cargo fmt --all --check`, `cargo clippy --workspace
+  --all-targets --all-features -- -D warnings` and the same for
+  `benchmarks/rust` (own workspace): clean.
+
 ## Test inventory
 
 | suite | location | runs in CI | needs R |

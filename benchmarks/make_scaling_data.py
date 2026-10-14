@@ -3,8 +3,10 @@
     python -I benchmarks/make_scaling_data.py --sizes 1000,10000,100000
 
 Writes benchmarks/data/synth_<n>_reg.csv and synth_<n>_clf.csv with columns
-x1..x5 (numeric; x3 has ~2% missing), g (categorical, 10 levels) and y.
-Deterministic given the seed; the generator (not the files) is committed.
+x1..x5 (numeric; x3 has ~2% missing), g (categorical, 10 levels), y and w (frequency
+weights 1..4, drawn after the other columns so that earlier runs' columns are unchanged).
+Deterministic given the seed; the generator (not the files) is committed. Sizes up to
+1e6 rows (about 70 MB per file) are supported.
 """
 from __future__ import annotations
 
@@ -25,7 +27,7 @@ def gen(n: int, kind: str, seed: int) -> None:
     path = os.path.join(OUT, f"synth_{n}_{kind}.csv")
     with open(path, "w", newline="") as fh:
         w = csv.writer(fh, lineterminator="\n")
-        w.writerow(["x1", "x2", "x3", "x4", "x5", "g", "y"])
+        w.writerow(["x1", "x2", "x3", "x4", "x5", "g", "y", "w"])
         for _ in range(n):
             x = [rng.gauss(0, 1) for _ in range(5)]
             gi = rng.randrange(10)
@@ -38,7 +40,8 @@ def gen(n: int, kind: str, seed: int) -> None:
             row = [f"{v:.6f}" for v in x]
             if rng.random() < 0.02:
                 row[2] = ""
-            w.writerow([*row, levels[gi], y])
+            wt = 1 + int(rng.random() * 4)
+            w.writerow([*row, levels[gi], y, str(wt)])
     print("wrote", path, n, "rows")
 
 

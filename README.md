@@ -5,9 +5,11 @@ training data and bake anywhere, estimator specifications that are independent o
 backend that fits them, leakage-safe resampling, yardstick-compatible metrics, and
 tuning. Python bindings are an optional interface, not a requirement.
 
-Status: **pre-release (0.1.0-dev).** See ROADMAP.md for what exists and what is gated.
-Nothing in this repository claims parity with or performance relative to R tidymodels
-unless VERIFICATION.md or BENCHMARKS.md records the measurement.
+Status: **0.1.0 release candidate** (`docs/releases/0.1.0.md`); the tag waits on an
+independent review and on the Linux / macOS CI runs (ROADMAP.md Phase 6). Nothing in
+this repository claims parity with or performance relative to R tidymodels unless
+VERIFICATION.md or BENCHMARKS.md records the measurement. `docs/FEATURES.md` is the
+feature matrix with the verification status of every row.
 
 What is verified today (VERIFICATION.md):
 
@@ -26,13 +28,16 @@ What is verified today (VERIFICATION.md):
   than the L-BFGS engines (BENCHMARKS.md run F).
 - The Python bindings produce bitwise-identical results to the Rust API.
 
-What is measured today (BENCHMARKS.md, one Windows laptop, 5 trials): OLS workflows run
-8–240× faster per workflow fit and 5–57× faster end-to-end than R tidymodels with 8–50× less
-memory; logistic regression at 1e5 rows is *not* faster than R's IRLS and is slower
-than glmnet for tuning. The Python wrapper adds nothing measurable over the Rust binary beyond
-a ~0.6 s import; it is 10× faster than R for OLS at 100k rows but only 1.5× for
-logistic regression, where tuning is equal to glmnet. Read the deviations list there
-before quoting any number.
+What is measured today (BENCHMARKS.md, one Windows laptop; protocol run G of
+2026-10-13: 10 cold trials, 30 warm iterations, 10 folds, 20-point grids): linear and
+logistic workflows with the native engine fit 12–930× faster than R tidymodels per
+workflow fit (the ratio falls with n: 930× at 342 rows, 12× at 100k), 10-fold CV
+7.5–2200× faster, with R's peak memory 9–70× the Rust binary's and 4.5–5× the Python
+wrapper's. Logistic tuning against glmnet (a different algorithm) is 2.5× faster at 10k
+rows and 60–360× on the small tasks. The Python wrapper tracks the Rust binary within
+±10% on compute-bound phases. Trees, forests, boosting, case weights, bootstrap /
+repeated CV, workflow sets and the 1e6-row point are queued (runs I, J, K, H) and not
+yet measured. Read the deviations and disturbance log there before quoting any number.
 
 ## Quick start (Rust)
 
@@ -55,8 +60,10 @@ let cv = wf.fit_resamples(&data, &folds, &MetricSet::classification_defaults(), 
 // workflow sets: workflow_set(preproc, models, true)?.workflow_map(..); .rank_results(None, true); .fit_best(&data, None) (ADR-0016)
 ```
 
-See `crates/tidyrustmodels/examples/penguins_workflow.rs` for the full example
-(`cargo run --release --example penguins_workflow`).
+See `crates/tidyrustmodels/examples/` for full examples: `penguins_workflow`
+(classification end to end), `ames_tuning` (tree tuning, selection rules, `last_fit`,
+`fit_best`) and `ames_workflow_sets` (preprocessors x models, ranking, refit), each
+run with `cargo run --release --example <name>`; `examples/` holds the Python versions.
 
 ## Quick start (Python)
 
@@ -71,20 +78,36 @@ folds = trm.vfold_cv(data.nrows, 5, seed=7, strata=list(df["sex"]))
 cv = wf.fit_resamples(data, folds, ["accuracy", "mn_log_loss"], threads=4)
 ```
 
-## Building
+## Installing
+
+Rust, from the repository (the crates are not yet published to crates.io):
+
+```toml
+[dependencies]
+tidyrustmodels = { git = "https://github.com/adamezzat/tidyrustmodels", package = "tidyrustmodels" }
+# features = ["arrow"] adds RecordBatch <-> Table conversion
+```
+
+Python ≥ 3.11, from source (wheels are built by `.github/workflows/release.yml` but not
+yet published):
+
+```
+python -m venv .venv && .venv/Scripts/activate      # or source .venv/bin/activate
+pip install maturin numpy
+maturin develop --release                             # or: pip install .
+```
+
+Optional extras: `pandas`, `pyarrow`, `polars`, `scipy` (`from_pandas`, `from_arrow`,
+`from_polars`, `from_scipy_sparse`). R is needed only to regenerate reference fixtures
+and to run the benchmarks; the tests use committed fixtures.
+
+## Building and testing
 
 ```
 cargo build --workspace --release
 cargo test --workspace            # includes the differential suite against committed R fixtures
-```
-
-Python bindings (Python ≥ 3.11, inside a virtual environment):
-
-```
-python -m venv .venv && .venv/Scripts/activate      # or source .venv/bin/activate
-pip install maturin numpy pandas pytest
-maturin develop --release
-pytest python/tests
+cargo doc --workspace --no-deps --open   # rendered Rust API documentation
+pip install pandas pytest && pytest python/tests
 ```
 
 ## Documents
@@ -98,6 +121,8 @@ pytest python/tests
 | BENCHMARKS.md | methodology and measured results |
 | LIMITATIONS.md | unsupported features, findings, risk register |
 | ROADMAP.md | milestones and gates |
+| docs/FEATURES.md | supported feature matrix with verification status |
+| docs/releases/ | release notes |
 | docs/adr/ | architecture decision records |
 | docs/specs/ | API spec, verification harness design |
 | docs/reviews/ | independent review records |

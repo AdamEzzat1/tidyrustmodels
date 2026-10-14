@@ -775,6 +775,7 @@ dependencies = [
  "tidyrustmodels-resample",
  "tidyrustmodels-tune",
  "tidyrustmodels-workflows",
+ "tidyrustmodels-workflowsets",
 ]
 
 [[package]]
@@ -805,6 +806,8 @@ dependencies = [
  "linfa-linear",
  "linfa-logistic",
  "ndarray",
+ "rand 0.10.3",
+ "rand_chacha 0.10.0",
  "serde",
  "serde_json",
  "smartcore",
@@ -859,6 +862,20 @@ dependencies = [
  "tidyrustmodels-models",
  "tidyrustmodels-recipes",
  "tidyrustmodels-resample",
+]
+
+[[package]]
+name = "tidyrustmodels-workflowsets"
+version = "0.1.0-dev"
+dependencies = [
+ "serde",
+ "tidyrustmodels-core",
+ "tidyrustmodels-metrics",
+ "tidyrustmodels-models",
+ "tidyrustmodels-recipes",
+ "tidyrustmodels-resample",
+ "tidyrustmodels-tune",
+ "tidyrustmodels-workflows",
 ]
 
 [[package]]

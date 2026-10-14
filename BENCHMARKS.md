@@ -31,10 +31,21 @@ phase so readers can see *where* time goes.
 | T4 | predict                          | around `predict` on the test set             | around `predict()`                        |
 | T5 | k-fold CV                        | `fit_resamples`                              | `fit_resamples()`                         |
 | T6 | tuning (grid × folds)            | `tune_grid`                                  | `tune_grid()`                             |
+| T7 | selection + final fit            | `select_best` + `finalize` + `last_fit`      | `select_best()` + `finalize_workflow()` + `last_fit()` |
+| T8 | workflow set                     | `workflow_set` + `workflow_map` + `rank_results` + `fit_best` | the same functions in workflowsets |
 | M1 | peak resident memory             | process-tree RSS sampled every 1 ms by the Python runner, plus the OS peak working set of the root process (Windows) | same |
 | D1 | data conversion overhead         | CSV→`Table` (`load_s`)                       | CSV→tibble (`load_s`)                     |
-| A1 | allocation count                 | counting global allocator (feature-gated)    | not available (reported as n/a)           |
+| A1 | allocations                      | counting global allocator in the driver: every `alloc`/`realloc` call and its bytes, per phase (`wf_fit`, `cv`) | `bench::bench_memory()` on the workflow fit: R-level bytes allocated (Rprofmem; the engines' C-level mallocs are not seen); counts n/a |
 | S1 | scaling                          | T3/T5 at n ∈ {1e3, 1e4, 1e5, 1e6} rows       | same                                      |
+
+Tasks are listed in `benchmarks/tasks.py`. Models: `lm` / `glm` vs the native ports
+(framework-overhead), rpart vs its port, xgboost vs its port (framework-overhead,
+exact algorithms), ranger vs the forest port (workflow-level: different forests),
+glmnet ridge vs the native penalised IRLS when tuning logistic regression
+(workflow-level). Case weights, bootstraps, repeated CV, tuning selection and workflow
+sets each have their own tasks. Grids: a 20-point log-spaced penalty grid for logistic
+regression; explicit 4 x 5 grids (`cost_complexity` x `min_n`; `tree_depth` x
+`learn_rate`) for trees and boosting, identical values on both sides.
 
 ## Fairness controls
 
@@ -420,3 +431,356 @@ comparison is the next benchmark to record.
 Raw data: `benchmarks/results/2026-10-12-win11-i7-11390H-e/` (disturbed, kept) and
 `…-f/{results.csv, env.json, report.md}`.
 
+
+### Phase 5 protocol runs `2026-10-13-win11-i7-11390H-{g,i,j,h}`
+
+The runs that close the protocol gaps listed in ROADMAP.md Phase 5. All four were executed
+back to back by one detached script with the machine otherwise idle, in this order: G
+(linear / logistic core), I (trees, forests, boosting, case weights, resampling schemes),
+J (workflow sets), H (the 1e6-row scaling point). Per configuration: **10 cold trials**
+(fresh process each, trials interleaved across systems), **30 warm iterations** inside
+each process, **10-fold CV**, **20-point grids** for logistic tuning and explicit 4 × 5
+grids for trees and boosting. Drivers: `benchmarks/r/bench_task.R`,
+`benchmarks/rust/src/main.rs` (counting global allocator, A1),
+`benchmarks/python/bench_task.py`; tasks in `benchmarks/tasks.py`.
+
+Environment (`env.json`): Windows 11 Pro 10.0.26200, i7-11390H (4 physical / 8 logical
+cores), 31.8 GB RAM, AC power, power plan *Balanced*
+(`381b4222-f694-41f0-9685-ff5bb260df2e`), rustc 1.97.1, R 4.4.0 with tidymodels 1.5.0,
+Python 3.11.3, git commit `172d04c` plus the uncommitted driver changes recorded in the
+same commit as this section. R at 4 threads uses `future::plan(multisession)` (four
+worker R sessions started inside the timed `cv` phase); Rust and Python use the
+framework's thread pool.
+
+Deviations from the protocol as written, stated up front:
+
+- Only one platform (Windows). The Linux CI runner is still open in ROADMAP.md.
+- 4-thread configurations were run for all of run G, two tasks of run I and one of run J;
+  run H ran at 1 thread with 10 warm iterations (the R trials already take minutes).
+- R's allocation figure is R-level bytes (`bench::bench_memory` / Rprofmem) for the
+  workflow fit only; it does not see the engines' C-level mallocs and has no count. Rust
+  counts every allocation.
+- The Rust driver's counting allocator forwards `alloc` and `realloc` to the system
+  allocator but not `alloc_zeroed`, so zero-filled buffers in the Rust binary are
+  allocated and then memset by hand while the Python extension (no counting) gets
+  Windows' zeroed pages. See "Python wrapper vs Rust binary" below.
+
+Disturbance log (the runs were not attended; this is what the per-trial record shows):
+
+- Run G, 2026-10-13 from about 15:51: other processes took the CPU. The per-trial
+  timestamps place the onset in `synth_100000_reg` at 1 thread (trials 5–6 are
+  10–30% slower on all three systems; trials 0–4 and 7–9 agree with each other), and
+  from 15:57 the disturbance is severe: `synth_100000_reg` at 4 threads, trials 2–9,
+  run 1.5–5× slower than trials 0–1 (R wall 53 s → 97–244 s, Rust warm workflow fit
+  64 → 112–172 ms), and `synth_100000_clf` at 1 thread degrades from trial 1 (R tune
+  55 → 66–69 s; Python 57 → 156 s; Rust 56 → 201 s) until R's trial 3 hit the 600 s
+  timeout at 16:56. A process snapshot at 16:57 showed four Chrome processes at ~235%
+  of one core combined, `svchost` at 41% and `mrt` (Windows Malicious Software Removal
+  Tool) at 6.5% while `trm-bench` got 8%. The chain was stopped at 17:04.
+- Consequences: `synth_100000_reg` at 1 thread is reported (medians over 10 trials are
+  robust to the two slow trials; flagged in the table); `synth_100000_reg` at 4 threads
+  and `synth_100000_clf` at both thread counts are **invalid in run G** and were
+  re-measured in run K. The remaining 11 configurations of run G ended before 15:51.
+- The remainder (A/B, K, I, J, H) was relaunched behind an idle gate (six consecutive
+  20 s samples under 10% CPU by per-process CPU-time deltas; Windows' processor-time
+  counters read 90–100% on this machine while the process table shows ~1.5 of 8 cores
+  busy, so they could not be used).
+
+#### Run G: linear and logistic workflows, 8 tasks × {1, 4 threads} × {R, Rust native, Python native}
+
+480 trials planned, 431 run before the chain was stopped (1 R timeout, see the
+disturbance log); 13 configurations valid, 3 re-measured in run K.
+
+Full per-phase tables for the 13 valid configurations (medians; `—` = not measured on
+that system; allocation rows: Rust counts and MB requested, R-level MB for the workflow
+fit):
+
+#### ames_reg (2930 rows, linear_reg, 1 thread, 10 resamples) — trials: {'ok': 30}, n(R/Py/Rust)=10/10/10
+
+| phase | R | Python wrapper | Rust native | R / Rust | R / Python | Python / Rust |
+|---|---|---|---|---|---|---|
+| library load / import | 2.17 s | 580 ms | — | — | 3.75× | — |
+| CSV load -> table | 10.6 ms | 9.04 ms | 5.54 ms | 1.92× | 1.17× | 1.63× |
+| workflow fit, cold | 59.5 ms | 2.54 ms | 3.54 ms | 16.8× | 23.4× | 0.719× |
+| workflow fit, warm (median of 30) | 114 ms | 2.4 ms | 3.11 ms | 36.6× | 47.5× | 0.77× |
+| model-only fit, cold | 21 ms | — | 2.26 ms | 9.3× | — | — |
+| predict | 12 ms | 175 µs | 21.6 µs | 557× | 68.5× | 8.13× |
+| resampling (cv) | 2.75 s | 32.1 ms | 43.6 ms | 63.1× | 85.8× | 0.735× |
+| wall (cold process) | 14.2 s | 932 ms | 352 ms | 40.2× | 15.2× | 2.64× |
+| peak working set | 389 MB | 80.8 MB | 8.77 MB | 44.4× | 4.81× | 9.22× |
+| allocations, workflow fit (count) | — | — | 817 | — | — | — |
+| allocations, workflow fit (MB) | 8.25 MB | — | 4.01 MB | 2.05× | — | — |
+| allocations, cv (count) | — | — | 11,867 | — | — | — |
+| allocations, cv (MB) | — | — | 52.1 MB | — | — | — |
+
+#### ames_reg (2930 rows, linear_reg, 4 threads, 10 resamples) — trials: {'ok': 30}, n(R/Py/Rust)=10/10/10
+
+| phase | R | Python wrapper | Rust native | R / Rust | R / Python | Python / Rust |
+|---|---|---|---|---|---|---|
+| library load / import | 2.14 s | 598 ms | — | — | 3.59× | — |
+| CSV load -> table | 9.76 ms | 8.98 ms | 4.14 ms | 2.36× | 1.09× | 2.17× |
+| workflow fit, cold | 56.5 ms | 2.67 ms | 3.2 ms | 17.6× | 21.2× | 0.833× |
+| workflow fit, warm (median of 30) | 105 ms | 2.57 ms | 3 ms | 35.1× | 41.1× | 0.855× |
+| model-only fit, cold | 19.5 ms | — | 2.05 ms | 9.53× | — | — |
+| predict | 13.2 ms | 214 µs | 23.4 µs | 565× | 61.9× | 9.13× |
+| resampling (cv) | 15.2 s | 18.8 ms | 22.5 ms | 676× | 806× | 0.839× |
+| wall (cold process) | 27.6 s | 926 ms | 256 ms | 108× | 29.8× | 3.62× |
+| peak working set | 411 MB | 89 MB | 16.4 MB | 25.1× | 4.62× | 5.43× |
+| allocations, workflow fit (count) | — | — | 817 | — | — | — |
+| allocations, workflow fit (MB) | 8.25 MB | — | 4.01 MB | 2.05× | — | — |
+| allocations, cv (count) | — | — | 11,921 | — | — | — |
+| allocations, cv (MB) | — | — | 52.1 MB | — | — | — |
+
+#### iris_clf (150 rows, logistic_reg, 1 thread, 10 resamples) — trials: {'ok': 30}, n(R/Py/Rust)=10/10/10
+
+| phase | R | Python wrapper | Rust native | R / Rust | R / Python | Python / Rust |
+|---|---|---|---|---|---|---|
+| library load / import | 6.07 s | 1.93 s | — | — | 3.15× | — |
+| CSV load -> table | 19.4 ms | 8.71 ms | 703 µs | 27.6× | 2.23× | 12.4× |
+| workflow fit, cold | 80.9 ms | 230 µs | 148 µs | 549× | 351× | 1.56× |
+| workflow fit, warm (median of 30) | 89.8 ms | 99.7 µs | 115 µs | 784× | 902× | 0.87× |
+| model-only fit, cold | 45.9 ms | — | 200 µs | 230× | — | — |
+| predict | 22.8 ms | 32.4 µs | 10.5 µs | 2.16e+03× | 706× | 3.07× |
+| resampling (cv) | 4.07 s | 1.58 ms | 1.82 ms | 2.23e+03× | 2.57e+03× | 0.87× |
+| tune | 11 s | 31.9 ms | 30.3 ms | 363× | 346× | 1.05× |
+| wall (cold process) | 36 s | 2.55 s | 240 ms | 150× | 14.1× | 10.6× |
+| peak working set | 357 MB | 77.3 MB | 5.16 MB | 69.1× | 4.61× | 15× |
+| allocations, workflow fit (count) | — | — | 235 | — | — | — |
+| allocations, workflow fit (MB) | 0.291 MB | — | 0.102 MB | 2.86× | — | — |
+| allocations, cv (count) | — | — | 3,396 | — | — | — |
+| allocations, cv (MB) | — | — | 1.34 MB | — | — | — |
+
+tune_candidates: `20`
+
+#### iris_clf (150 rows, logistic_reg, 4 threads, 10 resamples) — trials: {'ok': 30}, n(R/Py/Rust)=10/10/10
+
+| phase | R | Python wrapper | Rust native | R / Rust | R / Python | Python / Rust |
+|---|---|---|---|---|---|---|
+| library load / import | 3.87 s | 635 ms | — | — | 6.1× | — |
+| CSV load -> table | 13.6 ms | 4.13 ms | 445 µs | 30.6× | 3.3× | 9.27× |
+| workflow fit, cold | 55.7 ms | 180 µs | 99 µs | 563× | 310× | 1.82× |
+| workflow fit, warm (median of 30) | 50.9 ms | 64.3 µs | 66.3 µs | 767× | 792× | 0.968× |
+| model-only fit, cold | 35 ms | — | 128 µs | 274× | — | — |
+| predict | 15 ms | 24.9 µs | 7.5 µs | 2e+03× | 603× | 3.31× |
+| resampling (cv) | 18.6 s | 974 µs | 1.03 ms | 1.8e+04× | 1.91e+04× | 0.947× |
+| tune | 2.4 s | 6.11 ms | 6.69 ms | 360× | 394× | 0.913× |
+| wall (cold process) | 31.5 s | 892 ms | 102 ms | 308× | 35.3× | 8.73× |
+| peak working set | 365 MB | 77.8 MB | 5.87 MB | 62.1× | 4.69× | 13.2× |
+| allocations, workflow fit (count) | — | — | 235 | — | — | — |
+| allocations, workflow fit (MB) | 0.291 MB | — | 0.102 MB | 2.86× | — | — |
+| allocations, cv (count) | — | — | 3,450 | — | — | — |
+| allocations, cv (MB) | — | — | 1.37 MB | — | — | — |
+
+tune_candidates: `20`
+
+#### penguins_clf (333 rows, logistic_reg, 1 thread, 10 resamples) — trials: {'ok': 30}, n(R/Py/Rust)=10/10/10
+
+| phase | R | Python wrapper | Rust native | R / Rust | R / Python | Python / Rust |
+|---|---|---|---|---|---|---|
+| library load / import | 5.63 s | 1.93 s | — | — | 2.92× | — |
+| CSV load -> table | 21.8 ms | 15.5 ms | 1.47 ms | 14.8× | 1.41× | 10.5× |
+| workflow fit, cold | 173 ms | 533 µs | 497 µs | 347× | 324× | 1.07× |
+| workflow fit, warm (median of 30) | 132 ms | 374 µs | 366 µs | 361× | 354× | 1.02× |
+| model-only fit, cold | 38.6 ms | — | 451 µs | 85.7× | — | — |
+| predict | 25.1 ms | 50.9 µs | 12.6 µs | 1.99e+03× | 494× | 4.04× |
+| resampling (cv) | 3.88 s | 6.89 ms | 6.36 ms | 610× | 564× | 1.08× |
+| tune | 11.1 s | 109 ms | 190 ms | 58.5× | 102× | 0.572× |
+| wall (cold process) | 34.6 s | 2.93 s | 402 ms | 86.1× | 11.8× | 7.29× |
+| peak working set | 358 MB | 77.5 MB | 5.34 MB | 67.1× | 4.62× | 14.5× |
+| allocations, workflow fit (count) | — | — | 476 | — | — | — |
+| allocations, workflow fit (MB) | 1.22 MB | — | 0.378 MB | 3.22× | — | — |
+| allocations, cv (count) | — | — | 6,576 | — | — | — |
+| allocations, cv (MB) | — | — | 4.97 MB | — | — | — |
+
+tune_candidates: `20`
+
+#### penguins_clf (333 rows, logistic_reg, 4 threads, 10 resamples) — trials: {'ok': 30}, n(R/Py/Rust)=10/10/10
+
+| phase | R | Python wrapper | Rust native | R / Rust | R / Python | Python / Rust |
+|---|---|---|---|---|---|---|
+| library load / import | 12.2 s | 2.69 s | — | — | 4.54× | — |
+| CSV load -> table | 34.8 ms | 14.2 ms | 1.63 ms | 21.3× | 2.44× | 8.72× |
+| workflow fit, cold | 205 ms | 577 µs | 529 µs | 388× | 356× | 1.09× |
+| workflow fit, warm (median of 30) | 192 ms | 398 µs | 357 µs | 539× | 484× | 1.11× |
+| model-only fit, cold | 30.7 ms | — | 491 µs | 62.5× | — | — |
+| predict | 28.4 ms | 52.4 µs | 13.1 µs | 2.18e+03× | 542× | 4.02× |
+| resampling (cv) | 52.5 s | 6.3 ms | 6.59 ms | 7.97e+03× | 8.33e+03× | 0.957× |
+| tune | 7.9 s | 63.1 ms | 64.6 ms | 122× | 125× | 0.976× |
+| wall (cold process) | 114 s | 3.88 s | 284 ms | 403× | 29.5× | 13.7× |
+| peak working set | 364 MB | 78.4 MB | 6.25 MB | 58.3× | 4.64× | 12.5× |
+| allocations, workflow fit (count) | — | — | 476 | — | — | — |
+| allocations, workflow fit (MB) | 1.22 MB | — | 0.378 MB | 3.22× | — | — |
+| allocations, cv (count) | — | — | 6,626 | — | — | — |
+| allocations, cv (MB) | — | — | 4.99 MB | — | — | — |
+
+tune_candidates: `20`
+
+#### penguins_reg (342 rows, linear_reg, 1 thread, 10 resamples) — trials: {'ok': 30}, n(R/Py/Rust)=10/10/10
+
+| phase | R | Python wrapper | Rust native | R / Rust | R / Python | Python / Rust |
+|---|---|---|---|---|---|---|
+| library load / import | 5.33 s | 1.54 s | — | — | 3.46× | — |
+| CSV load -> table | 13 ms | 9.29 ms | 1.28 ms | 10.2× | 1.4× | 7.27× |
+| workflow fit, cold | 122 ms | 214 µs | 131 µs | 931× | 569× | 1.64× |
+| workflow fit, warm (median of 30) | 123 ms | 77.2 µs | 78.8 µs | 1.56e+03× | 1.59e+03× | 0.979× |
+| model-only fit, cold | 15 ms | — | 77.8 µs | 192× | — | — |
+| predict | 21.3 ms | 33.2 µs | 8.5 µs | 2.51e+03× | 641× | 3.91× |
+| resampling (cv) | 3.8 s | 1.5 ms | 1.76 ms | 2.16e+03× | 2.53e+03× | 0.853× |
+| wall (cold process) | 22.8 s | 2.19 s | 129 ms | 177× | 10.4× | 16.9× |
+| peak working set | 357 MB | 77.7 MB | 5.14 MB | 69.5× | 4.6× | 15.1× |
+| allocations, workflow fit (count) | — | — | 375 | — | — | — |
+| allocations, workflow fit (MB) | 0.375 MB | — | 0.189 MB | 1.98× | — | — |
+| allocations, cv (count) | — | — | 5,446 | — | — | — |
+| allocations, cv (MB) | — | — | 2.65 MB | — | — | — |
+
+#### penguins_reg (342 rows, linear_reg, 4 threads, 10 resamples) — trials: {'ok': 30}, n(R/Py/Rust)=10/10/10
+
+| phase | R | Python wrapper | Rust native | R / Rust | R / Python | Python / Rust |
+|---|---|---|---|---|---|---|
+| library load / import | 3.33 s | 864 ms | — | — | 3.86× | — |
+| CSV load -> table | 9.12 ms | 9.12 ms | 1.04 ms | 8.75× | 1× | 8.75× |
+| workflow fit, cold | 79.5 ms | 166 µs | 129 µs | 617× | 479× | 1.29× |
+| workflow fit, warm (median of 30) | 80.1 ms | 71.1 µs | 66.6 µs | 1.2e+03× | 1.13e+03× | 1.07× |
+| model-only fit, cold | 12.7 ms | — | 83.2 µs | 152× | — | — |
+| predict | 15.4 ms | 23.1 µs | 7.6 µs | 2.03e+03× | 668× | 3.04× |
+| resampling (cv) | 16.1 s | 1.24 ms | 1.73 ms | 9.34e+03× | 1.3e+04× | 0.718× |
+| wall (cold process) | 28.7 s | 1.21 s | 94.7 ms | 303× | 23.7× | 12.8× |
+| peak working set | 365 MB | 77.9 MB | 5.61 MB | 65× | 4.68× | 13.9× |
+| allocations, workflow fit (count) | — | — | 375 | — | — | — |
+| allocations, workflow fit (MB) | 0.375 MB | — | 0.189 MB | 1.98× | — | — |
+| allocations, cv (count) | — | — | 5,500 | — | — | — |
+| allocations, cv (MB) | — | — | 2.68 MB | — | — | — |
+
+#### synth_100000_reg (100000 rows, linear_reg, 1 thread, 10 resamples) — trials 5–6 mildly disturbed (see log); trials: {'ok': 30}, n(R/Py/Rust)=10/10/10
+
+| phase | R | Python wrapper | Rust native | R / Rust | R / Python | Python / Rust |
+|---|---|---|---|---|---|---|
+| library load / import | 2.83 s | 989 ms | — | — | 2.86× | — |
+| CSV load -> table | 1.12 s | 182 ms | 223 ms | 5.04× | 6.19× | 0.815× |
+| workflow fit, cold | 837 ms | 77.6 ms | 67.8 ms | 12.3× | 10.8× | 1.14× |
+| workflow fit, warm (median of 30) | 348 ms | 66.1 ms | 74.3 ms | 4.68× | 5.26× | 0.89× |
+| model-only fit, cold | 108 ms | — | 24.6 ms | 4.38× | — | — |
+| predict | 94.3 ms | 4.88 ms | 441 µs | 214× | 19.3× | 11.1× |
+| resampling (cv) | 6.93 s | 927 ms | 920 ms | 7.53× | 7.47× | 1.01× |
+| wall (cold process) | 40.4 s | 7.67 s | 8.63 s | 4.68× | 5.27× | 0.888× |
+| peak working set | 651 MB | 144 MB | 72.6 MB | 8.96× | 4.51× | 1.99× |
+| allocations, workflow fit (count) | — | — | 573 | — | — | — |
+| allocations, workflow fit (MB) | 137 MB | — | 93.8 MB | 1.46× | — | — |
+| allocations, cv (count) | — | — | 8,036 | — | — | — |
+| allocations, cv (MB) | — | — | 1.21e+03 MB | — | — | — |
+
+#### synth_10000_clf (10000 rows, logistic_reg, 1 thread, 10 resamples) — trials: {'ok': 30}, n(R/Py/Rust)=10/10/10
+
+| phase | R | Python wrapper | Rust native | R / Rust | R / Python | Python / Rust |
+|---|---|---|---|---|---|---|
+| library load / import | 3.51 s | 883 ms | — | — | 3.97× | — |
+| CSV load -> table | 91.4 ms | 28.5 ms | 21.5 ms | 4.25× | 3.21× | 1.33× |
+| workflow fit, cold | 248 ms | 15.4 ms | 15.5 ms | 16× | 16.1× | 0.992× |
+| workflow fit, warm (median of 30) | 200 ms | 21.5 ms | 20.9 ms | 9.58× | 9.31× | 1.03× |
+| model-only fit, cold | 99.9 ms | — | 15.4 ms | 6.5× | — | — |
+| predict | 32.4 ms | 294 µs | 90 µs | 360× | 110× | 3.27× |
+| resampling (cv) | 5.36 s | 215 ms | 192 ms | 27.9× | 25× | 1.12× |
+| tune | 12.3 s | 5.79 s | 4.83 s | 2.54× | 2.12× | 1.2× |
+| wall (cold process) | 36.9 s | 8.11 s | 6.83 s | 5.39× | 4.54× | 1.19× |
+| peak working set | 435 MB | 87.1 MB | 14.6 MB | 29.9× | 5× | 5.97× |
+| allocations, workflow fit (count) | — | — | 668 | — | — | — |
+| allocations, workflow fit (MB) | 34.8 MB | — | 15.4 MB | 2.25× | — | — |
+| allocations, cv (count) | — | — | 9,386 | — | — | — |
+| allocations, cv (MB) | — | — | 201 MB | — | — | — |
+
+tune_candidates: `20`
+
+#### synth_10000_clf (10000 rows, logistic_reg, 4 threads, 10 resamples) — trials: {'ok': 30}, n(R/Py/Rust)=10/10/10
+
+| phase | R | Python wrapper | Rust native | R / Rust | R / Python | Python / Rust |
+|---|---|---|---|---|---|---|
+| library load / import | 3.54 s | 1.09 s | — | — | 3.25× | — |
+| CSV load -> table | 68.2 ms | 35.2 ms | 26.9 ms | 2.53× | 1.94× | 1.31× |
+| workflow fit, cold | 161 ms | 20.6 ms | 20.4 ms | 7.91× | 7.81× | 1.01× |
+| workflow fit, warm (median of 30) | 173 ms | 19.6 ms | 19.4 ms | 8.92× | 8.82× | 1.01× |
+| model-only fit, cold | 75.7 ms | — | 16.6 ms | 4.57× | — | — |
+| predict | 24.5 ms | 429 µs | 111 µs | 220× | 57× | 3.85× |
+| resampling (cv) | 17.4 s | 109 ms | 112 ms | 155× | 160× | 0.97× |
+| tune | 4.99 s | 1.99 s | 2.11 s | 2.36× | 2.51× | 0.941× |
+| wall (cold process) | 45.7 s | 4.46 s | 3.74 s | 12.2× | 10.3× | 1.19× |
+| peak working set | 429 MB | 106 MB | 33.1 MB | 13× | 4.06× | 3.2× |
+| allocations, workflow fit (count) | — | — | 668 | — | — | — |
+| allocations, workflow fit (MB) | 34.8 MB | — | 15.4 MB | 2.25× | — | — |
+| allocations, cv (count) | — | — | 9,440 | — | — | — |
+| allocations, cv (MB) | — | — | 201 MB | — | — | — |
+
+tune_candidates: `20`
+
+#### synth_10000_reg (10000 rows, linear_reg, 1 thread, 10 resamples) — trials: {'ok': 30}, n(R/Py/Rust)=10/10/10
+
+| phase | R | Python wrapper | Rust native | R / Rust | R / Python | Python / Rust |
+|---|---|---|---|---|---|---|
+| library load / import | 2.15 s | 595 ms | — | — | 3.62× | — |
+| CSV load -> table | 43.8 ms | 16 ms | 18.2 ms | 2.41× | 2.74× | 0.878× |
+| workflow fit, cold | 85.4 ms | 3.97 ms | 5.44 ms | 15.7× | 21.5× | 0.73× |
+| workflow fit, warm (median of 30) | 128 ms | 3.57 ms | 4.95 ms | 25.9× | 35.9× | 0.721× |
+| model-only fit, cold | 12.6 ms | — | 1.95 ms | 6.49× | — | — |
+| predict | 14.3 ms | 357 µs | 30.6 µs | 466× | 39.9× | 11.7× |
+| resampling (cv) | 3.14 s | 52.6 ms | 69.3 ms | 45.2× | 59.6× | 0.759× |
+| wall (cold process) | 15.5 s | 1.02 s | 498 ms | 31.1× | 15.1× | 2.06× |
+| peak working set | 396 MB | 84.7 MB | 12.5 MB | 31.8× | 4.67× | 6.8× |
+| allocations, workflow fit (count) | — | — | 553 | — | — | — |
+| allocations, workflow fit (MB) | 13.7 MB | — | 9.03 MB | 1.51× | — | — |
+| allocations, cv (count) | — | — | 7,886 | — | — | — |
+| allocations, cv (MB) | — | — | 124 MB | — | — | — |
+
+#### synth_10000_reg (10000 rows, linear_reg, 4 threads, 10 resamples) — trials: {'ok': 30}, n(R/Py/Rust)=10/10/10
+
+| phase | R | Python wrapper | Rust native | R / Rust | R / Python | Python / Rust |
+|---|---|---|---|---|---|---|
+| library load / import | 5.17 s | 1.39 s | — | — | 3.73× | — |
+| CSV load -> table | 82 ms | 30.7 ms | 29.1 ms | 2.81× | 2.67× | 1.05× |
+| workflow fit, cold | 205 ms | 6.03 ms | 8.27 ms | 24.8× | 34× | 0.729× |
+| workflow fit, warm (median of 30) | 162 ms | 6.43 ms | 7.7 ms | 21× | 25.1× | 0.834× |
+| model-only fit, cold | 32.4 ms | — | 2.86 ms | 11.3× | — | — |
+| predict | 37 ms | 620 µs | 36.9 µs | 1e+03× | 59.7× | 16.8× |
+| resampling (cv) | 21.2 s | 38.4 ms | 41.9 ms | 505× | 551× | 0.917× |
+| wall (cold process) | 37.5 s | 2.15 s | 662 ms | 56.6× | 17.4× | 3.25× |
+| peak working set | 411 MB | 96.8 MB | 22.7 MB | 18.1× | 4.25× | 4.27× |
+| allocations, workflow fit (count) | — | — | 553 | — | — | — |
+| allocations, workflow fit (MB) | 13.7 MB | — | 9.03 MB | 1.51× | — | — |
+| allocations, cv (count) | — | — | 7,940 | — | — | — |
+| allocations, cv (MB) | — | — | 124 MB | — | — | — |
+
+What run G shows (medians over 10 cold trials; "×" = R time / candidate time):
+
+- **Small data (150–342 rows).** The workflow fit is 350–930× faster than R cold and
+  360–1560× warm; 10-fold CV is 610–2200× faster (R 3.8–4.1 s, Rust 1.8–6.4 ms);
+  `predict` 2000–2500×. The framework-overhead category is where the Rust implementation
+  pays off most: R's cost here is orchestration, not arithmetic.
+- **Tuning (20 penalties × 10 folds, workflow-level: glmnet ridge vs native IRLS).**
+  iris 11 s vs 30 ms (360×), penguins 11.1 s vs 190 ms (59×), synth_10000_clf 12.3 s
+  vs 4.8 s (2.5×). The ratio collapses with n because glmnet's coordinate descent fits a
+  whole penalty path per fold while the port runs one IRLS per candidate; this is a
+  different algorithm, as the category says.
+- **Mid-size data.** ames (2930 rows, `lm`): workflow fit 17× cold / 37× warm, CV 63×,
+  peak memory 44×. synth_10000_reg: workflow fit 16× / 26×, CV 45×. synth_10000_clf
+  (`glm` IRLS vs the IRLS port): workflow fit 16× cold / 9.6× warm, CV 28×. The warm
+  ratio is the one to compare with run D, where the L-BFGS backend was 0.9× of `glm`.
+- **4 threads.** R's `multisession` adds 12–49 s of worker start-up to every CV phase, so
+  R is slower at 4 threads than at 1 on every task in this run. Rust and Python gain
+  1.7–2× on CV and 2.3× on tuning at 10k rows (CV 69 → 36 ms, 192 → 112 ms; tune
+  4.83 → 2.11 s) and nothing on the 342-row tasks (1.7 ms either way).
+- **Memory.** Peak working set: R 357–435 MB, Python wrapper 77–106 MB, Rust binary
+  5–33 MB. Allocation counts (Rust): 235–817 allocations for a workflow fit
+  (0.10–15.4 MB requested), 3.4k–12k for 10-fold CV. R allocates 1.5–3.2× the bytes at
+  the R level alone for the same workflow fit.
+- **100k rows (`synth_100000_reg`, 1 thread).** Workflow fit 12× cold / 4.7× warm
+  (R 348 ms vs 74 ms), 10-fold CV 7.5× (6.9 s vs 0.92 s), `predict` 214×, peak memory
+  651 vs 73 MB (9×). The gap narrows with n as both sides become arithmetic-bound; the
+  framework overhead that dominates the small tasks is a fixed cost.
+- **Cold wall time.** R 14–37 s at 1 thread, of which 2.2–6.1 s is attaching tidymodels
+  and the rest the 30-iteration warm loop; Python 0.9–8.1 s (0.6–1.9 s import); Rust
+  0.09–6.8 s.
+
+**Python wrapper vs Rust binary.** On compute-bound phases (logistic fit, CV and tuning
+at 10k rows) the two are equal within ±10%. On the OLS workflows the Python wrapper is
+15–28% *faster* than the Rust binary (ames CV 32 vs 44 ms; synth_10000_reg CV 53 vs
+69 ms; warm workflow fit 2.4 vs 3.1 ms and 3.6 vs 5.0 ms). Both call the same native
+code; the Rust binary additionally counts allocations and, as noted above, memsets every
+zero-filled buffer. The A/B of the two driver builds (`…-ab-old` vs `…-ab-new`, Rust only, same tasks) is queued behind the idle gate; its result goes here. Until then, read the Python column as the cleaner timing of the native code on the OLS tasks.

@@ -1,6 +1,6 @@
 //! Reproducible resampling with rsample 1.3.2 semantics.
 //!
-//! Membership is never random beyond the explicit [`Seed`]. R's RNG and ChaCha cannot
+//! Membership is never random beyond the explicit [`Seed`](tidyrustmodels_core::Seed). R's RNG and ChaCha cannot
 //! agree, so parity tests load shared row ids through [`Folds::from_assignments`] /
 //! [`Folds::from_splits`] (ADR-0006); the generators here reproduce rsample's
 //! *algorithms* (ADR-0013): `vfold_cv` (with repeats), `bootstraps`, `mc_cv`, `loo_cv`,

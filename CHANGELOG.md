@@ -6,6 +6,20 @@ First vertical slice. Everything listed here is backed by tests recorded in
 VERIFICATION.md; nothing is claimed beyond those records.
 
 ### Added
+- Release preparation for 0.1.0 (ROADMAP.md Phase 6): feature matrix `docs/FEATURES.md`,
+  release notes `docs/releases/0.1.0.md`, installation section in README.md, Rust and
+  Python examples `ames_tuning` and `ames_workflow_sets`, release packaging workflow
+  (`.github/workflows/release.yml`, defined, not yet executed).
+- Benchmark protocol (ROADMAP.md Phase 5): drivers extended to trees, forests,
+  boosting, case weights, repeated / bootstrap resampling, tuning selection
+  (`select_s`) and workflow sets (`wfs_s`); allocation counting in the Rust driver and
+  R-level allocation via `bench::bench_memory`; task registry `benchmarks/tasks.py`
+  with categories (framework-overhead vs workflow-level) and parity references;
+  1e6-row scaling data with a frequency-weight column; power plan and power source
+  recorded in `env.json`; protocol defaults of 10 trials, 30 warm iterations, 10 folds
+  and 20-point grids; `--rust-binary` for A/B runs of the driver itself (the counting
+  allocator now forwards `alloc_zeroed`; the first protocol run measured the cost of
+  not doing so, see BENCHMARKS.md).
 - Workflow sets (ADR-0016, crate `tidyrustmodels-workflowsets`): `workflow_set` (crossed
   or paired preprocessors x models, workflowsets' ids and default names),
   `WorkflowSet::option_grid` / `workflow_map` (tune or resample every workflow on the
