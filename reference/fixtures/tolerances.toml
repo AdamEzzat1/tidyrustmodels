@@ -4,6 +4,8 @@
 #
 # `rel` = relative tolerance |a - b| <= rel * max(|a|, |b|); `abs` = absolute tolerance.
 # A comparison passes if EITHER bound holds. Discrete outputs are compared exactly.
+# Lookup order: `[platform.<os>-<arch>.tasks.<task>]` (only on that platform; ADR-0017,
+# end of this file), then `[tasks.<task>]`, then `[defaults]`.
 
 [defaults]
 # Level 1: fitted preprocessing statistics and baked values. Both systems compute the
@@ -216,3 +218,51 @@ summary_rel = 1e-6
 summary_abs = 1e-6
 native_summary_rel = 1e-6
 native_summary_abs = 1e-6
+
+# ---------------------------------------------------------------------------------
+# Platform-specific bounds (ADR-0017). The R fixtures were produced on Windows
+# (`session.platform` = x86_64-w64-mingw32), where R's xgboost and the Rust port share
+# the C runtime's `expf` / `logf` and agree bit for bit. glibc (Linux) and Apple's libm
+# (macOS arm64) round those functions differently in the last float32 ulp; the ulp
+# enters the boosting port through the sigmoid / softmax gradients and is amplified
+# by the gradient and hessian sums into the tree statistics (`xgb_tree_*`: loss
+# changes, base weights, split values) and, through the per-fold metrics, into the
+# CV summary statistics (`native_summary_*`). Predictions, probabilities and per-fold
+# metrics stay inside the one-ulp bounds above on both platforms (measured: assessment
+# probabilities <= 1.2e-7 abs, fold metrics <= 4.2e-9 rel). Regression boosters
+# (no exp) are identical on all three platforms.
+#
+# A section applies only when the test binary's `<os>-<arch>` matches; the Windows
+# bounds above are untouched. Every value is the maximum measured on the named GitHub
+# runner image, 2026-10-14 (CI run 38616615538, commit 578a958), rounded up to two
+# significant digits; measured maxima are quoted per key. Only the keys that a measured
+# row needed are set; everything else keeps the fixture-platform bound.
+
+# Linux x86_64 (ubuntu-24.04, glibc): 5 rows exceeded the Windows bounds.
+[platform.linux-x86_64.tasks.synth_multi_xgb]
+xgb_tree_rel = 3.0e-5          # fold boosters' loss changes 2.9e-5, base weights 2.8e-5, split values 4.6e-6
+
+[platform.linux-x86_64.tasks.synth_multi_xgb_wfreq]
+native_summary_rel = 1.5e-8    # std_err mn_log_loss 1.4e-8, std_err brier_class 1.5e-9
+native_summary_abs = 1.0e-9    # mean mn_log_loss 7.2e-10
+
+# macOS arm64 (macos-26-arm64, Apple libm): 17 rows exceeded the Windows bounds.
+[platform.macos-aarch64.tasks.synth_clf_xgb]
+native_summary_rel = 4.0e-10   # std_err mn_log_loss 3.6e-10
+native_summary_abs = 2.0e-10   # mean mn_log_loss 1.5e-10
+
+[platform.macos-aarch64.tasks.synth_clf_xgb_wimp]
+native_summary_rel = 3.0e-9    # std_err mn_log_loss 2.8e-9
+native_summary_abs = 5.0e-10   # std_err mn_log_loss 4.4e-10
+
+[platform.macos-aarch64.tasks.synth_multi_xgb]
+xgb_tree_rel = 3.0e-5          # fold boosters' loss changes 2.9e-5, base weights 2.8e-5, split values 1.0e-5
+native_summary_rel = 6.0e-9    # std_err mn_log_loss 5.3e-9
+native_summary_abs = 1.5e-9    # mean mn_log_loss 1.3e-9
+
+[platform.macos-aarch64.tasks.penguins_species_xgb]
+xgb_tree_rel = 2.5e-5          # fold boosters' loss changes 2.4e-5 (3.3e-6 abs), base weights 1.9e-5
+
+[platform.macos-aarch64.tasks.synth_multi_xgb_wfreq]
+native_summary_rel = 1.5e-8    # std_err mn_log_loss 1.4e-8
+native_summary_abs = 1.0e-9    # mean mn_log_loss 8.9e-10

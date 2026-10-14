@@ -28,6 +28,15 @@ jobs:
       # Includes the differential suite against the committed R fixtures (no R needed).
       - run: cargo test --workspace
       - run: cargo test --workspace --release --test differential
+      # The per-quantity report (platform, bounds in force, max diffs) is the
+      # measurement behind tolerances.toml's platform sections (ADR-0017); keep it
+      # whether or not the suite passed.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: differential-report-${{ matrix.os }}
+          path: target/differential_report.md
+          if-no-files-found: ignore
       - run: cargo doc --workspace --no-deps
       - name: Build without the linfa backend
         run: cargo check -p tidyrustmodels-models --no-default-features --features smartcore

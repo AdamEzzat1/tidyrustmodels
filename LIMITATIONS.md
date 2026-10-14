@@ -75,6 +75,16 @@
   against the pinned fixtures it agrees to round-off (3.3e-13 rel) where the L-BFGS
   engines are bounded at ~1e-8 by the optimizer difference.
 
+- The xgboost port is bit-exact against R's xgboost **on the fixture platform**
+  (Windows x86_64). On Linux x86_64 and macOS arm64 (first CI run, 2026-10-14) the
+  classification boosters differ from the Windows fixtures by the C runtime's float32
+  `expf` / `logf` ulp: fold boosters' tree statistics up to 2.9e-5 relative, CV
+  summary statistics up to 1.4e-8 relative, probabilities ≤ 1.2e-7 absolute;
+  regression boosters and every other model are identical on all three platforms.
+  Those platforms carry measured bounds in `tolerances.toml` (ADR-0017). Whether the
+  port matches an xgboost *built on* Linux or macOS is not measured (no fixtures from
+  R on those platforms).
+
 ## Findings from benchmarking (run `2026-10-12-win11-i7-11390H`, BENCHMARKS.md)
 
 - OLS workflows: 8–240× faster per workflow fit (prep+bake+fit) and 5–57× faster end-to-end than R tidymodels

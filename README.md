@@ -19,7 +19,9 @@ What is verified today (VERIFICATION.md):
   `nnet` to its own convergence residual (3.5e-7) on two more; rpart decision trees are
   reproduced node for node on five tasks; ranger-style random forests agree with R
   within 4 standard errors over 10 seeds on five more; xgboost boosters are
-  reproduced tree for tree, including tidymodels' sparse-data path on Ames; logistic regression matches to ~1e-8 relative
+  reproduced tree for tree, including tidymodels' sparse-data path on Ames (bit-exact
+  on Windows, where the fixtures were made; within the C runtime's float32 `expf` ulp
+  on Linux / macOS, ADR-0017); logistic regression matches to ~1e-8 relative
   (same objective, different optimizer).
 - All three engines (`linfa`, `smartcore`, `native`) reproduce exact analytic baselines
   that are independent of R. The default `native` engine ports R's own `lm.fit` and

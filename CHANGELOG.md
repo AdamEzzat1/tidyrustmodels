@@ -21,10 +21,21 @@ VERIFICATION.md; nothing is claimed beyond those records.
   identical folds).
 - Benchmark runner: `--ab-baseline <binary>` A/B mode (system `rust_base`, A-B / B-A
   trial order), drift fingerprints in every Rust driver row, `benchmarks/ab_report.py`.
-- First CI run on GitHub (2026-10-14, Ubuntu / Windows / macOS, rustc 1.99.0): one
-  clippy lint (`needless_late_init` in the rpart port; restructured, no semantic change,
-  differential suite exact) and the advisory RUSTSEC-2024-0436 (`paste`, reachable only
-  through linfa -> argmin) acknowledged in `deny.toml` and DEPENDENCIES.md.
+- First CI runs on GitHub (2026-10-14, Ubuntu / Windows / macOS, rustc 1.99.0): two
+  clippy lints (`needless_late_init` in the rpart port, `map_or_identity` in
+  workflowsets; restructured, no semantic change), the smartcore-only build of
+  `tidyrustmodels-models` (L-BFGS options unread without linfa; lint gated on the
+  feature) and the advisory RUSTSEC-2024-0436 (`paste`, reachable only through
+  linfa -> argmin) acknowledged in `deny.toml` and DEPENDENCIES.md.
+- Differential suite on Linux x86_64 and macOS arm64 (ADR-0017): the xgboost
+  classification tasks differ from the Windows-made fixtures by the C runtime's
+  `expf` / `logf` ulp, amplified into the fold boosters' tree statistics (≤ 2.9e-5
+  rel) and the CV summary statistics (≤ 1.4e-8 rel); everything else is identical on
+  all three platforms. `tolerances.toml` gains `[platform.<os>-<arch>.tasks.<task>]`
+  sections with the measured maxima (3 bounds on Linux, 11 on macOS); the Windows
+  bounds are unchanged and the report header names the platform and the bounds in
+  force. The "bit-exact against xgboost" record is now stated for the fixture
+  platform; Linux / macOS parity against an xgboost built there is not measured.
 
 ### Added
 - Release preparation for 0.1.0 (ROADMAP.md Phase 6): feature matrix `docs/FEATURES.md`,

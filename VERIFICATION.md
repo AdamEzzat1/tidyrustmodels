@@ -367,7 +367,10 @@ categorical splits, resampling (level 4) of forests.
 Executed 2026-10-13. `BoostTreeSpec` is a port of xgboost 3.2.1's single-threaded
 CPU `hist` booster (ADR-0011, Amendment B) verified against
 `parsnip::boost_tree() %>% set_engine("xgboost")` on five new tasks, two with
-non-default parameters. The comparison reads xgboost's own model JSON
+non-default parameters. The "exact (0)" entries below hold on the platform the
+fixtures were produced on (Windows x86_64, where R and the port share the C
+runtime's `expf`); on Linux and macOS the classification tasks differ by that
+function's last float32 ulp (see the cross-platform section below, ADR-0017). The comparison reads xgboost's own model JSON
 (`xgb.save.raw(raw_format = "json")`) and parsnip's raw margins:
 
 | task | outcome | nodes (full fit) | structure, features, default directions | split values, leaves, weights, gains, hessians | margins / predictions / probabilities | fold boosters (5) |
@@ -836,6 +839,42 @@ The fold-complement fix of 2026-10-14 (quadratic scan in `Folds::from_assignment
 was checked the same way: fingerprints identical in A/B `2026-10-14-ab-complement`,
 differential suite (exact fold memberships against rsample, Phase 8h) and Python
 suite green.
+
+## The differential suite on Linux and macOS (2026-10-14)
+
+The repository was pushed to GitHub on 2026-10-14 and `.github/workflows/ci.yml` ran
+the suite for the first time off the machine that produced the fixtures (R on
+`x86_64-w64-mingw32`). Run 38616615538 (commit `578a958`, rustc 1.99.0, tolerances as
+measured on Windows): Windows 17 542 of 17 542 comparisons pass; Linux x86_64
+(ubuntu-24.04) 5 fail; macOS arm64 (macos-26-arm64) 17 fail. Every failing row is on
+one of the five xgboost classification tasks; the regression boosters, all other
+models, the recipes, metrics, resampling ids and tuning are identical on the three
+platforms (the maxima of every other row agree to the printed digit; comparison
+script in the session scratchpad, raw logs in the run).
+
+Cause (ADR-0017): the port's sigmoid / softmax / base-score logit call `f32::exp` /
+`f32::ln`, which resolve to the C runtime's `expf` / `logf`; Windows UCRT, glibc and
+Apple's libm differ in the last float32 ulp, and R's xgboost on Windows shares the
+UCRT result. Measured maxima of the affected quantities (max over the task's rows;
+Windows in the first column for reference):
+
+| quantity (classification boosters) | bound on the fixture platform | Windows | Linux x86_64 | macOS arm64 |
+|---|---|---|---|---|
+| fold boosters' loss changes (rel) | 2e-7 rel / 1e-6 abs | 6.1e-7 | 2.9e-5 (`synth_multi_xgb`) | 2.9e-5 |
+| fold boosters' base weights (rel) | 2e-7 rel / 1e-6 abs | 1.2e-5 (`synth_sparse_clf_xgb`, 4.2e-8 abs) | 2.8e-5 | 2.8e-5 |
+| fold boosters' split values and leaves (rel) | 2e-7 rel / 1e-6 abs | 4.8e-7 | 4.6e-6 | 1.0e-5 |
+| assessment probabilities (abs) | 1e-6 | 0 | 1.5e-8 | 1.2e-7 |
+| per-fold `mn_log_loss` / `brier_class` (rel) | 1e-6 | 4.4e-16 | 3.3e-9 | 4.2e-9 |
+| CV summary mean / std_err (rel) | 1e-12 (`native_summary`) | 1.3e-15 | 1.4e-8 | 1.4e-8 |
+
+Decision: `tolerances.toml` gains `[platform.<os>-<arch>.tasks.<task>]` sections that
+apply only on that platform (3 bounds on Linux, 11 on macOS, each set to the measured
+maximum rounded up to two digits and quoting the measurement); the Windows bounds are
+unchanged, so the bit-exact record above keeps being asserted where it was measured.
+The report header now names the platform, the fixtures' R platform and the number of
+platform bounds in force, and CI keeps `target/differential_report.md` as an artifact
+per OS. **Not measured:** whether the port is bit-exact against an xgboost built on
+Linux or macOS; that needs fixtures produced by R on those platforms.
 
 ## Test inventory
 

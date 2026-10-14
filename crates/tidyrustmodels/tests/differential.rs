@@ -28,16 +28,30 @@ fn load_json(rel: &str) -> Value {
 
 // ---------- tolerances.toml (tiny parser: [section] + key = number) ----------
 
+/// `<os>-<arch>` of the running test binary (`windows-x86_64`, `linux-x86_64`,
+/// `macos-aarch64`); the key of the `[platform.<id>.tasks.<task>]` sections.
+fn platform_id() -> String {
+    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+}
+
 struct Tolerances {
     defaults: BTreeMap<String, f64>,
     tasks: BTreeMap<String, BTreeMap<String, f64>>,
+    /// Bounds that apply only on this platform (ADR-0017): a measured allowance for
+    /// quantities that depend on the C runtime's `expf` / `logf`, which differs in the
+    /// last float32 ulp between Windows (where the R fixtures were produced), glibc and
+    /// Apple's libm. Keyed by task; looked up before `tasks` and `defaults`.
+    platform_tasks: BTreeMap<String, BTreeMap<String, f64>>,
+    platform: String,
 }
 
 impl Tolerances {
     fn load() -> Self {
         let text = std::fs::read_to_string(root().join("reference/fixtures/tolerances.toml")).unwrap();
+        let platform = platform_id();
         let mut defaults = BTreeMap::new();
         let mut tasks: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
+        let mut platform_tasks: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
         let mut section = String::new();
         for line in text.lines() {
             let line = line.split('#').next().unwrap().trim();
@@ -57,24 +71,45 @@ impl Tolerances {
                     .entry(t.to_string())
                     .or_default()
                     .insert(k.trim().to_string(), v);
+            } else if let Some(rest) = section.strip_prefix("platform.") {
+                // `[platform.<os>-<arch>.tasks.<task>]`; sections for other platforms
+                // are parsed (so a typo still fails) and dropped
+                let (id, t) = rest
+                    .split_once(".tasks.")
+                    .unwrap_or_else(|| panic!("tolerances.toml: section `[{section}]` must be `[platform.<os>-<arch>.tasks.<task>]`"));
+                if id == platform {
+                    platform_tasks
+                        .entry(t.to_string())
+                        .or_default()
+                        .insert(k.trim().to_string(), v);
+                }
+            } else {
+                panic!("tolerances.toml: unknown section `[{section}]`");
             }
         }
-        Tolerances { defaults, tasks }
+        Tolerances {
+            defaults,
+            tasks,
+            platform_tasks,
+            platform,
+        }
+    }
+
+    /// Number of platform-specific bounds in force on this platform.
+    fn platform_overrides(&self) -> usize {
+        self.platform_tasks.values().map(BTreeMap::len).sum()
     }
 
     fn get(&self, task: &str, key: &str) -> f64 {
-        self.tasks
-            .get(task)
-            .and_then(|t| t.get(key))
-            .or_else(|| self.defaults.get(key))
-            .copied()
+        self.lookup(task, key)
             .unwrap_or_else(|| panic!("no tolerance `{key}`"))
     }
 
     fn lookup(&self, task: &str, key: &str) -> Option<f64> {
-        self.tasks
+        self.platform_tasks
             .get(task)
             .and_then(|t| t.get(key))
+            .or_else(|| self.tasks.get(task).and_then(|t| t.get(key)))
             .or_else(|| self.defaults.get(key))
             .copied()
     }
@@ -96,13 +131,7 @@ impl Tolerances {
 
     fn pair(&self, task: &str, base: &str) -> (f64, f64) {
         let rel = self.get(task, &format!("{base}_rel"));
-        let abs = self
-            .tasks
-            .get(task)
-            .and_then(|t| t.get(&format!("{base}_abs")))
-            .or_else(|| self.defaults.get(&format!("{base}_abs")))
-            .copied()
-            .unwrap_or(0.0);
+        let abs = self.lookup(task, &format!("{base}_abs")).unwrap_or(0.0);
         (rel, abs)
     }
 }
@@ -123,6 +152,14 @@ struct Row {
 
 struct Report {
     rows: Vec<Row>,
+    /// `<os>-<arch>` the suite runs on and the number of platform-specific bounds in
+    /// force (ADR-0017), printed above the table so a report is never read without
+    /// knowing which bounds applied.
+    platform: String,
+    platform_overrides: usize,
+    /// `versions.platform` of every fixture read (R's `R.version$platform`): the
+    /// platform the reference values were produced on.
+    fixture_platforms: std::collections::BTreeSet<String>,
 }
 
 impl Report {
@@ -211,7 +248,16 @@ impl Report {
     }
 
     fn write_and_assert(&self) {
-        let mut md = String::from("| task | engine | level | quantity | n | max abs diff | max rel diff | bound | pass |\n|---|---|---|---|---|---|---|---|---|\n");
+        let fixture_platforms: Vec<&str> = self.fixture_platforms.iter().map(String::as_str).collect();
+        let mut md = format!(
+            "Platform `{}`; fixtures produced on R platform `{}`; {} platform-specific bound{} in force (`tolerances.toml` `[platform.{}.tasks.*]`, ADR-0017).\n\n",
+            self.platform,
+            if fixture_platforms.is_empty() { "unrecorded".to_string() } else { fixture_platforms.join("`, `") },
+            self.platform_overrides,
+            if self.platform_overrides == 1 { "" } else { "s" },
+            self.platform,
+        );
+        md.push_str("| task | engine | level | quantity | n | max abs diff | max rel diff | bound | pass |\n|---|---|---|---|---|---|---|---|---|\n");
         for r in &self.rows {
             md.push_str(&format!(
                 "| {} | {} | {} | {} | {} | {:.2e} | {:.2e} | {} | {} |\n",
@@ -774,11 +820,19 @@ fn matrix_columns(x: &DesignMatrix) -> Vec<(String, Vec<f64>)> {
 fn differential_against_r_fixtures() {
     let tol = Tolerances::load();
     let tasks = load_json("reference/tasks.json");
-    let mut report = Report { rows: Vec::new() };
+    let mut report = Report {
+        rows: Vec::new(),
+        platform: tol.platform.clone(),
+        platform_overrides: tol.platform_overrides(),
+        fixture_platforms: Default::default(),
+    };
 
     for task in tasks["tasks"].as_array().unwrap() {
         let id = task["id"].as_str().unwrap();
         let fx = load_json(&format!("reference/fixtures/r/{id}.json"));
+        if let Some(p) = fx["versions"]["platform"].as_str() {
+            report.fixture_platforms.insert(p.to_string());
+        }
         let split = load_json(&format!("reference/fixtures/splits/{id}.json"));
         let data = task_table(task);
         let train_ids: Vec<usize> = u32s(&split["initial"]["train"])

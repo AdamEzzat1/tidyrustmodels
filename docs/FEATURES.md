@@ -44,7 +44,7 @@ ranger 0.18.0, xgboost 3.2.1.1.
 | `multinom_reg` / `nnet` | `native`, `linfa`, `smartcore` | verified to nnet's convergence residual (Phase 8c) |
 | `decision_tree` / `rpart` | `native` (rpart 4.1.23 port) | verified node for node (Phase 8d) |
 | `rand_forest` / `ranger` | `native` (ranger growing rules, own RNG) | verified statistically, level 5 (Phase 8e) |
-| `boost_tree` / `xgboost` | `native` (xgboost 3.2.1 hist port) | verified tree for tree, float32 bounds (Phase 8f) |
+| `boost_tree` / `xgboost` | `native` (xgboost 3.2.1 hist port) | verified tree for tree, bit-exact on the fixture platform (Windows); on Linux / macOS within the C runtime's float32 `expf` ulp (Phase 8f, ADR-0017) |
 | `penalty` on logistic / multinomial | unscaled L2 on slopes | unit-tested; **not** glmnet-equivalent |
 | glmnet, SVM, kNN, MARS, neural nets, `tailor` post-processing | — | unsupported |
 
