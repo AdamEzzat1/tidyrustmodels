@@ -1,0 +1,131 @@
+/*-- scss:defaults --*/
+// Theme: the tidymodels mood (deep ink base, generous white space, one warm accent)
+// without its assets. Rust's terracotta is reserved for the Rust badge and tab.
+
+// Fonts are self-hosted (site/assets/fonts, see README); the stacks fall back to the
+// system fonts so the page never waits on a font file.
+$font-family-sans-serif: "Source Sans 3", "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif !default;
+$font-family-monospace: "JetBrains Mono", "IBM Plex Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace !default;
+$font-size-base: 1.02rem !default;
+$headings-font-weight: 650 !default;
+
+// palette
+$trm-ink: #1b2a41;        // navbar, headings
+$trm-ink-2: #2d4160;
+$trm-teal-grey: #5f7a8a;  // secondary text
+$trm-accent: #b5305e;     // links, active tab (raspberry family, not tidymodels' own)
+$trm-accent-2: #8f1f47;
+$trm-rust: #b7410e;       // Rust badge / tab only
+$trm-python: #2f7f6f;     // Python badge / tab only
+$trm-r: #4c6a8a;          // R bars in charts
+$trm-paper: #fbfbf9;
+$trm-paper-2: #f2f3f0;
+$trm-line: #d9dcd6;
+
+$body-bg: $trm-paper !default;
+$body-color: #22303f !default;
+$link-color: $trm-accent !default;
+$link-hover-color: $trm-accent-2 !default;
+$navbar-bg: $trm-ink !default;
+$navbar-fg: #f4f1ea !default;
+$navbar-hl: #ffd9e4 !default;
+$footer-bg: $trm-paper-2 !default;
+$footer-fg: $trm-teal-grey !default;
+$code-bg: #f3f4f1 !default;
+$code-color: #3b2f5a !default;
+$border-color: $trm-line !default;
+$table-border-color: $trm-line !default;
+$toc-color: $trm-teal-grey !default;
+$toc-active-border: $trm-accent !default;
+
+/*-- scss:rules --*/
+:root {
+  --trm-ink: #{$trm-ink};
+  --trm-accent: #{$trm-accent};
+  --trm-rust: #{$trm-rust};
+  --trm-python: #{$trm-python};
+  --trm-r: #{$trm-r};
+  --trm-teal-grey: #{$trm-teal-grey};
+  --trm-line: #{$trm-line};
+  --trm-paper-2: #{$trm-paper-2};
+}
+
+body { background: $body-bg; }
+
+h1, h2, h3 { color: $trm-ink; letter-spacing: -0.01em; }
+h1.title { font-size: 2.1rem; }
+.subtitle.lead { color: $trm-teal-grey; }
+
+.navbar .navbar-brand img { height: 30px; width: auto; }
+.navbar .nav-link { font-weight: 550; }
+
+// status strip and cards on the landing page
+.status-strip {
+  display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center;
+  padding: 0.6rem 0.9rem; margin: 1rem 0 1.5rem;
+  border: 1px solid $trm-line; border-left: 4px solid $trm-accent; border-radius: 4px;
+  background: $trm-paper-2; color: $trm-ink-2; font-size: 0.95rem;
+}
+.status-strip code { background: transparent; padding: 0; }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin: 1.25rem 0; }
+.card-trm {
+  border: 1px solid $trm-line; border-radius: 6px; padding: 1rem 1.1rem; background: #fff;
+  h3 { margin-top: 0; font-size: 1.1rem; }
+  p:last-child { margin-bottom: 0; }
+}
+
+// language badges
+.badge-lang { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.8rem; font-weight: 600; color: #fff; vertical-align: middle; }
+.badge-rust { background: $trm-rust; }
+.badge-python { background: $trm-python; }
+
+// tabs: the Rust tab carries the terracotta, the Python tab the teal, active tab the accent underline
+.panel-tabset .nav-tabs .nav-link { color: $trm-ink-2; border: 0; border-bottom: 3px solid transparent; }
+.panel-tabset .nav-tabs .nav-link.active { color: $trm-accent; border-bottom-color: $trm-accent; background: transparent; }
+.panel-tabset .nav-tabs .nav-link[data-lang="rust"]::before,
+.panel-tabset .nav-tabs .nav-link:first-child::before { content: ""; display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%; margin-right: 0.4rem; background: $trm-rust; }
+.panel-tabset .nav-tabs .nav-item:nth-child(2) .nav-link::before { content: ""; display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%; margin-right: 0.4rem; background: $trm-python; }
+
+// provenance lines under included content
+p.provenance { font-size: 0.85rem; color: $trm-teal-grey; margin: 0 0 0.75rem; }
+p.provenance code { font-size: 0.85rem; }
+
+// tables: scroll inside their box on narrow screens, visible edge
+.table-responsive, .filterable table, table.table { max-width: 100%; }
+.filterable { overflow-x: auto; border: 1px solid $trm-line; border-radius: 4px; padding: 0.5rem 0.75rem; margin: 1rem 0; }
+.table-filter { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; font-size: 0.9rem;
+  input { flex: 1 1 14rem; max-width: 24rem; padding: 0.3rem 0.5rem; border: 1px solid $trm-line; border-radius: 4px; background: #fff; }
+  .table-filter-count { color: $trm-teal-grey; }
+}
+table.table td, table.table th { vertical-align: top; }
+
+// gap table status cells
+td.status-covered { color: #1f6f4a; font-weight: 600; }
+td.status-partial { color: #9a6700; font-weight: 600; }
+td.status-none { color: $trm-teal-grey; font-weight: 600; }
+
+// benchmark charts
+[data-bench-chart] { margin: 1rem 0 1.5rem; }
+svg.bench-chart { width: 100%; height: auto; font-family: $font-family-sans-serif; font-size: 11px;
+  .grid { stroke: $trm-line; stroke-width: 1; }
+  .axis { fill: $trm-teal-grey; font-size: 10px; }
+  .axis-title { fill: $trm-teal-grey; font-size: 10px; }
+  .task { fill: $trm-ink; font-weight: 650; font-size: 11.5px; }
+  .task-sub { fill: $trm-teal-grey; font-size: 9.5px; }
+  .system { fill: #fff; font-size: 9.5px; font-weight: 600; pointer-events: none; }
+  .value { fill: $trm-ink-2; font-size: 10px; }
+  .ratio { fill: $trm-accent; font-weight: 650; font-size: 11px; }
+  .iqr { stroke: $trm-ink; stroke-width: 1.5; opacity: 0.8; }
+}
+.bench-legend, .bench-disturbed { font-size: 0.85rem; color: $trm-teal-grey; margin: 0.25rem 0; }
+.bench-disturbed { color: #9a6700; }
+
+// phone widths
+@media (max-width: 767px) {
+  body { padding-left: 0; padding-right: 0; }
+  #quarto-content { padding-left: 16px; padding-right: 16px; }
+  h1.title { font-size: 1.7rem; }
+  pre { overflow-x: auto; }
+  .cards { grid-template-columns: 1fr; }
+}

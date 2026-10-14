@@ -1161,8 +1161,12 @@ What run I shows (medians, 1 thread; "×" = R time / Rust time):
   run G's 10-fold CV.
 - **Memory.** Peak working set: R 360–635 MB, Python 77–151 MB, Rust 5–154 MB. The
   forest is the only model where the Rust process exceeds 100 MB.
-- **Python wrapper.** Equal to the Rust binary within ±5% on every phase above about
-  100 ms (100k-row fits, CV and tuning; the forests; xgb at 2930 rows). On the
+- **Python wrapper.** Within ±5% of the Rust binary on the forests, the 100k-row
+  fits and CV, and xgb at 2930 rows, but **not** on every phase above 100 ms, as an
+  earlier version of this bullet claimed (corrected 2026-10-14 after recomputing
+  every ratio from `results.csv`): Ames tree tuning 0.86×, 25 bootstraps and 3 × 10
+  repeated CV 0.92× / 0.90×, 100k tree tuning 0.92×, 100k xgb cold fit 0.90× (the
+  wrapper faster each time). On the
   sub-10 ms phases of the tree tasks it reads 15–32% *faster* than the binary (Ames
   workflow fit 3.7 vs 4.7 ms cold, 3.1 vs 3.7 ms warm; penguins CV 2.3 vs 3.4 ms)
   although both call the same native code and the driver's allocator issue is fixed.

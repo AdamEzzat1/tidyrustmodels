@@ -1,0 +1,11 @@
+Table(2930 rows x 6 cols: ["Sale_Price", "Gr_Liv_Area", "Year_Built", "Total_Bsmt_SF", "Bldg_Type", "Neighborhood"])
+show_best(rmse):
+  config  2  {'cost_complexity': 0.0001, 'min_n': 20.0}  rmse 35134 (se 703, n=10)
+  config  4  {'cost_complexity': 0.001, 'min_n': 5.0}  rmse 35704 (se 1146, n=10)
+  config  3  {'cost_complexity': 0.0001, 'min_n': 50.0}  rmse 36210 (se 814, n=10)
+select_best -> {'cost_complexity': 0.0001, 'min_n': 20.0}
+select_by_one_std_err -> {'cost_complexity': 0.001, 'min_n': 5.0}
+last_fit metrics: {'rmse': 33881.8831, 'rsq': 0.8342}
+last_fit predictions: 733 assessment rows
+tree note: 52 splits
+fit_best refitted on 2930 rows; first prediction 161884

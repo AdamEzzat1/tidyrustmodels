@@ -1,0 +1,50 @@
+/*-- scss:defaults --*/
+// Dark variant: same hues, inverted paper. Layered after theme.scss.
+$trm-ink: #e9edf3;
+$trm-ink-2: #c9d2de;
+$trm-teal-grey: #93a7b5;
+$trm-accent: #e6749a;
+$trm-accent-2: #f2a3bd;
+$trm-rust: #e0693a;
+$trm-python: #4fb39f;
+$trm-r: #7f9fbf;
+$trm-paper: #121a26;
+$trm-paper-2: #1a2433;
+$trm-line: #2d3b4e;
+
+$body-bg: $trm-paper !default;
+$body-color: #dde3ea !default;
+$link-color: $trm-accent !default;
+$link-hover-color: $trm-accent-2 !default;
+$navbar-bg: #0e1520 !default;
+$navbar-fg: #e9edf3 !default;
+$navbar-hl: #ffd9e4 !default;
+$footer-bg: $trm-paper-2 !default;
+$footer-fg: $trm-teal-grey !default;
+$code-bg: #1e2938 !default;
+$code-color: #e8dcff !default;
+$border-color: $trm-line !default;
+$table-border-color: $trm-line !default;
+$toc-color: $trm-teal-grey !default;
+$toc-active-border: $trm-accent !default;
+
+/*-- scss:rules --*/
+:root {
+  --trm-ink: #{$trm-ink};
+  --trm-accent: #{$trm-accent};
+  --trm-rust: #{$trm-rust};
+  --trm-python: #{$trm-python};
+  --trm-r: #{$trm-r};
+  --trm-teal-grey: #{$trm-teal-grey};
+  --trm-line: #{$trm-line};
+  --trm-paper-2: #{$trm-paper-2};
+}
+body { background: $trm-paper; }
+h1, h2, h3 { color: $trm-ink; }
+.card-trm { background: $trm-paper-2; border-color: $trm-line; }
+.status-strip { background: $trm-paper-2; border-color: $trm-line; border-left-color: $trm-accent; color: $trm-ink-2; }
+.table-filter input { background: $trm-paper-2; color: $trm-ink; border-color: $trm-line; }
+td.status-covered { color: #6fd39b; }
+td.status-partial { color: #e3b341; }
+svg.bench-chart { .task { fill: $trm-ink; } .value { fill: $trm-ink-2; } .iqr { stroke: $trm-ink; } .grid { stroke: $trm-line; } }
+.bench-disturbed { color: #e3b341; }

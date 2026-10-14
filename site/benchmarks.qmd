@@ -1,0 +1,92 @@
+---
+title: "Benchmarks"
+subtitle: "Measured on one laptop, with the run ids, the deviations from the protocol and the disturbance log that stand next to every number in the repository."
+---
+
+::: {.callout-warning}
+## Read before quoting a number
+One Windows laptop (i7-11390H, 31.8 GB RAM), R single-threaded on reference BLAS, ten
+cold trials per configuration, medians. Some configurations were disturbed by other
+processes and are labelled as such below. **No result transfers to other hardware**; the
+second benchmark platform is an open roadmap item. The benchmark does not assume Rust
+wins, and on random forests it does not.
+:::
+
+## Headline ranges
+
+Computed at build time from the per-trial CSVs of the Phase 5 protocol runs
+(`benchmarks/results/<run>/results.csv`, runs G–K of 2026-10-13/14: 10 cold trials,
+30 warm iterations, 10 folds, 20-point or 4 × 5 grids), not copied from prose. Each
+cell is the range of R median / native median over the tasks of that family at **one
+thread**; the task behind each end of a range is named. The same script fails the
+build if the README's summary paragraph disagrees with these numbers.
+
+{{< include generated/benchmarks-headline.md >}}
+
+The random-forest row is the one to read first: the port is **on par with ranger, not
+faster**, and R is faster on one of the two CV cells. The 1.1× lower end of the
+logistic tuning row is 100k rows against glmnet, a different algorithm. An earlier
+version of the README and of this page quoted 6–930× for linear and logistic fits
+(the 6× was OLS; logistic at 1e6 rows is 3.4×) and a Python wrapper "within ±5%" that
+the data does not support; both were corrected on 2026-10-14 after this recomputation
+(`LIMITATIONS.md`).
+
+Two categories are kept apart in every table: **framework-overhead**, where both sides
+run the same algorithm (`lm`, `glm`, rpart, xgboost against their ports) and a ratio
+measures orchestration plus solver; and **workflow-level**, where the algorithms differ
+(ranger against the forest port, glmnet's path against one IRLS per candidate) and a
+ratio is never described as like for like.
+
+## Charts
+
+Drawn in the browser from `benchmarks/results/<run>/results.csv` (medians and quartiles
+over the cold trials; invalid configurations of run G excluded as the disturbance log
+says; disturbed ones marked †). The repository's tables below carry the same numbers
+without JavaScript.
+
+### 10-fold cross-validation, 1 thread
+
+<div data-bench-chart data-phase="cv_s" data-threads="1" data-runs="G,K,I,H" data-title="10-fold CV, 1 thread."></div>
+
+### Workflow fit (cold), 1 thread
+
+<div data-bench-chart data-phase="wf_fit_s" data-threads="1" data-runs="G,K,I,H" data-title="Workflow fit, 1 thread."></div>
+
+### Tuning grids, 1 thread
+
+<div data-bench-chart data-phase="tune_s" data-threads="1" data-runs="G,K,I" data-title="Tuning, 1 thread."></div>
+
+### Workflow sets, 1 thread
+
+<div data-bench-chart data-phase="wfs_s" data-threads="1" data-runs="J" data-title="Workflow sets, 1 thread."></div>
+
+### Peak working set, 1 thread
+
+<div data-bench-chart data-phase="peak_wset_mb" data-threads="1" data-runs="G,K,I,J,H" data-title="Peak working set, 1 thread."></div>
+
+### Four threads
+
+R runs `fit_resamples` with `future::plan(multisession)`, whose worker start-up is
+inside the timed phase; Rust and Python use the framework's thread pool.
+
+<div data-bench-chart data-phase="cv_s" data-threads="4" data-runs="G,K,I,J" data-title="10-fold CV, 4 threads."></div>
+
+## Deviations from the protocol and the disturbance log
+
+Reproduced from the repository, not summarised.
+
+{{< include generated/benchmarks-deviations.md >}}
+
+## Findings per run
+
+The maintainers' reading of each run, as written in `BENCHMARKS.md`. The per-phase
+tables with every median are in that file.
+
+{{< include generated/benchmarks-findings.md >}}
+
+## Before/after for merged optimisations
+
+Any optimisation merged into the library has an interleaved A/B against the
+pre-optimisation build with bitwise-identical outputs as the acceptance condition; the
+record is `docs/perf/2026-10-13-rust-opts-ab.md` in the repository
+([Design decisions](decisions.qmd) lists the related ADRs).

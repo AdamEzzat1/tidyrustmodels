@@ -1,0 +1,12 @@
+2930 rows x 6 columns
+resamples: ["Repeat1.Fold1", "Repeat1.Fold2", "Repeat1.Fold3"] ...
+show_best(rmse):
+  config  2  cp 1e-4  min_n 20  rmse 35134 (se 703, n=10)
+  config  4  cp 1e-3  min_n  5  rmse 35704 (se 1146, n=10)
+  config  3  cp 1e-4  min_n 50  rmse 36210 (se 814, n=10)
+select_best -> [("cost_complexity", 0.0001), ("min_n", 20.0)]
+select_by_one_std_err -> [("cost_complexity", 0.001), ("min_n", 5.0)]
+last_fit rmse   33881.8831
+last_fit rsq    0.8342
+last_fit predictions for 733 assessment rows; tree note: 52 splits
+fit_best model serialized (65072 bytes) and round-tripped

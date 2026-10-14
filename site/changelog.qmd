@@ -1,0 +1,6 @@
+---
+title: "Changelog"
+subtitle: "CHANGELOG.md from the repository, rendered at build time."
+---
+
+{{< include generated/changelog.md >}}

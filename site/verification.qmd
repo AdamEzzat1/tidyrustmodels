@@ -1,0 +1,70 @@
+---
+title: "Verification"
+subtitle: "How the ports are checked against R, what 'exact' means here, and where it only holds on one platform."
+---
+
+## The method
+
+Every feature with an R tidymodels equivalent is verified **differentially**: an R
+script (`reference/tidymodels-r/run_reference.R`) runs the tidymodels pipeline on a
+task and writes everything it computed to a JSON fixture; the Rust suite
+(`crates/tidyrustmodels/tests/differential.rs`) runs the same task on the same rows,
+with the same split and fold ids loaded from shared files, and compares each quantity
+under a bound from `reference/fixtures/tolerances.toml`. The fixtures and the datasets
+are committed with checksums, so the suite needs no R to run and runs in CI on every
+push.
+
+The bounds are the part that keeps this honest:
+
+- Each bound carries a justification and is set from the **measured** maximum; a
+  bound may be tightened to a new measurement but never silently relaxed. Tests fail
+  rather than loosen a tolerance.
+- Discrete outputs (tree structure, fold memberships, predicted classes, tune's config
+  ids, workflow-set ranks) are compared **exactly**.
+- Where R and the port run different algorithms (L-BFGS against IRLS on the comparison
+  engines), the record says *semantic parity with a solver bound* and never calls it
+  numerical equality.
+- Stochastic models (random forests) are never compared tree by tree: ten seeds on
+  each side, and the port must sit inside a 4-standard-error band of R's distribution.
+
+The comparison runs at five levels: L1 preprocessing statistics and baked matrices,
+L2 metric implementations on identical inputs, L3 fitted models and predictions, L4
+per-fold resampling metrics, tuning results and rankings, L5 statistical agreement
+for stochastic models.
+
+## The first record: linear and logistic models against lm and glm
+
+The summary table of the first differential run, as kept in `VERIFICATION.md`. Later
+phases (filters, classification metrics, multinomial, trees, forests, boosting, case
+weights, resampling schemes, tuning selection, sparse input, workflow sets) add their
+own tables to that file; the feature matrix on [What it can do](features.qmd) names
+the phase next to every row.
+
+{{< include generated/verification-phase4.md >}}
+
+## What 'exact' means for the tree ports
+
+The rpart port reproduces R's trees node for node, and tune's selection rules,
+rsample's deterministic schemes and workflowsets' ranking are compared exactly. The
+xgboost port mirrors xgboost's float32 arithmetic, and the comparison reads xgboost's
+own model JSON: on the platform where the fixtures were produced the trees, margins
+and probabilities match bit for bit.
+
+That last sentence has a qualifier because the first CI run off that platform found
+one. The section below is the repository's own account.
+
+{{< include generated/verification-platforms.md >}}
+
+## The Python wrapper
+
+The Python package is tested for **bitwise** parity with the Rust suite's outputs on
+every task and engine, plus its own tests for resampling ids, tuning selection and the
+pandas / Arrow / Polars / SciPy conversions. Both sides are built with the same
+release profile in CI; the repository records why that matters for one engine.
+
+## Test inventory
+
+{{< include generated/verification-inventory.md >}}
+
+The full per-quantity report of every CI run is kept as a build artifact
+(`differential-report-<os>`), with the platform and the bounds in force in its header.

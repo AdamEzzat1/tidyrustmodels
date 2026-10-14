@@ -1,0 +1,10 @@
+workflows: ["plain_lm", "plain_tree", "plain_xgb", "pooled_lm", "pooled_tree", "pooled_xgb"]
+wflow_id     .config               rmse      rsq  rank
+plain_xgb    pre0_mod0_post0      29496   0.8643  1
+pooled_xgb   pre0_mod0_post0      30680   0.8536  2
+plain_tree   pre0_mod1_post0      35401   0.8054  3
+pooled_tree  pre0_mod1_post0      35504   0.8042  4
+plain_lm     pre0_mod0_post0      35677   0.8014  5
+pooled_lm    pre0_mod0_post0      38839   0.7656  6
+winner: plain_xgb with []
+refitted on 2930 rows; first prediction 165654

@@ -1,0 +1,98 @@
+name: Website
+
+# Builds the Quarto site under site/ and deploys it to GitHub Pages. The repository's
+# Pages source must be set to "GitHub Actions" once (Settings -> Pages) for the first
+# deploy to succeed. Every number and code block on the site is checked against the
+# repository documents before rendering; a mismatch fails the build, not the deploy.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "docs/**"
+      - "*.md"
+      - "benchmarks/results/**"
+      - "examples/**"
+      - "crates/tidyrustmodels/examples/**"
+      - "python/tidyrustmodels/__init__.py"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # check_examples.py verifies the recorded example commit is an ancestor
+
+      - uses: quarto-dev/quarto-actions/setup@v2
+        with:
+          version: "1.6.42"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install the TypeScript toolchain (pinned in site/package-lock.json)
+        working-directory: site
+        run: npm ci
+      - name: Type-check, test and bundle the components
+        working-directory: site
+        run: |
+          npm run typecheck
+          npm test
+          npm run build
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the Python extension so the API page carries docstrings
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install maturin numpy
+          export VIRTUAL_ENV="$PWD/.venv"
+          .venv/bin/python -m maturin develop --release
+      - name: Rust API documentation (published under /api/rust/)
+        run: cargo doc --workspace --no-deps
+
+      - name: Render repository documents and benchmark data into the site
+        run: .venv/bin/python -I site/scripts/build_pages.py
+      - name: Check every sourced code block against its file
+        run: .venv/bin/python -I site/scripts/check_examples.py
+      - name: Check every number on hand-written pages against the documents
+        run: .venv/bin/python -I site/scripts/check_claims.py
+      - name: Check the README's benchmark ranges against the per-trial CSVs
+        run: .venv/bin/python -I site/scripts/check_ratios.py
+
+      - name: Render
+        run: quarto render site
+      - name: Attach the Rust API docs
+        run: |
+          mkdir -p site/_site/api/rust
+          cp -r target/doc/* site/_site/api/rust/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site/_site
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

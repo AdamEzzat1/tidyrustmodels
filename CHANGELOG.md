@@ -37,7 +37,29 @@ VERIFICATION.md; nothing is claimed beyond those records.
   force. The "bit-exact against xgboost" record is now stated for the fixture
   platform; Linux / macOS parity against an xgboost built there is not measured.
 
+### Fixed
+- Benchmark summary corrected after recomputing every headline ratio from the
+  per-trial CSVs (2026-10-14; LIMITATIONS.md): linear / logistic workflow fit is
+  3.4–930× (the 6× lower bound was OLS only; logistic at 1e6 rows is 3.4×); the
+  Python wrapper reads 0.95–1.03× the Rust binary's time on the 1e6-row and forest
+  phases but 0.57–1.2× on the other phases above 100 ms (the "±5% on every
+  phase above 100 ms" claim in README and the run I bullet was wrong); trees
+  14–270× cold / 13–450× warm; forest CV 0.98–1.13×; memory 3.1–70× over all cells.
+  `site/scripts/check_ratios.py` recomputes the README paragraph from the CSVs.
+- `examples/penguins_workflow.rs` tuned on `mn_log_loss` while resampling with
+  `MetricSet::classification_defaults()` (accuracy, roc_auc, brier_class since Phase
+  8b), so `show_best` printed NaN and `select_best` errored; it now uses accuracy +
+  `mn_log_loss` like `examples/penguins_workflow.py` and prints the same results
+  (CV log loss 0.2133 ± 0.0282, best penalty 0.1). CI runs the three Rust and three
+  Python examples on every push.
+
 ### Added
+- Website (`site/`, Quarto + TypeScript, deployed to GitHub Pages by
+  `.github/workflows/site.yml`): every page is rendered from the repository documents
+  (`site/scripts/build_pages.py`), every code block is checked against its source file
+  and every number on a hand-written page against the documents
+  (`check_examples.py`, `check_claims.py`); the example outputs are recorded under
+  `site/data/example-outputs/` with their commit.
 - Release preparation for 0.1.0 (ROADMAP.md Phase 6): feature matrix `docs/FEATURES.md`,
   release notes `docs/releases/0.1.0.md`, installation section in README.md, Rust and
   Python examples `ames_tuning` and `ames_workflow_sets`, release packaging workflow

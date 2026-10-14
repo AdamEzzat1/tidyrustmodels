@@ -151,6 +151,15 @@
 - The first 1e6-row attempt found a quadratic fold complement (200 s outside every
   timed phase): compare a driver's wall time with the sum of its phases before reading
   any table (fixed, A/B-verified; `docs/perf/2026-10-13-rust-opts-ab.md`).
+- Audit of the headline ranges against the per-trial CSVs (2026-10-14, while
+  building the website): two README claims were overstated and three rounded in the
+  port's favour. "6–930× per workflow fit for linear and logistic" was OLS only
+  (logistic at 1e6 rows is 3.4×); "Python wrapper within ±5% on phases above 100 ms"
+  was false (0.57–1.2× outside the 1e6-row and forest cells); trees "13–450×" mixed
+  warm and cold (cold 14–270×); forest CV "1.0–1.1×" is 0.98–1.13×; memory "3.5–70×"
+  is 3.1–70× once 4-thread cells count. All corrected in README, BENCHMARKS.md and
+  the release notes; `site/scripts/check_ratios.py` now recomputes the README ranges
+  from the CSVs on every site build.
 - The host is a laptop that other people and tools use: run G was disturbed from
   about 15:51 by Chrome, a service host and the Malicious Software Removal Tool, one R
   trial timed out, three configurations were invalidated and re-queued. Windows'

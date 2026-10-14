@@ -1,0 +1,22 @@
+333 rows, outcome `sex` with levels ["female", "male"]
+intercept 4.4313; slopes:
+  bill_length_mm            2.5045
+  bill_depth_mm             3.1072
+  flipper_length_mm         1.0130
+  body_mass_g               4.5220
+  species_Chinstrap        -5.2844
+  species_Gentoo           -8.3498
+diagnostics: FitDiagnostics { converged: Some(true), iterations: None, final_gradient_norm: Some(3.8994252493651516e-8), deviance: None, warnings: [], aliased: [], note: Some("linfa does not expose L-BFGS termination status; see final_gradient_norm") }
+test accuracy     Some(0.8928571428571429)
+test mn_log_loss  Some(0.21527619370330608)
+test precision    Some(0.851063829787234)
+test recall       Some(0.9523809523809523)
+cv accuracy     mean 0.9159 std_err 0.0121 (n=5)
+cv mn_log_loss  mean 0.2133 std_err 0.0282 (n=5)
+best by mn_log_loss:
+  penalty 1.00e-1 -> 0.2118 (se 0.0251)
+  penalty 1.00e-2 -> 0.2121 (se 0.0277)
+  penalty 1.00e-3 -> 0.2131 (se 0.0281)
+select_best: candidate 3; one-SE rule: candidate 4
+fit_best refitted on 333 rows
+serialized workflow: 3358 bytes; round-trip predictions identical

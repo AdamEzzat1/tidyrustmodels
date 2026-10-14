@@ -1,0 +1,13 @@
+/* Self-hosted fonts (optional). Drop the WOFF2 files into site/assets/fonts/ and
+   uncomment; the SCSS font stacks already name these families and fall back to the
+   system fonts, so the site renders the same with or without them. No font is loaded
+   from a third-party host at runtime. */
+
+/*
+@font-face { font-family: "Source Sans 3"; src: url("fonts/SourceSans3-VariableFont_wght.woff2") format("woff2"); font-weight: 200 900; font-display: swap; }
+@font-face { font-family: "Source Sans 3"; src: url("fonts/SourceSans3-Italic-VariableFont_wght.woff2") format("woff2"); font-weight: 200 900; font-style: italic; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("fonts/JetBrainsMono-Variable.woff2") format("woff2"); font-weight: 100 800; font-display: swap; }
+*/
+
+/* no horizontal page scroll at phone width */
+html, body { overflow-x: hidden; }

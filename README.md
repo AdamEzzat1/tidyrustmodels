@@ -32,16 +32,22 @@ What is verified today (VERIFICATION.md):
 
 What is measured today (BENCHMARKS.md, one Windows laptop, protocol runs G–K of
 2026-10-13/14: 10 cold trials, 30 warm iterations, 10 folds, 20-point or 4 × 5 grids,
-R single-threaded on reference BLAS): per workflow fit the native ports are 6–930×
-faster than R tidymodels for linear and logistic models (930× at 342 rows, 12× at 100k,
-6× at 1e6), 13–450× for rpart-style trees, 2–4.6× for xgboost-style boosting, and on
-par with ranger for random forests (0.86–1.04×); 10-fold CV 3.7–2200× (linear /
-logistic), 13–470× (trees), 2.6–7.8× (boosting), 1.0–1.1× (forests); tuning grids
-13–425× for trees, 4× for boosting, 1.1–360× for logistic against glmnet (a different
-algorithm; equal at 100k rows); workflow sets 14–270×. R's peak memory is 3.5–70× the
-Rust binary's and 2.4–5× the Python wrapper's. The Python wrapper equals the Rust
-binary within ±5% on phases above 100 ms. Read the deviations and the disturbance log
-there before quoting any number; no result transfers to other hardware.
+R single-threaded on reference BLAS, ratios = R median / native median at 1 thread):
+per cold workflow fit the native ports are 3.4–930× faster than R tidymodels for
+linear and logistic models (OLS: 930× at 342 rows, 12× at 100k, 6.1× at 1e6; logistic:
+3.4× at 1e6), 14–270× for rpart-style trees (13–450× on the warm, in-process fit),
+1.9–4.4× for xgboost-style boosting (2.0–4.6× warm), and on par with ranger for random
+forests (0.86–1.04×); 10-fold CV 3.7–2200× (linear / logistic), 13–470× (trees),
+2.6–7.8× (boosting), 0.98–1.13× (forests: R is faster on one of the two tasks); tuning
+grids 13–425× for trees, 4.1× for boosting, 1.1–360× for logistic against glmnet (a
+different algorithm; equal at 100k rows); workflow sets 14–270×. R's peak memory is
+3.5–70× the Rust binary's at 1 thread (3.1–70× over all cells) and 2.4–5.1× the Python
+wrapper's. The Python wrapper reads 0.95–1.03× the Rust binary's time on the 1e6-row
+and forest phases; on the other phases above 100 ms it reads 0.57–1.2× the binary's time
+(usually faster on sub-second phases; unexplained, see BENCHMARKS.md). Read the
+deviations and the disturbance log there before quoting any number; no result
+transfers to other hardware. `site/scripts/check_ratios.py` recomputes every range in
+this paragraph from the per-trial CSVs.
 
 ## Quick start (Rust)
 
