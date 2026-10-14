@@ -60,13 +60,11 @@ fn main() -> Result<()> {
     }
 
     // --- cross-validation with the recipe re-prepped inside every fold ---
+    // (the same two metrics as examples/penguins_workflow.py; the tuning step below
+    // selects on `mn_log_loss`, so it must be in the set)
+    let metrics = MetricSet::from_names(&["accuracy", "mn_log_loss"])?;
     let folds = vfold_cv(data.nrows(), 5, Some(&strata), Seed(7))?;
-    let cv = wf.fit_resamples(
-        &data,
-        &folds,
-        &MetricSet::classification_defaults(),
-        Parallelism::threads(4),
-    )?;
+    let cv = wf.fit_resamples(&data, &folds, &metrics, Parallelism::threads(4))?;
     for s in &cv.summary {
         println!(
             "cv {:<12} mean {:.4} std_err {:.4} (n={})",
@@ -79,14 +77,7 @@ fn main() -> Result<()> {
 
     // --- tune the L2 penalty over a log10 grid ---
     let grid = grid_regular(&[ParamRange::log10("penalty", -4.0, 0.0)], 5)?;
-    let tuned = tune_grid(
-        &wf,
-        &data,
-        &folds,
-        &grid,
-        &MetricSet::classification_defaults(),
-        Parallelism::threads(4),
-    )?;
+    let tuned = tune_grid(&wf, &data, &folds, &grid, &metrics, Parallelism::threads(4))?;
     println!("best by mn_log_loss:");
     for row in tuned.show_best(Metric::MnLogLoss, 3) {
         println!(
