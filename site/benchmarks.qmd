@@ -1,0 +1,90 @@
+---
+title: "Benchmarks"
+subtitle: "Measured on one laptop, with the run ids, the deviations from the protocol and the disturbance log that stand next to every number in the repository."
+---
+
+::: {.callout-warning}
+## Read before quoting a number
+One Windows laptop (i7-11390H, 31.8 GB RAM), R single-threaded on reference BLAS, ten
+cold trials per configuration, medians. Some configurations were disturbed by other
+processes and are labelled as such below. **No result transfers to other hardware**; the
+second benchmark platform is an open roadmap item. The benchmark does not assume Rust
+wins, and on random forests it does not.
+:::
+
+## Headline ranges
+
+The ranges the repository README quotes from the Phase 5 protocol runs (`BENCHMARKS.md`,
+runs G–K of 2026-10-13/14: 10 cold trials, 30 warm iterations, 10 folds, 20-point or 4 × 5
+grids), ratio = R time / native time:
+
+| | per workflow fit | 10-fold CV | tuning grid |
+|---|---|---|---|
+| linear / logistic (`lm` / `glm` vs the native ports) | 6–930× (930× at 342 rows, 12× at 100k, 6× at 1e6) | 3.7–2200× | 1.1–360× vs glmnet, a different algorithm; equal at 100k rows |
+| rpart-style trees | 13–450× | 13–470× | 13–425× |
+| xgboost-style boosting | 2–4.6× | 2.6–7.8× | 4× |
+| random forests vs ranger | **0.86–1.04×**: on par, not faster | 1.0–1.1× | – |
+| workflow sets | – | – | 14–270× end to end |
+
+R's peak memory is 3.5–70× the Rust binary's and 2.4–5× the Python wrapper's. The
+Python wrapper equals the Rust binary within ±5% on phases above 100 ms.
+
+Two categories are kept apart in every table: **framework-overhead**, where both sides
+run the same algorithm (`lm`, `glm`, rpart, xgboost against their ports) and a ratio
+measures orchestration plus solver; and **workflow-level**, where the algorithms differ
+(ranger against the forest port, glmnet's path against one IRLS per candidate) and a
+ratio is never described as like for like.
+
+## Charts
+
+Drawn in the browser from `benchmarks/results/<run>/results.csv` (medians and quartiles
+over the cold trials; invalid configurations of run G excluded as the disturbance log
+says; disturbed ones marked †). The repository's tables below carry the same numbers
+without JavaScript.
+
+### 10-fold cross-validation, 1 thread
+
+<div data-bench-chart data-phase="cv_s" data-threads="1" data-runs="G,K,I,H" data-title="10-fold CV, 1 thread."></div>
+
+### Workflow fit (cold), 1 thread
+
+<div data-bench-chart data-phase="wf_fit_s" data-threads="1" data-runs="G,K,I,H" data-title="Workflow fit, 1 thread."></div>
+
+### Tuning grids, 1 thread
+
+<div data-bench-chart data-phase="tune_s" data-threads="1" data-runs="G,K,I" data-title="Tuning, 1 thread."></div>
+
+### Workflow sets, 1 thread
+
+<div data-bench-chart data-phase="wfs_s" data-threads="1" data-runs="J" data-title="Workflow sets, 1 thread."></div>
+
+### Peak working set, 1 thread
+
+<div data-bench-chart data-phase="peak_wset_mb" data-threads="1" data-runs="G,K,I,J,H" data-title="Peak working set, 1 thread."></div>
+
+### Four threads
+
+R runs `fit_resamples` with `future::plan(multisession)`, whose worker start-up is
+inside the timed phase; Rust and Python use the framework's thread pool.
+
+<div data-bench-chart data-phase="cv_s" data-threads="4" data-runs="G,K,I,J" data-title="10-fold CV, 4 threads."></div>
+
+## Deviations from the protocol and the disturbance log
+
+Reproduced from the repository, not summarised.
+
+{{< include generated/benchmarks-deviations.md >}}
+
+## Findings per run
+
+The maintainers' reading of each run, as written in `BENCHMARKS.md`. The per-phase
+tables with every median are in that file.
+
+{{< include generated/benchmarks-findings.md >}}
+
+## Before/after for merged optimisations
+
+Any optimisation merged into the library has an interleaved A/B against the
+pre-optimisation build with bitwise-identical outputs as the acceptance condition; the
+record is `docs/perf/2026-10-13-rust-opts-ab.md` in the repository
+([Design decisions](decisions.qmd) lists the related ADRs).

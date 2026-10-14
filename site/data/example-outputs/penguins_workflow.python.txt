@@ -1,0 +1,11 @@
+Table(333 rows x 6 cols: ["sex", "species", "bill_length_mm", "bill_depth_mm", "flipper_length_mm", "body_mass_g"])
+features: ['bill_length_mm', 'bill_depth_mm', 'flipper_length_mm', 'body_mass_g', 'species_Chinstrap', 'species_Gentoo']
+coefficients: {'(Intercept)': 4.4313, 'bill_length_mm': 2.5045, 'bill_depth_mm': 3.1072, 'flipper_length_mm': 1.013, 'body_mass_g': 4.522, 'species_Chinstrap': -5.2844, 'species_Gentoo': -8.3498}
+diagnostics: {'converged': True, 'iterations': None, 'final_gradient_norm': 3.8994252493651516e-08, 'deviance': None, 'warnings': [], 'aliased': [], 'note': 'linfa does not expose L-BFGS termination status; see final_gradient_norm'}
+backend: {'engine': 'linfa', 'crate_version': '0.8.1', 'solver': 'L-BFGS (argmin 0.11, m=10, More-Thuente line search)'}
+test accuracy: 0.8928571428571429
+P(female) for first 5 test rows: [0.861 0.001 0.509 0.364 0.388]
+cv accuracy     mean 0.9159 std_err 0.0121
+cv mn_log_loss  mean 0.2133 std_err 0.0282
+best penalty by mn_log_loss: {'penalty': 0.1} 0.2118
+serialized workflow: 3358 bytes; round-trip identical

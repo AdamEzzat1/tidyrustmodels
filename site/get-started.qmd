@@ -1,0 +1,95 @@
+---
+title: "Get started"
+subtitle: "Install from the repository, then run the three release examples in Rust or Python."
+---
+
+::: {.callout-note}
+Nothing is published to crates.io or PyPI yet; the instructions below are the
+repository's own and will change when a release is tagged ([Roadmap](roadmap.qmd)).
+:::
+
+## Install
+
+{{< include generated/install.md >}}
+
+## The examples
+
+Three examples ship in both languages and are run by CI on every push; the outputs
+below were recorded by running them, and the site build fails if the code shown here
+differs from the files in the repository.
+
+| example | what it covers |
+|---|---|
+| `penguins_workflow` | stratified split, recipe (impute, normalize, dummy), logistic regression, held-out metrics, 5-fold CV with the recipe re-prepped inside every fold, penalty tuning on a log grid, tune's selection rules, a JSON round trip of the fitted workflow |
+| `ames_tuning` | an rpart-style decision tree on the Ames housing data over an explicit `cost_complexity` × `min_n` grid with repeated CV, `select_best`, the one-standard-error rule, `finalize` + `last_fit`, `fit_best` |
+| `ames_workflow_sets` | two recipes × a linear model, a tuned tree and a boosted tree, mapped over one set of folds, ranked, and the winner refitted |
+
+### Penguins: a classification workflow end to end
+
+::: {.panel-tabset group="language"}
+
+#### Rust
+
+Run with `cargo run --release --example penguins_workflow` from the repository root.
+
+{{< include generated/examples/penguins_workflow.rust.md >}}
+
+{{< include generated/examples/penguins_workflow.rust.out.md >}}
+
+#### Python
+
+Run with `python examples/penguins_workflow.py` after `maturin develop --release`.
+
+{{< include generated/examples/penguins_workflow.python.md >}}
+
+{{< include generated/examples/penguins_workflow.python.out.md >}}
+
+:::
+
+The two outputs are formatted differently but carry the same numbers: the same
+coefficients, the same cross-validated accuracy and log loss, the same best penalty.
+Both examples pick the `linfa` engine explicitly to show engine selection; the default
+engine is `native`, the port of R's own solvers.
+
+### Ames: tuning, selection rules, `last_fit`, `fit_best`
+
+::: {.panel-tabset group="language"}
+
+#### Rust
+
+{{< include generated/examples/ames_tuning.rust.md >}}
+
+{{< include generated/examples/ames_tuning.rust.out.md >}}
+
+#### Python
+
+{{< include generated/examples/ames_tuning.python.md >}}
+
+{{< include generated/examples/ames_tuning.python.out.md >}}
+
+:::
+
+### Ames: workflow sets
+
+::: {.panel-tabset group="language"}
+
+#### Rust
+
+{{< include generated/examples/ames_workflow_sets.rust.md >}}
+
+{{< include generated/examples/ames_workflow_sets.rust.out.md >}}
+
+#### Python
+
+{{< include generated/examples/ames_workflow_sets.python.md >}}
+
+{{< include generated/examples/ames_workflow_sets.python.out.md >}}
+
+:::
+
+## Where to go next
+
+- The complete list of steps, models, resampling schemes, metrics and tuning features,
+  each with its verification status: [What it can do](features.qmd).
+- What tidymodels has that this project does not: [Gaps](gaps.qmd).
+- The Rust API (rustdoc) and the Python surface: [API reference](api.qmd).

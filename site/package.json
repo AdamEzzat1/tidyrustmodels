@@ -1,0 +1,16 @@
+{
+  "name": "tidyrustmodels-site",
+  "private": true,
+  "description": "TypeScript components for the tidyrustmodels website (compiled by esbuild into assets/).",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild ts/code-tabs.ts ts/table-filter.ts ts/bench-chart.ts --bundle --format=esm --target=es2020 --minify --outdir=assets --log-level=warning",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test tests/components.test.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.5",
+    "typescript": "5.8.3",
+    "jsdom": "26.1.0"
+  }
+}

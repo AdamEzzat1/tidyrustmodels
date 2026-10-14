@@ -1,0 +1,17 @@
+---
+title: "What it can do"
+subtitle: "The repository's feature matrix, rendered at build time, with a filter."
+---
+
+The table below is `docs/FEATURES.md` from the repository, unchanged. The status
+column is the one the maintainers keep: **verified** means compared against R
+tidymodels output in the differential suite (or against an analytic baseline),
+**unit-tested** means fixed by unit or property tests only, **unsupported** means not
+in this release. The semantic detail behind every row is in the repository's
+`COMPATIBILITY.md`; the known gaps are on the [Gaps](gaps.qmd) page.
+
+::: {.filterable data-filter-label="Filter the matrix" data-filter-placeholder="e.g. rsample, verified, unsupported, Python"}
+
+{{< include generated/features.md >}}
+
+:::

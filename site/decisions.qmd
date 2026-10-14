@@ -1,0 +1,11 @@
+---
+title: "Design decisions"
+subtitle: "The architecture decision records, rendered from docs/adr/."
+---
+
+Every contract decision in the project is written down as an ADR before it lands:
+what R does (read from the package sources and probed in R), what the port does, and
+what was rejected. The records are the repository's; the index and the pages below are
+generated from them at build time.
+
+{{< include generated/adr-index.md >}}

@@ -1,0 +1,66 @@
+---
+title: "Why Rust"
+subtitle: "What a Rust core buys, what it costs, and what the measurements say so far."
+---
+
+## What it buys
+
+**One implementation for two languages.** The Python package is a thin wrapper around
+the Rust crates (pyo3, built with maturin). There is no second implementation to keep
+in step: the parity suite asserts that Python returns the same bits as Rust on shared
+inputs for every task, and the release examples print the same results in both
+languages ([Get started](get-started.qmd)).
+
+**Memory behaviour you can see.** The Rust benchmark driver counts every allocation
+per phase. That is how the repository found that the forest port makes 580k to 2.0M
+allocations per fit where a linear fit makes a few hundred, and recorded it as the
+first optimisation target instead of a claim.
+
+**Speed where R pays for orchestration.** On the framework-overhead tasks, where both
+sides run the same algorithm (`lm`, `glm`, rpart, xgboost versus their ports), the
+measured differences are large and fall with the number of rows: per workflow fit the
+native ports are 6–930× faster than R tidymodels for linear and logistic models (930×
+at 342 rows, 12× at 100k, 6× at 1e6), 13–450× for rpart-style trees, 2–4.6× for
+xgboost-style boosting; 10-fold cross-validation 3.7–2200× (linear / logistic),
+13–470× (trees), 2.6–7.8× (boosting); workflow sets 14–270×. R's peak memory is
+3.5–70× the Rust binary's. All of it on one Windows laptop with R single-threaded on
+reference BLAS; the ranges and their caveats are quoted from the repository's
+benchmark record on the [Benchmarks](benchmarks.qmd) page.
+
+**A port can be checked.** Because the semantics are ported from the installed R
+package sources rather than re-invented, every ported behaviour has an R reference to
+test against. The differential suite does that per quantity, and the tolerance file
+records every bound with its measurement ([Verification](verification.qmd)).
+
+## What it costs
+
+**No R interface.** This is a Rust library with a Python wrapper; R users keep
+tidymodels. The project is not a replacement for it and does not try to be.
+
+**A smaller ecosystem.** tidymodels is a family of packages. This project covers parts
+of recipes, parsnip, rsample, yardstick, tune, workflows and workflowsets and nothing of
+the rest; the [Gaps](gaps.qmd) page keeps the list.
+
+**A port is not the original.** Two findings on record show what that means in
+practice:
+
+- The random-forest port follows ranger's growing rules but draws from its own random
+  number generator, so a forest is never R's forest; it is verified statistically (4
+  standard-error bands over 10 seeds on each side), and in the benchmarks it is **on
+  par with ranger** (0.86–1.04× per fit), not faster.
+- The xgboost port mirrors xgboost's float32 arithmetic and is bit-exact against R's
+  xgboost on Windows, where the fixtures were made. On Linux and macOS the C runtime's
+  `expf` rounds differently in the last ulp, and that ulp shows up in the fold boosters'
+  statistics; the tolerance file carries measured per-platform bounds for exactly those
+  quantities (ADR-0017) rather than a loosened default.
+
+**Different optimizers, different numbers.** Where the port uses a different algorithm
+from R (the penalised logistic path against glmnet), the benchmark is reported in its
+own category and the comparison is never described as like for like.
+
+## What is not measured
+
+A second benchmark platform (the CI runners are not benchmark machines), parity of the
+xgboost port against an xgboost built on Linux or macOS, and an independent review of
+the verification record are open items in the repository's roadmap
+([Roadmap](roadmap.qmd)).

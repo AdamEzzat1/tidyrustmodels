@@ -1,0 +1,11 @@
+---
+title: "Roadmap"
+subtitle: "ROADMAP.md from the repository, rendered at build time: every milestone gate, ticked or open."
+---
+
+The project is organised in phases with objective gates. A phase is *complete* only
+when every item is ticked; "pending independent review" means exactly that no one
+outside the development sessions has signed off yet. Dates are the dates the work
+was done, not promises.
+
+{{< include generated/roadmap.md >}}

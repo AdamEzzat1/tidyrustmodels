@@ -1,0 +1,57 @@
+---
+title: "Gaps against tidymodels"
+subtitle: "One row per tidymodels package: covered, partial, or not started. Nothing here is 'coming soon'."
+---
+
+tidymodels is a family of R packages. This project ports the semantics of **parts of
+seven of them** and nothing of the rest. The table is compiled from the repository's
+feature matrix (`docs/FEATURES.md`), its compatibility contract (`COMPATIBILITY.md`,
+whose *not supported* rows are reproduced further down) and its limitations record
+(`LIMITATIONS.md`). "Not started" means exactly that: no code, no plan with a date.
+
+::: {.filterable data-filter-label="Filter packages" data-filter-placeholder="e.g. recipes, not started"}
+
+| tidymodels package | covered | partial: what is missing | not started |
+|---|---|---|---|
+| **recipes** | `step_select`, mean / median imputation, `step_normalize`, `step_dummy` (incl. `sparse = "yes"`), `step_zv`, `step_nzv`, `step_corr`, `step_other`, `step_novel`, `step_unknown`; prep on training rows only, bake anywhere, serialized fitted state; frequency case weights in the statistics | `step_interact`, `step_pca`, splines, `step_filter_missing`, recipe-parameter tuning, `step_zv(group =)`, `step_corr(method = "spearman" / "kendall")`; unseen levels at bake time are an error rather than `NA` | every other step |
+| **parsnip** | `linear_reg` (`lm`), `logistic_reg` (`glm`), `multinom_reg` (`nnet`), `decision_tree` (`rpart`), `rand_forest` (`ranger` rules), `boost_tree` (`xgboost` hist); engines `native` (default), `linfa`, `smartcore` for the linear models | `penalty` is unscaled L2, **not glmnet**; rpart without categorical splits, surrogates, `xval`, priors or `cost`; ranger without importance, OOB error, `max.depth`, `sample.fraction`, `replace = FALSE`, `splitrule` variants or class weights; xgboost without `mtry`, `subsample`, early stopping, `tree_method = "exact"` / `approx`, GPU, categorical features, `NA` predictors, constraints or `scale_pos_weight`; case weights on the native engine only, none for `multinom_reg` | glmnet, SVMs, kNN, MARS, neural nets, every other model type and engine; `tailor` post-processing |
+| **rsample** | `initial_split`, `initial_validation_split`, `initial_time_split`, `vfold_cv` (repeats, strata), `bootstraps`, `mc_cv`, `loo_cv`, `group_vfold_cv`, `group_bootstraps`, `group_mc_cv`, `group_initial_split`, `rolling_origin`, `sliding_window`, `sliding_index`, `make_strata` | the random schemes reproduce rsample's **algorithms** under the framework's own RNG, so a Rust resample never equals an R one row for row; only the deterministic time-series schemes match exactly; an empty assessment set is an error where rsample warns | `sliding_period`, `nested_cv`, `permutations`, `apparent`, `collapse_groups` |
+| **yardstick** | `rmse`, `mae`, `rsq`, `rsq_trad`; `accuracy`, `mn_log_loss`, `precision`, `recall`, `sens`, `spec`, `f_meas`, `bal_accuracy`, `j_index`, `kap`, `mcc`, `brier_class`, `conf_mat` (binary, macro, macro-weighted, micro); `roc_auc`, `pr_auc`, `average_precision` and curves (binary, `hand_till`, macro, macro-weighted); case-weighted versions of all of them | `roc_curve(thresholds =)`, `mn_log_loss(sum = TRUE)` | `gain_curve`, `lift_curve`, `classification_cost`, `roc_aunp` / `roc_aunu`, `detection_prevalence`, `npv` / `ppv`, every other metric |
+| **tune** | `tune_grid` with regular, random or explicit grids, parallel over (candidate, fold); `show_best`, `select_best`, `select_by_one_std_err`, `select_by_pct_loss` with tune's `.config` numbering; `finalize_workflow`, `last_fit`, `fit_best` | no saved per-resample predictions (`collect_predictions(save_pred)`); `select_by_one_std_err` with a single resample is an error where tune returns an empty result; a `trees` candidate is scored with exactly that many trees (tune's sub-model shortcut is not used) | `tune_bayes`, racing (`tune_race_*`), recipe-parameter tuning |
+| **dials** | regular grids over log10 / linear parameter ranges (`grid_regular`), explicit grids | | parameter objects, `grid_latin_hypercube`, `grid_random`'s dials semantics, `finalize()` of data-dependent ranges: nothing in the feature matrix |
+| **workflows** | recipe + model specification, `fit` / `predict`, case weights (`add_case_weights` semantics: frequency vs importance), the sparse-data toggle for xgboost, fitted-workflow JSON round trip | the sparse-data decision uses every row where recipes samples 1000, so a design on the boundary can go the other way | formula and `add_variables` preprocessors: nothing in the feature matrix |
+| **workflowsets** | `workflow_set` (crossed / paired, default names), `workflow_map` (tune or resample), `collect_metrics`, `rank_results`, `fit_best`, `extract_*` | ties are ranked by order of appearance where workflowsets draws random ranks; identical preprocessor or model objects are not de-duplicated | comments, extracts, predictions on a set, racing / Bayesian mapping, `autoplot`, `leave_var_out_formulas`, `as_workflow_set` |
+| **broom** | | `tidy()`-style coefficient tables for the linear models through the fitted model's `coefficients()`; no `std.error` / `p.value` | `glance`, `augment`, everything else |
+| **stacks** | | | not started |
+| **finetune** | | | not started (racing and simulated annealing) |
+| **probably** | | | not started (calibration, thresholds) |
+| **censored** | | | not started (survival models) |
+| **spatialsample** | | | not started |
+| **textrecipes** | | | not started |
+| **embed** | | | not started |
+| **themis** | | | not started (class imbalance steps) |
+| **agua** | | | not started (h2o) |
+| **bonsai** | | | not started (lightgbm, partykit) |
+| **multilevelmod** | | | not started |
+| **poissonreg** | | | not started |
+| **rules** | | | not started |
+| **discrim** | | | not started |
+| **baguette** | | | not started |
+| **tailor** | | | not started (post-processing) |
+
+:::
+
+## Known limitations, as the repository states them
+
+{{< include generated/limitations.md >}}
+
+## Unsupported in v0.1, from the compatibility contract
+
+{{< include generated/unsupported.md >}}
+
+## Open items on the roadmap
+
+The release itself is gated: the packaging workflow has never run, no independent
+reviewer has signed off on any phase, and no `v0.1.0` tag exists. The benchmark
+protocol is complete on one platform only. The full list, with every gate ticked or
+open, is on the [Roadmap](roadmap.qmd) page.

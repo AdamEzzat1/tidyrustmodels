@@ -1,0 +1,98 @@
+project:
+  type: website
+  output-dir: _site
+  render:
+    - "*.qmd"
+    - "adr/*.md"
+    - "!generated/"
+    - "!node_modules/"
+    - "!README.md"
+    - "!NOTES.md"
+  resources:
+    - assets/*.js
+    - assets/*.svg
+    - assets/fonts/*
+    - data/bench.json
+
+execute:
+  freeze: true
+  enabled: false
+
+website:
+  title: "tidyrustmodels"
+  description: "A Rust-native machine-learning framework with tidymodels semantics and a Python wrapper, verified against R. An ongoing project, not affiliated with Posit or the tidymodels team."
+  site-url: https://adamezzat1.github.io/tidyrustmodels/
+  repo-url: https://github.com/AdamEzzat1/tidyrustmodels
+  repo-actions: [issue]
+  favicon: assets/logo.svg
+  navbar:
+    logo: assets/logo.svg
+    logo-alt: "tidyrustmodels"
+    title: false
+    left:
+      - text: "Get started"
+        href: get-started.qmd
+      - text: "What it can do"
+        href: features.qmd
+      - text: "Gaps"
+        href: gaps.qmd
+      - text: "Verification"
+        href: verification.qmd
+      - text: "Benchmarks"
+        href: benchmarks.qmd
+      - text: "More"
+        menu:
+          - text: "Why Rust"
+            href: why-rust.qmd
+          - text: "Design decisions (ADRs)"
+            href: decisions.qmd
+          - text: "Roadmap"
+            href: roadmap.qmd
+          - text: "Changelog"
+            href: changelog.qmd
+          - text: "API reference"
+            href: api.qmd
+    right:
+      - icon: github
+        href: https://github.com/AdamEzzat1/tidyrustmodels
+        aria-label: "GitHub repository"
+    tools: []
+  page-footer:
+    left: "tidyrustmodels 0.1.0-dev · an ongoing project · MIT OR Apache-2.0"
+    center: "Not affiliated with Posit or the tidymodels team. tidymodels is their work; this project ports its semantics to Rust and measures the result."
+    right: "Every number on this site is traced to a file in the repository."
+  search:
+    location: navbar
+    type: overlay
+
+format:
+  html:
+    theme:
+      light: [cosmo, theme.scss]
+      dark: [cosmo, theme.scss, theme-dark.scss]
+    css: assets/site.css
+    toc: true
+    toc-depth: 3
+    code-copy: true
+    code-overflow: scroll
+    highlight-style: github
+    include-in-header:
+      # The site is served under /tidyrustmodels/ on GitHub Pages and at / in local
+      # preview, so the bundles are resolved from the document's own site_libs link
+      # (Quarto always emits one with a path relative to the site root).
+      - text: |
+          <script>
+          document.addEventListener("DOMContentLoaded", function () {
+            var l = document.querySelector('link[href*="site_libs/"]');
+            var root = l ? l.getAttribute("href").split("site_libs/")[0] : "";
+            window.__siteRoot = root;
+            ["code-tabs", "table-filter", "bench-chart"].forEach(function (n) {
+              var s = document.createElement("script");
+              s.type = "module"; s.src = root + "assets/" + n + ".js";
+              document.head.appendChild(s);
+            });
+          });
+          </script>
+    link-external-newwindow: false
+    anchor-sections: true
+    smooth-scroll: true

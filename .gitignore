@@ -16,3 +16,12 @@ __pycache__/
 /bindings/python/target/
 /benchmarks/results/*.log
 /python/tidyrustmodels/*.pdb
+# website (site/): build outputs; sources of truth are the repository documents
+/site/_site/
+/site/.quarto/
+/site/node_modules/
+/site/generated/
+/site/adr/
+/site/assets/*.js
+/site/data/bench.json
+/site/_freeze/

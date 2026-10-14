@@ -1,0 +1,31 @@
+---
+title: "API reference"
+subtitle: "The Rust crates' rustdoc and the Python package's public surface."
+---
+
+## Rust
+
+The rendered rustdoc for every crate in the workspace is published under
+[`api/rust/tidyrustmodels/`](api/rust/tidyrustmodels/index.html) by the site build
+(`cargo doc --workspace --no-deps`). The facade crate `tidyrustmodels` re-exports the
+workspace through its `prelude`; the crates behind it are `tidyrustmodels-core`
+(tables, columns, design matrices, errors, seeds), `-recipes`, `-models`, `-resample`,
+`-metrics`, `-workflows`, `-tune` and `-workflowsets`. Locally:
+
+```bash
+cargo doc --workspace --no-deps --open
+```
+
+## Python
+
+The package `tidyrustmodels` re-exports the compiled extension under stable names and
+adds the pandas / Arrow / Polars / SciPy conversions in Python. Every exported name,
+with the first line of its docstring, generated from the package at build time:
+
+{{< include generated/python-api.md >}}
+
+Data conventions (from the package docstring): numeric columns are float64 with `NaN`
+for missing; categorical columns are `str` labels with `None` for missing, levels sorted
+bytewise like R's `factor()` in the C locale; the first level is the event level for
+binary classification metrics; NumPy input is copied once into the Rust column-major
+layout.
