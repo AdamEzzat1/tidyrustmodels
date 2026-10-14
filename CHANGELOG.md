@@ -21,6 +21,10 @@ VERIFICATION.md; nothing is claimed beyond those records.
   identical folds).
 - Benchmark runner: `--ab-baseline <binary>` A/B mode (system `rust_base`, A-B / B-A
   trial order), drift fingerprints in every Rust driver row, `benchmarks/ab_report.py`.
+- First CI run on GitHub (2026-10-14, Ubuntu / Windows / macOS, rustc 1.99.0): one
+  clippy lint (`needless_late_init` in the rpart port; restructured, no semantic change,
+  differential suite exact) and the advisory RUSTSEC-2024-0436 (`paste`, reachable only
+  through linfa -> argmin) acknowledged in `deny.toml` and DEPENDENCIES.md.
 
 ### Added
 - Release preparation for 0.1.0 (ROADMAP.md Phase 6): feature matrix `docs/FEATURES.md`,

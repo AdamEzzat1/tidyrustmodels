@@ -16,7 +16,13 @@ allow = [
 confidence-threshold = 0.9
 
 [advisories]
-ignore = []
+ignore = [
+    # `paste` 1.0.15 (proc-macro, unmaintained since 2024-10) is pulled in only by
+    # argmin 0.11 <- linfa-linear / linfa-logistic (the optional comparison engines,
+    # ADR-0002); the native engine does not use it. Build-time only, no runtime code.
+    # Re-check when linfa releases against an argmin that has dropped `paste`.
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained proc-macro reachable only through linfa -> argmin; not used by the native engine" },
+]
 
 [bans]
 multiple-versions = "allow"   # linfa (ndarray 0.16) and smartcore (ndarray 0.17) coexist by design (ADR-0002)

@@ -35,6 +35,12 @@ before upgrading; do not trust this table for other versions.
 
 All licenses are compatible with the project license (MIT OR Apache-2.0).
 
+Advisories (`cargo deny check advisories`, run by CI on every push; `deny.toml`): one
+acknowledged, RUSTSEC-2024-0436, the unmaintained proc-macro `paste` 1.0.15 reachable
+only through argmin 0.11 <- linfa-linear / linfa-logistic (the optional comparison
+engines, ADR-0002). It runs at build time only and the native engine does not touch it;
+the entry is to be removed when linfa publishes against an argmin without `paste`.
+
 ## Rejected or deferred
 
 | crate            | version | reason |

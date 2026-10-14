@@ -490,8 +490,7 @@ impl<'a> Rp<'a> {
     fn partition(&mut self, nodenum: u32, me: &mut Node, n1: usize, n2: usize) -> (usize, f64) {
         let n = n2 - n1;
         me.number = nodenum;
-        let tempcp;
-        if nodenum > 1 {
+        let tempcp = if nodenum > 1 {
             let mut twt = 0.0;
             for (k, &j) in self.sorts[0][n1..n2].iter().enumerate() {
                 self.wtemp[k] = self.wt[j];
@@ -503,10 +502,10 @@ impl<'a> Rp<'a> {
             me.risk = risk;
             me.n = n;
             me.sum_wt = twt;
-            tempcp = me.risk.min(me.complexity);
+            me.risk.min(me.complexity)
         } else {
-            tempcp = me.risk;
-        }
+            me.risk
+        };
         if me.n < self.control.minsplit || tempcp <= self.alpha || f64::from(nodenum) > self.maxnode {
             me.complexity = self.alpha;
             me.split = None;
