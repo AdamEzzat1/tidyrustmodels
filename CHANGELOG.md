@@ -32,7 +32,7 @@ VERIFICATION.md; nothing is claimed beyond those records.
   `expf` / `logf` ulp, amplified into the fold boosters' tree statistics (≤ 2.9e-5
   rel) and the CV summary statistics (≤ 1.4e-8 rel); everything else is identical on
   all three platforms. `tolerances.toml` gains `[platform.<os>-<arch>.tasks.<task>]`
-  sections with the measured maxima (3 bounds on Linux, 11 on macOS); the Windows
+  sections with the measured maxima (3 bounds on Linux, 10 on macOS); the Windows
   bounds are unchanged and the report header names the platform and the bounds in
   force. The "bit-exact against xgboost" record is now stated for the fixture
   platform; Linux / macOS parity against an xgboost built there is not measured.

@@ -62,8 +62,13 @@ jobs:
           python-version: "3.11"
       - run: python -m venv .venv
       - run: ${{ runner.os == 'Windows' && '.venv\Scripts\python.exe' || '.venv/bin/python' }} -m pip install maturin numpy pandas pytest
+      # The extension is built in release (opt-level 3, fat LTO); the Rust reference
+      # must come from the same profile. Measured 2026-10-14: against a test-profile
+      # (opt-level 2) reference the smartcore engine's L-BFGS differs in the last bits
+      # on Linux (penguins_clf coefficients, 1e-10 rel) and macOS arm64 (one fold's
+      # log loss, 1 ulp) while native and linfa agree bitwise on all three platforms.
       - name: Produce Rust outputs for the bitwise parity test
-        run: cargo test -p tidyrustmodels --test differential
+        run: cargo test --release -p tidyrustmodels --test differential
       - name: Build and install the extension
         shell: bash
         run: |

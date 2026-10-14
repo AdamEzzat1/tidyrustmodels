@@ -84,6 +84,13 @@
   Those platforms carry measured bounds in `tolerances.toml` (ADR-0017). Whether the
   port matches an xgboost *built on* Linux or macOS is not measured (no fixtures from
   R on those platforms).
+- The `smartcore` engine's results depend on the optimisation level at the last bit
+  on Linux x86_64 and macOS arm64 (first Python-parity CI run, 2026-10-14): an
+  opt-level 3 + fat-LTO build differs from an opt-level 2 build by 1e-10 relative on
+  `penguins_clf` coefficients (Linux) and one ulp on one fold's `mn_log_loss` (macOS);
+  the native and linfa engines are bit-identical across profiles on all three
+  platforms. The parity test therefore builds both sides with the release profile.
+  Reproducibility claims for `smartcore` fits hold per build, not across builds.
 
 ## Findings from benchmarking (run `2026-10-12-win11-i7-11390H`, BENCHMARKS.md)
 

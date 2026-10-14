@@ -868,13 +868,26 @@ Windows in the first column for reference):
 | CV summary mean / std_err (rel) | 1e-12 (`native_summary`) | 1.3e-15 | 1.4e-8 | 1.4e-8 |
 
 Decision: `tolerances.toml` gains `[platform.<os>-<arch>.tasks.<task>]` sections that
-apply only on that platform (3 bounds on Linux, 11 on macOS, each set to the measured
+apply only on that platform (3 bounds on Linux, 10 on macOS, each set to the measured
 maximum rounded up to two digits and quoting the measurement); the Windows bounds are
 unchanged, so the bit-exact record above keeps being asserted where it was measured.
 The report header now names the platform, the fixtures' R platform and the number of
 platform bounds in force, and CI keeps `target/differential_report.md` as an artifact
 per OS. **Not measured:** whether the port is bit-exact against an xgboost built on
 Linux or macOS; that needs fixtures produced by R on those platforms.
+
+The Python parity suite (`python/tests/test_parity.py`, bitwise against the Rust
+suite's dumped outputs) then ran for the first time off Windows (run 38619875075,
+commit `7d18477`): Windows 208 passed; Linux and macOS 204 passed, 1 failed each, both
+on the **smartcore** engine, with the extension built in release (opt-level 3, fat
+LTO) and the reference produced under the test profile (opt-level 2): Linux
+`penguins_clf` coefficients differ by 1e-10 relative, macOS `wfs_clf_unnamed` by one
+ulp in one fold's `mn_log_loss`; the native and linfa engines agree bit for bit across
+the two profiles on all three platforms. The CI job now produces the reference with
+`cargo test --release` so both sides share one profile (Windows: 272 output files,
+208 passed, 92 skipped, 2026-10-14); the finding itself (smartcore's L-BFGS is
+sensitive to the optimisation level on Linux / macOS codegen at the last bit) is
+recorded in LIMITATIONS.md.
 
 ## Test inventory
 
