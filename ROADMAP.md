@@ -50,15 +50,15 @@ Gate:
 - [x] COMPATIBILITY.md status column populated from test results.
 - [ ] Independent reviewer sign-off recorded.
 
-## Phase 5 — Performance evaluation (2026-10-12) — first run complete, protocol gaps open
+## Phase 5 — Performance evaluation (2026-10-12 → 2026-10-14) — protocol complete on one platform
 
 Gate:
 - [x] Runner executes both systems with recorded hardware/config; `benchmarks/results/2026-10-12-win11-i7-11390H/{results.csv,env.json,report.md}` committed (270/270 trials ok).
 - [x] Framework-overhead and workflow-level categories reported separately (BENCHMARKS.md).
-- [x] Any optimization merged in this phase has a before/after benchmark: none merged; the run is the baseline.
+- [x] Any optimization merged in this phase has a before/after benchmark: the 2026-10-13 pass (shared table columns, single-copy design matrix, preprocessing once per resample) and the fold-complement fix are A/B-verified against the pre-optimisation library with bitwise-identical fingerprints (`docs/perf/2026-10-13-rust-opts-ab.md`, runs `2026-10-13-ab-opts1`, `…-rf`, `2026-10-14-ab-complement`).
 - [x] Protocol as specified for the linear / logistic core: 10 trials, 30 warm iterations, 10 folds, 20-point grid, allocation counts (Rust: count + bytes per phase; R: R-level bytes), power plan and source in `env.json` (run `…-g`, 2026-10-13; 13 valid configurations, 3 disturbed ones re-queued as run `…-k`).
-- [ ] The same protocol for trees, forests, boosting, case weights, bootstrap / repeated CV (run `…-i`), workflow sets (`…-j`) and the 1e6-row point (`…-h`): drivers and tasks written and smoke-tested, runs queued behind an idle gate (the host was in use by other processes when the first chain ran; see the disturbance log in BENCHMARKS.md).
-- [ ] Driver A/B on record (`alloc_zeroed` forwarding in the counting allocator; runs `…-ab-old` / `…-ab-new`, queued).
+- [x] The same protocol for trees, forests, boosting, case weights, bootstrap / repeated CV (run `…-i`, 361 trials), workflow sets (`…-j`, 120), the re-measured 100k configurations (`…-k`, 90) and the 1e6-row point (`…-h`, 60; 10 warm iterations, CV only), 2026-10-14, each run started by an idle gate; one R timeout on record (rpart at 100k rows under the 600 s limit, re-run at 1500 s).
+- [x] Driver A/B: superseded by the optimisation A/B above (the planned `alloc_zeroed`-only A/B was not run; the library changed under it, BENCHMARKS.md).
 - [x] Rust peak memory captured for sub-150 ms processes (`PeakWorkingSetSize` via retained handles; run `…-b`, no missing cell).
 - [x] Python wrapper measured as a third system (runs `…-b` and `…-d`, all nine tasks incl. 100k rows; bitwise-identical CV results to the Rust binary).
 - [x] Trial interleaving across systems after run `…-c` showed machine-state drift (kept on record, labelled invalid for timing).

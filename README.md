@@ -28,16 +28,18 @@ What is verified today (VERIFICATION.md):
   than the L-BFGS engines (BENCHMARKS.md run F).
 - The Python bindings produce bitwise-identical results to the Rust API.
 
-What is measured today (BENCHMARKS.md, one Windows laptop; protocol run G of
-2026-10-13: 10 cold trials, 30 warm iterations, 10 folds, 20-point grids): linear and
-logistic workflows with the native engine fit 12–930× faster than R tidymodels per
-workflow fit (the ratio falls with n: 930× at 342 rows, 12× at 100k), 10-fold CV
-7.5–2200× faster, with R's peak memory 9–70× the Rust binary's and 4.5–5× the Python
-wrapper's. Logistic tuning against glmnet (a different algorithm) is 2.5× faster at 10k
-rows and 60–360× on the small tasks. The Python wrapper tracks the Rust binary within
-±10% on compute-bound phases. Trees, forests, boosting, case weights, bootstrap /
-repeated CV, workflow sets and the 1e6-row point are queued (runs I, J, K, H) and not
-yet measured. Read the deviations and disturbance log there before quoting any number.
+What is measured today (BENCHMARKS.md, one Windows laptop, protocol runs G–K of
+2026-10-13/14: 10 cold trials, 30 warm iterations, 10 folds, 20-point or 4 × 5 grids,
+R single-threaded on reference BLAS): per workflow fit the native ports are 6–930×
+faster than R tidymodels for linear and logistic models (930× at 342 rows, 12× at 100k,
+6× at 1e6), 13–450× for rpart-style trees, 2–4.6× for xgboost-style boosting, and on
+par with ranger for random forests (0.86–1.04×); 10-fold CV 3.7–2200× (linear /
+logistic), 13–470× (trees), 2.6–7.8× (boosting), 1.0–1.1× (forests); tuning grids
+13–425× for trees, 4× for boosting, 1.1–360× for logistic against glmnet (a different
+algorithm; equal at 100k rows); workflow sets 14–270×. R's peak memory is 3.5–70× the
+Rust binary's and 2.4–5× the Python wrapper's. The Python wrapper equals the Rust
+binary within ±5% on phases above 100 ms. Read the deviations and the disturbance log
+there before quoting any number; no result transfers to other hardware.
 
 ## Quick start (Rust)
 

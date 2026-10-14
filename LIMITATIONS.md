@@ -121,6 +121,19 @@
   15–28% *faster* on the OLS workflows; the suspect is the bench binary's counting
   allocator (no `alloc_zeroed` forwarding, fixed; A/B queued). Until the A/B is on
   record, the Python column is the cleaner timing of the native code on OLS tasks.
+- Runs K, I, J, H (2026-10-14, idle-gated; BENCHMARKS.md): rpart-style trees 13–30×
+  faster per fit than rpart at ≥ 2930 rows (450× at 333), 13× at 100k for the 4 × 5
+  grid (R 611 s); the xgboost port 2× xgboost's own histogram code at 100k rows and
+  4–5× at 2930 (CV 2.6–7.8×); the forest port **not faster than ranger** (0.86–1.04×
+  per fit, CV 0.98–1.13×) and at 0.6–2M allocations per fit the first optimisation
+  target; frequency case weights cost nothing measurable; 25 bootstraps / 3 × 10
+  repeated folds 29–32× on OLS; workflow sets 14–270×; at 1e6 rows OLS fit 5–6× and
+  CV 5.3×, logistic fit 3.4× and CV 3.7×, memory 3.5–4.3× (2.9 GB vs 0.7–0.8 GB).
+  R timed out once on an idle machine (rpart tuning at 100k rows needs ~790 s); such
+  tasks need their own `--timeout`.
+- The first 1e6-row attempt found a quadratic fold complement (200 s outside every
+  timed phase): compare a driver's wall time with the sum of its phases before reading
+  any table (fixed, A/B-verified; `docs/perf/2026-10-13-rust-opts-ab.md`).
 - The host is a laptop that other people and tools use: run G was disturbed from
   about 15:51 by Chrome, a service host and the Malicious Software Removal Tool, one R
   trial timed out, three configurations were invalidated and re-queued. Windows'

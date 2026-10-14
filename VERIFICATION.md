@@ -832,6 +832,10 @@ per-fold CV metrics, tuning results, selection, workflow-set ranking) across eve
 trial of both binaries in 18 task × thread cells; `cargo test --workspace` (differential
 suite 17541 comparisons, 0 failures); `pytest python/tests` 208 passed; the four
 release examples reproducing the Phase 6 record above to the last printed digit.
+The fold-complement fix of 2026-10-14 (quadratic scan in `Folds::from_assignments`)
+was checked the same way: fingerprints identical in A/B `2026-10-14-ab-complement`,
+differential suite (exact fold memberships against rsample, Phase 8h) and Python
+suite green.
 
 ## Test inventory
 

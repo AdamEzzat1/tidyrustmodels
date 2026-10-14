@@ -160,10 +160,19 @@ impl Folds {
         if let Some(k) = members.iter().position(|m| m.is_empty()) {
             return Err(Error::InvalidArgument(format!("fold {k} has no rows")));
         }
+        // the complement of each fold in one pass over the assignments (ascending, as
+        // `setdiff(1:n, assessment)`); a per-row membership scan would be quadratic in n
+        // and cost minutes at 1e6 rows
         let splits = members
             .iter()
-            .map(|test| {
-                let train: Vec<usize> = (0..n).filter(|i| !test.contains(i)).collect();
+            .enumerate()
+            .map(|(k, test)| {
+                let train: Vec<usize> = fold_of_row
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, f)| **f as usize != k)
+                    .map(|(i, _)| i)
+                    .collect();
                 Split {
                     train,
                     test: test.clone(),

@@ -73,6 +73,7 @@ recipe for every candidate.
 | 9 | Case weights as `Arc<[f64]>`: weights are read once per fold from the already-selected rows; the copy is one `Vec<f64>` per fold, not measured as hot. | – | deferred |
 | 10 | Workflow-set level sharing of prepared folds across models of one preprocessor: `workflow_map` benefits from 3 through `tune_grid`; sharing across entries needs an explicit recipe-identity contract and was not attempted. | – | next target |
 | 11 | Name-check / `String` clone micro-optimisations: not measured as hot. | – | deferred |
+| 12 | (found by protocol run H, 2026-10-14) `Folds::from_assignments` built each fold's analysis set with a per-row `contains` scan over the assessment rows: quadratic in n, about 2 s at 100k rows and 200 s at 1e6 rows, outside every timed phase (the Rust process spent 231 s on 17 s of measured work). Replaced by one pass over the fold assignments; same ascending complement. A/B `2026-10-14-ab-complement` (6 trials, A-B / B-A): wall at 100k rows 0.34× (3.24 s → 1.09 s), CV and fits within noise, all fingerprints identical; differential suite (exact fold memberships vs rsample) and Python suite pass. | resample `lib.rs` | **accepted** |
 
 Behavioural notes (reviewed by the semantics role): (a) `fit_fold_full` now bakes the
 assessment rows before the capability check runs, so on an input that is wrong in both
@@ -137,6 +138,9 @@ working set is unchanged or smaller (one +0.7 MB cell on the bootstrap task, wit
 5% band and inside the trial spread), no touched phase regresses outside the noise band,
 and every drift fingerprint is identical. Phases where the model fit dominates (xgb
 tuning, the 342-row tasks at microsecond level) are unchanged, as expected.
+
+Protocol run H's first attempt (`benchmarks/results/2026-10-13-win11-i7-11390H-h-quadratic-complement/`,
+4 trials) is kept as the evidence for change 12; run H itself was re-run on the fix.
 
 ## Remaining risks
 

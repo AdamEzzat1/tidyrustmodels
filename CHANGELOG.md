@@ -15,6 +15,10 @@ VERIFICATION.md; nothing is claimed beyond those records.
   per thread. Results are bitwise identical (fingerprints, differential suite, Python
   parity); prep + bake 18–43% faster, CV 12–29% faster on linear tasks, tuning 16–37%
   faster on tree / logistic grids, 22–44% fewer bytes allocated per CV.
+- `Folds::from_assignments` (every v-fold / repeated / grouped v-fold generator) builds
+  the analysis sets in one pass instead of a quadratic membership scan: 2 s saved at
+  100k rows, about 200 s at 1e6 (found by the 1e6-row protocol run; A/B-verified,
+  identical folds).
 - Benchmark runner: `--ab-baseline <binary>` A/B mode (system `rust_base`, A-B / B-A
   trial order), drift fingerprints in every Rust driver row, `benchmarks/ab_report.py`.
 
