@@ -143,12 +143,17 @@ impl LogisticRegSpec {
     }
 }
 
-/// Options forwarded to backends.
+/// Options forwarded to backends. `max_iterations` / `gradient_tolerance` are the
+/// L-BFGS settings and are read only by the linfa engine (smartcore ignores them,
+/// recorded in its diagnostics note; the native IRLS path uses `irls_*`), so a build
+/// without that engine leaves them unread.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct LogisticOptions {
     pub intercept: bool,
     pub penalty: f64,
+    #[cfg_attr(not(feature = "linfa"), allow(dead_code))]
     pub max_iterations: u64,
+    #[cfg_attr(not(feature = "linfa"), allow(dead_code))]
     pub gradient_tolerance: f64,
     pub irls_epsilon: f64,
     pub irls_max_iterations: usize,
