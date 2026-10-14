@@ -5,10 +5,14 @@
 
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use tidyrustmodels_core::{Error, Parallelism, Result, Seed, Table};
 use tidyrustmodels_metrics::{Direction, Metric, MetricSet};
 use tidyrustmodels_resample::Folds;
-use tidyrustmodels_workflows::{parallel_map, FittedWorkflow, FoldMetrics, ResampleResults, Workflow};
+use tidyrustmodels_workflows::{
+    parallel_map, FittedWorkflow, FoldMetrics, PreparedFold, ResampleResults, Workflow,
+};
 
 /// One candidate: `(parameter name, value)` pairs.
 pub type ParamSet = Vec<(String, f64)>;
@@ -489,26 +493,62 @@ pub fn tune_grid(
         .iter()
         .map(|p| workflow.finalize(p))
         .collect::<Result<_>>()?;
-    let jobs: Vec<(usize, usize)> = (0..candidates.len())
-        .flat_map(|c| (0..folds.len()).map(move |k| (c, k)))
+    // tune 2.1.0 (`tune_grid_loop_iter`): when only model parameters are tuned the
+    // preprocessor is estimated once per resample and every candidate is fitted on
+    // that; the fold fits skip workflows' sparsity toggle and use frequency case
+    // weights in the metrics (Workflow::prepare_fold / fit_prepared). Jobs are
+    // fold-major so that a fold's prepared design is built by the first candidate
+    // that needs it and dropped after its last one: in serial order one fold is live
+    // at a time, in parallel order about one per thread.
+    let n_cand = candidates.len();
+    let slots: Vec<FoldSlot> = (0..folds.len())
+        .map(|_| FoldSlot {
+            prepared: Mutex::new(None),
+            remaining: AtomicUsize::new(n_cand),
+        })
         .collect();
-    let fold_results = parallel_map(jobs, par, |(c, k)| {
-        let split = &folds.splits[k];
-        let train = data.select_rows(&split.train)?;
-        let test = data.select_rows(&split.test)?;
-        // tune 2.1.0: fold fits skip workflows' sparsity toggle and use frequency
-        // case weights in the metrics (Workflow::fit_fold)
+    let jobs: Vec<(usize, usize)> = (0..folds.len())
+        .flat_map(|k| (0..n_cand).map(move |c| (k, c)))
+        .collect();
+    let fold_results = parallel_map(jobs, par, |(k, c)| {
+        let prepared = {
+            let mut slot = slots[k]
+                .prepared
+                .lock()
+                .map_err(|_| Error::InvalidArgument("fold cache poisoned by a panic".into()))?;
+            match slot.as_ref() {
+                Some(p) => Arc::clone(p),
+                None => {
+                    let split = &folds.splits[k];
+                    let train = data.select_rows(&split.train)?;
+                    let test = data.select_rows(&split.test)?;
+                    let p = Arc::new(workflow.prepare_fold(&train, &test)?);
+                    *slot = Some(Arc::clone(&p));
+                    p
+                }
+            }
+        };
+        let metrics = candidates[c].fit_prepared(&prepared, metrics);
+        drop(prepared);
+        if slots[k].remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
+            if let Ok(mut slot) = slots[k].prepared.lock() {
+                *slot = None;
+            }
+        }
         Ok(FoldMetrics {
             id: folds.ids[k].clone(),
-            metrics: candidates[c].fit_fold(&train, &test, metrics)?,
+            metrics: metrics?,
         })
     })?;
-    let mut iter = fold_results.into_iter();
+    // fold_results[k * n_cand + c] -> per candidate, folds in order
     let results = grid
         .points
         .iter()
-        .map(|p| {
-            let per_fold: Vec<FoldMetrics> = iter.by_ref().take(folds.len()).collect();
+        .enumerate()
+        .map(|(c, p)| {
+            let per_fold: Vec<FoldMetrics> = (0..folds.len())
+                .map(|k| fold_results[k * n_cand + c].clone())
+                .collect();
             (p.clone(), ResampleResults::from_folds(per_fold))
         })
         .collect();
@@ -516,6 +556,12 @@ pub fn tune_grid(
         candidates: results,
         param_order: workflow.model().tunable().iter().map(|s| s.to_string()).collect(),
     })
+}
+
+/// One resample's prepared design, shared by the candidates that still need it.
+struct FoldSlot {
+    prepared: Mutex<Option<Arc<PreparedFold>>>,
+    remaining: AtomicUsize,
 }
 
 #[cfg(test)]

@@ -31,7 +31,7 @@ tidyrustmodels-workflows = { path = "crates/tidyrustmodels-workflows", version =
 tidyrustmodels-tune = { path = "crates/tidyrustmodels-tune", version = "0.1.0-dev" }
 tidyrustmodels-workflowsets = { path = "crates/tidyrustmodels-workflowsets", version = "0.1.0-dev" }
 
-serde = { version = "1.0.229", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
 thiserror = "2.0.21"
 rand = "0.10.3"

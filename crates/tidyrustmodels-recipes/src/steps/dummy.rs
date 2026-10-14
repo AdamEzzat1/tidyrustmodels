@@ -3,6 +3,7 @@
 use crate::names::dummy_name;
 use crate::selector::Selector;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tidyrustmodels_core::{Column, ColumnKind, Error, Field, FittedStep, Result, Role, Schema, Step, Table};
 
 /// Indicator encoding. With `one_hot = false` (the recipes default) the first level is
@@ -180,9 +181,9 @@ impl FittedStep for FittedDummy {
 
     fn bake(&self, data: &Table) -> Result<Table> {
         let mut out = Table::with_nrows(data.nrows());
-        for (name, col) in data.iter() {
+        for (name, col) in data.iter_shared() {
             if !self.encodings.iter().any(|(n, _, _)| n == name) {
-                out.insert(name, col.clone())?;
+                out.insert_shared(name, Arc::clone(col))?;
             }
         }
         for (name, levels, out_names) in &self.encodings {

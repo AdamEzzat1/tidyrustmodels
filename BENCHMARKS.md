@@ -432,6 +432,20 @@ Raw data: `benchmarks/results/2026-10-12-win11-i7-11390H-e/` (disturbed, kept) a
 `…-f/{results.csv, env.json, report.md}`.
 
 
+### Optimisation pass A/B `2026-10-13-ab-opts1` (ROADMAP Phase 5: before/after for merged optimisations)
+
+Three implementation changes (shared table columns, single-copy design matrix,
+preprocessing once per resample in `tune_grid`) were merged after an interleaved A/B
+against the pre-optimisation library (`29ba04a`), identical driver, 5 trials per cell,
+30 warm iterations, 10 folds, 20-point grids, 16 task × thread cells plus a balanced
+6-trial forest re-run, every drift fingerprint bitwise identical. Targeted phases:
+prep + bake 0.57–0.82×, workflow fit 0.73–0.95× at 2930–100k rows, CV 0.71–0.88× on the
+linear tasks, tuning 0.63–0.84× for the tree and logistic grids, allocation volume per
+CV 0.56–0.78×; model-only fits unchanged (0.98–1.02×). Full tables, commands, the
+rejected / deferred candidates and the risks: `docs/perf/2026-10-13-rust-opts-ab.md`;
+raw data `benchmarks/results/2026-10-13-ab-opts1{,-rf}/`. The protocol runs G (above)
+predate this pass; runs K, I, J and H run on the merged code.
+
 ### Phase 5 protocol runs `2026-10-13-win11-i7-11390H-{g,i,j,h}`
 
 The runs that close the protocol gaps listed in ROADMAP.md Phase 5. All four were executed
@@ -783,4 +797,4 @@ at 10k rows) the two are equal within ±10%. On the OLS workflows the Python wra
 15–28% *faster* than the Rust binary (ames CV 32 vs 44 ms; synth_10000_reg CV 53 vs
 69 ms; warm workflow fit 2.4 vs 3.1 ms and 3.6 vs 5.0 ms). Both call the same native
 code; the Rust binary additionally counts allocations and, as noted above, memsets every
-zero-filled buffer. The A/B of the two driver builds (`…-ab-old` vs `…-ab-new`, Rust only, same tasks) is queued behind the idle gate; its result goes here. Until then, read the Python column as the cleaner timing of the native code on the OLS tasks.
+zero-filled buffer. The planned A/B of the two driver builds was overtaken by the optimisation pass of 2026-10-13 (`docs/perf/2026-10-13-rust-opts-ab.md`), which changed the library under both drivers; it was not run. Runs K, I, J and H use the fixed driver, so their Rust and Python columns are comparable again. For run G, read the Python column as the cleaner timing of the native code on the OLS tasks.

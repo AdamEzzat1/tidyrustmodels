@@ -6,6 +6,7 @@
 
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// The kind of a column.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -339,10 +340,15 @@ impl Schema {
 }
 
 /// An owned table of equal-length columns with unique names.
+///
+/// Columns are reference-counted internally: cloning a table, or baking a recipe step
+/// that touches some columns, shares the untouched columns instead of copying them.
+/// Nothing user-visible changes (a table still owns its data, `PartialEq` compares
+/// values, serialisation is unchanged); only the cost of a clone does.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Table {
     names: Vec<String>,
-    columns: Vec<Column>,
+    columns: Vec<Arc<Column>>,
     nrows: usize,
 }
 
@@ -368,7 +374,7 @@ impl Table {
                 Some(_) => {}
             }
             names.push(name);
-            cols.push(col);
+            cols.push(Arc::new(col));
         }
         Ok(Table {
             names,
@@ -406,16 +412,38 @@ impl Table {
         self.names
             .iter()
             .position(|n| n == name)
-            .map(|i| &self.columns[i])
+            .map(|i| self.columns[i].as_ref())
+    }
+
+    /// Column by name as a shared handle (no copy); pair with [`Table::insert_shared`]
+    /// to carry a column into another table.
+    pub fn column_shared(&self, name: &str) -> Option<Arc<Column>> {
+        self.names
+            .iter()
+            .position(|n| n == name)
+            .map(|i| Arc::clone(&self.columns[i]))
     }
 
     /// Iterate `(name, column)` pairs in order.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &Column)> {
+        self.names
+            .iter()
+            .map(String::as_str)
+            .zip(self.columns.iter().map(|c| c.as_ref()))
+    }
+
+    /// Iterate `(name, shared column)` pairs in order (see [`Table::column_shared`]).
+    pub fn iter_shared(&self) -> impl Iterator<Item = (&str, &Arc<Column>)> {
         self.names.iter().map(String::as_str).zip(self.columns.iter())
     }
 
     /// Add or replace a column.
     pub fn insert(&mut self, name: impl Into<String>, col: Column) -> Result<()> {
+        self.insert_shared(name, Arc::new(col))
+    }
+
+    /// Add or replace a column from a shared handle (no copy of the values).
+    pub fn insert_shared(&mut self, name: impl Into<String>, col: Arc<Column>) -> Result<()> {
         let name = name.into();
         if col.len() != self.nrows && !(self.columns.is_empty()) {
             return Err(Error::InvalidArgument(format!(
@@ -441,14 +469,15 @@ impl Table {
     pub fn remove(&mut self, name: &str) -> Option<Column> {
         let i = self.names.iter().position(|n| n == name)?;
         self.names.remove(i);
-        Some(self.columns.remove(i))
+        let col = self.columns.remove(i);
+        Some(Arc::try_unwrap(col).unwrap_or_else(|shared| (*shared).clone()))
     }
 
     /// Select rows by index into a new table.
     pub fn select_rows(&self, rows: &[usize]) -> Result<Table> {
         let mut cols = Vec::with_capacity(self.columns.len());
         for c in &self.columns {
-            cols.push(c.select_rows(rows)?);
+            cols.push(Arc::new(c.select_rows(rows)?));
         }
         Ok(Table {
             names: self.names.clone(),

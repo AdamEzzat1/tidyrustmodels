@@ -170,7 +170,7 @@ impl FittedRecipe {
     /// missing values, naming the column and the step that would fix it.
     pub fn bake_matrix(&self, data: &Table) -> Result<(DesignMatrix, Option<Outcome>)> {
         let baked = self.bake(data)?;
-        let mut cols = Vec::new();
+        let mut cols: Vec<(&str, &[f64])> = Vec::new();
         let mut any_sparse = false;
         for f in &self.output_schema.fields {
             if f.role != Role::Predictor {
@@ -193,14 +193,14 @@ impl FittedRecipe {
                 )));
             }
             any_sparse |= col.is_sparse();
-            cols.push((f.name.clone(), col.as_numeric().expect("numeric").to_vec()));
+            cols.push((f.name.as_str(), col.as_numeric().expect("numeric")));
         }
         // parsnip's `maybe_sparse_matrix()`: one sparse column makes the whole design
         // a sparse matrix for engines that accept one (ADR-0015)
         let x = if cols.is_empty() {
             DesignMatrix::from_column_major(Vec::new(), baked.nrows(), 0, Vec::new())?
         } else {
-            DesignMatrix::from_columns(cols)?.with_sparse(any_sparse)
+            DesignMatrix::from_column_slices(&cols)?.with_sparse(any_sparse)
         };
         let y = match baked.column(&self.outcome) {
             Some(c) => Some(Outcome::from_column(c)?),

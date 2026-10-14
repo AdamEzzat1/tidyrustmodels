@@ -68,8 +68,8 @@ impl FittedStep for FittedSelect {
         let mut out = Table::with_nrows(data.nrows());
         for name in &self.keep {
             // The outcome may legitimately be absent at prediction time.
-            match data.column(name) {
-                Some(c) => out.insert(name.clone(), c.clone())?,
+            match data.column_shared(name) {
+                Some(c) => out.insert_shared(name.clone(), c)?,
                 None if self.schema.field(name).is_some_and(|f| f.role == Role::Outcome) => {}
                 None => {
                     return Err(Error::SchemaMismatch(format!(

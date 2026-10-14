@@ -52,6 +52,8 @@ def command(system: str, spec: dict, engine: str, threads: int, warm: int, v: in
     common = driver_flags(spec, threads, warm, v, tune_levels)
     if system == "rust":
         return [str(BENCH_BIN), "--engine", engine, *common]
+    if system == "rust_base":
+        return [str(BASE_BIN), "--engine", engine, *common]
     if system == "python":
         return [sys.executable, "-I", str(PY_DRIVER), "--engine", engine, *common]
     return [RSCRIPT, str(ROOT / "benchmarks" / "r" / "bench_task.R"), *common]
@@ -171,6 +173,7 @@ def environment() -> dict:
                               else "POSIX ru_maxrss of RUSAGE_CHILDREN via wrapper (exact, largest descendant)",
         "protocol": {a: getattr(ARGS, a) for a in ("trials", "warm", "v", "tune_levels", "threads", "timeout")} if ARGS else None,
         "rust_binary": str(BENCH_BIN),
+        "ab_baseline_binary": str(BASE_BIN) if BASE_BIN else None,
     }
     try:
         bat = psutil.sensors_battery()
@@ -196,9 +199,10 @@ FIELDS = [
     "load_s", "prep_s", "bake_s", "fit_s", "wf_fit_s", "predict_s", "cv_s", "tune_s", "select_s", "wfs_s", "library_load_s",
     "alloc_wf_fit_count", "alloc_wf_fit_mb", "alloc_cv_count", "alloc_cv_mb",
     "warm_iters", "warm_prep_bake_s", "warm_fit_s", "warm_wf_fit_s", "warm_predict_s",
-    "tune_candidates", "select_params", "wfs_best", "cv_summary", "stderr",
+    "tune_candidates", "select_params", "wfs_best", "cv_summary", "fingerprints", "stderr",
 ]
 ARGS = None
+BASE_BIN = None  # --ab-baseline: a second Rust driver binary run as system "rust_base"
 
 
 def main() -> None:
@@ -215,6 +219,9 @@ def main() -> None:
     ap.add_argument("--timeout", type=float, default=600.0)
     ap.add_argument("--blocked", action="store_true", help="run each system's trials back to back instead of interleaving")
     ap.add_argument("--rust-binary", default=None, help="alternative Rust driver binary (A/B of the driver itself); recorded in env.json")
+    ap.add_argument("--ab-baseline", default=None,
+                    help="A/B mode: a baseline Rust driver binary run as system `rust_base` (add it to --systems); "
+                         "trials alternate A-B / B-A so both share any machine-state drift")
     a = ap.parse_args()
     global ARGS
     ARGS = a
@@ -222,10 +229,16 @@ def main() -> None:
 
     out_dir = ROOT / "benchmarks" / "results" / a.run_id
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "env.json").write_text(json.dumps(environment(), indent=1))
-    global BENCH_BIN
+    global BENCH_BIN, BASE_BIN
     if a.rust_binary:
         BENCH_BIN = Path(a.rust_binary).resolve()
+    if a.ab_baseline:
+        BASE_BIN = Path(a.ab_baseline).resolve()
+        if not BASE_BIN.exists():
+            raise SystemExit(f"A/B baseline binary not found: {BASE_BIN}")
+    (out_dir / "env.json").write_text(json.dumps(environment(), indent=1))
+    if "rust_base" in systems and not BASE_BIN:
+        raise SystemExit("system rust_base needs --ab-baseline <binary>")
     if "rust" in systems and not BENCH_BIN.exists():
         raise SystemExit(f"build the bench binary first: cargo build --release --manifest-path benchmarks/rust/Cargo.toml ({BENCH_BIN})")
     if "python" in systems:
@@ -249,7 +262,7 @@ def main() -> None:
                 configs = []
                 if "r" in systems:
                     configs.append(("r", spec["r_engine"]))
-                for system in ("rust", "python"):
+                for system in ("rust_base", "rust", "python"):
                     if system in systems:
                         configs += [(system, e) for e in a.engines.split(",")]
                 # Interleaved order (default): trial 0 of every system, then trial 1, ... so a drift
@@ -257,6 +270,10 @@ def main() -> None:
                 # system's trials back to back (the order used by runs A-C).
                 if a.blocked:
                     order = [(system, engine, trial) for system, engine in configs for trial in range(a.trials)]
+                elif a.ab_baseline:
+                    # A/B: alternate the system order every trial (A B | B A | A B ...)
+                    order = [(system, engine, trial) for trial in range(a.trials)
+                             for system, engine in (configs if trial % 2 == 0 else list(reversed(configs)))]
                 else:
                     order = [(system, engine, trial) for trial in range(a.trials) for system, engine in configs]
                 for system, engine, trial in order:
@@ -294,6 +311,7 @@ def main() -> None:
                                 "select_params": json.dumps(p.get("select_params")) if p.get("select_params") is not None else "",
                                 "wfs_best": p.get("wfs_best") or "",
                                 "cv_summary": json.dumps(p.get("cv_summary")),
+                                "fingerprints": json.dumps(p.get("fingerprints")) if p.get("fingerprints") else "",
                             })
                         w.writerow(row)
                         fh.flush()

@@ -13,6 +13,7 @@ publish = false
 
 [dependencies]
 tidyrustmodels = { path = "../../crates/tidyrustmodels" }
+serde = "1.0.229"
 serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
 
 [profile.release]

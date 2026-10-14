@@ -7,8 +7,8 @@
 use serde::{Deserialize, Serialize};
 use tidyrustmodels_core::sparsity::should_use_sparsity;
 use tidyrustmodels_core::{
-    Capability, CaseWeights, Error, FittedModel, ModelSpec, Outcome, Parallelism, Prediction, Result, Table,
-    WeightKind,
+    Capability, CaseWeights, DesignMatrix, Error, FittedModel, ModelSpec, Outcome, Parallelism, Prediction,
+    Result, Table, WeightKind,
 };
 use tidyrustmodels_metrics::{MetricSet, MetricValue};
 use tidyrustmodels_models::fitted_model_from_state;
@@ -29,6 +29,35 @@ pub struct LastFit {
     pub predictions: Prediction,
     /// Metrics on the assessment rows (`collect_metrics()`).
     pub metrics: Vec<MetricValue>,
+}
+
+/// A resampling fold with its preprocessing done: what tune's `.fit_pre` step
+/// produces once per resample before the model candidates are fitted on it
+/// (tune 2.1.0 `tune_grid_loop_iter` estimates the preprocessor once per resample
+/// when only model parameters are tuned). Built by [`Workflow::prepare_fold`]; it
+/// depends on the recipe, the case-weight specification and the rows, never on the
+/// model, so every candidate of one workflow can share it.
+#[derive(Debug)]
+pub struct PreparedFold {
+    recipe: FittedRecipe,
+    x_train: DesignMatrix,
+    y_train: Outcome,
+    w_train: Option<CaseWeights>,
+    x_test: DesignMatrix,
+    y_test: Outcome,
+    w_test: Option<CaseWeights>,
+}
+
+impl PreparedFold {
+    /// Rows of the analysis set.
+    pub fn n_train(&self) -> usize {
+        self.x_train.nrows()
+    }
+
+    /// Rows of the assessment set.
+    pub fn n_test(&self) -> usize {
+        self.x_test.nrows()
+    }
 }
 
 /// An unfitted workflow.
@@ -158,6 +187,23 @@ impl Workflow {
     /// [`Workflow::fit_fold`] keeping the fitted workflow and the assessment
     /// predictions (what `tune::last_fit()` returns).
     pub fn fit_fold_full(&self, train: &Table, test: &Table, metrics: &MetricSet) -> Result<LastFit> {
+        let fold = self.prepare_fold(train, test)?;
+        let (model, predictions, metrics) = self.fit_prepared_parts(&fold, metrics)?;
+        Ok(LastFit {
+            workflow: FittedWorkflow {
+                recipe: fold.recipe,
+                model,
+            },
+            predictions,
+            metrics,
+        })
+    }
+
+    /// The preprocessing half of a fold fit (tune's `.fit_pre`): prep the recipe on
+    /// `train` without the sparse-data toggle, bake both sets and read the case
+    /// weights. The result serves every model candidate that shares this recipe and
+    /// case-weight specification; [`Workflow::fit_prepared`] does the model half.
+    pub fn prepare_fold(&self, train: &Table, test: &Table) -> Result<PreparedFold> {
         if test.nrows() == 0 {
             // rsample warns when a bootstrap or grouped resample has no assessment rows
             // and tune cannot score it; refuse instead of returning empty metrics
@@ -165,22 +211,58 @@ impl Workflow {
                 "the assessment set has no rows; choose more resamples or a different scheme".into(),
             ));
         }
-        let fitted = self.fit_with(train, false)?;
-        let (x_test, y_test) = fitted.recipe.bake_matrix(test)?;
+        let recipe = self.recipe.prep_with_weights(train, self.case_weights_spec())?;
+        let w_train = self.case_weights_of(train)?;
+        let (x_train, y_train) = recipe.bake_matrix(train)?;
+        let y_train = y_train.ok_or_else(|| {
+            Error::SchemaMismatch(format!(
+                "outcome `{}` is missing from the training data",
+                recipe.outcome()
+            ))
+        })?;
+        let (x_test, y_test) = recipe.bake_matrix(test)?;
         let y_test =
             y_test.ok_or_else(|| Error::SchemaMismatch("assessment rows lack the outcome".into()))?;
-        let predictions = fitted.model.predict(&x_test)?;
         let w_test = match self.case_weights_of(test)? {
             Some(w) if w.used_by_metrics() => Some(w),
             _ => None,
         };
-        let metrics =
-            metrics.evaluate_weighted(&y_test, &predictions, w_test.as_ref().map(|w| w.values()))?;
-        Ok(LastFit {
-            workflow: fitted,
-            predictions,
-            metrics,
+        Ok(PreparedFold {
+            recipe,
+            x_train,
+            y_train,
+            w_train,
+            x_test,
+            y_test,
+            w_test,
         })
+    }
+
+    /// The model half of a fold fit (tune's `.fit_model`, then predict and score):
+    /// fit this workflow's model on the prepared analysis design, predict the
+    /// assessment design and evaluate `metrics` (frequency case weights applied).
+    /// `fold` must come from [`Workflow::prepare_fold`] on a workflow with the same
+    /// recipe and case weights (the tuning candidates of one workflow qualify).
+    pub fn fit_prepared(&self, fold: &PreparedFold, metrics: &MetricSet) -> Result<Vec<MetricValue>> {
+        Ok(self.fit_prepared_parts(fold, metrics)?.2)
+    }
+
+    fn fit_prepared_parts(
+        &self,
+        fold: &PreparedFold,
+        metrics: &MetricSet,
+    ) -> Result<(Box<dyn FittedModel>, Prediction, Vec<MetricValue>)> {
+        check_capabilities(self.model.as_ref(), &fold.y_train)?;
+        let model = self
+            .model
+            .fit_maybe_weighted(&fold.x_train, &fold.y_train, fold.w_train.as_ref())?;
+        let predictions = model.predict(&fold.x_test)?;
+        let metrics = metrics.evaluate_weighted(
+            &fold.y_test,
+            &predictions,
+            fold.w_test.as_ref().map(|w| w.values()),
+        )?;
+        Ok((model, predictions, metrics))
     }
 
     /// `tune::last_fit()`: fit on the analysis rows of `split` exactly as a resample

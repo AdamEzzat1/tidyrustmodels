@@ -5,6 +5,19 @@
 First vertical slice. Everything listed here is backed by tests recorded in
 VERIFICATION.md; nothing is claimed beyond those records.
 
+### Changed
+- Performance (A/B-verified, `docs/perf/2026-10-13-rust-opts-ab.md`): `Table` shares
+  its columns (`Arc<Column>`; `column_shared` / `insert_shared` / `iter_shared`), so
+  clones and recipe-step bakes copy only the columns they rewrite; `bake_matrix`
+  builds the design matrix with one copy (`DesignMatrix::from_column_slices`);
+  `tune_grid` preprocesses once per resample (`Workflow::prepare_fold` /
+  `fit_prepared`, tune's `.fit_pre` / `.fit_model` split) with one prepared fold live
+  per thread. Results are bitwise identical (fingerprints, differential suite, Python
+  parity); prep + bake 18–43% faster, CV 12–29% faster on linear tasks, tuning 16–37%
+  faster on tree / logistic grids, 22–44% fewer bytes allocated per CV.
+- Benchmark runner: `--ab-baseline <binary>` A/B mode (system `rust_base`, A-B / B-A
+  trial order), drift fingerprints in every Rust driver row, `benchmarks/ab_report.py`.
+
 ### Added
 - Release preparation for 0.1.0 (ROADMAP.md Phase 6): feature matrix `docs/FEATURES.md`,
   release notes `docs/releases/0.1.0.md`, installation section in README.md, Rust and

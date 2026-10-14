@@ -824,6 +824,15 @@ example sources added for the release:
   --all-targets --all-features -- -D warnings` and the same for
   `benchmarks/rust` (own workspace): clean.
 
+## Optimisation pass drift checks (2026-10-13/14)
+
+The implementation changes of `docs/perf/2026-10-13-rust-opts-ab.md` were accepted on:
+bitwise-identical fingerprints (model state, predictions, fitted workflow JSON,
+per-fold CV metrics, tuning results, selection, workflow-set ranking) across every
+trial of both binaries in 18 task × thread cells; `cargo test --workspace` (differential
+suite 17541 comparisons, 0 failures); `pytest python/tests` 208 passed; the four
+release examples reproducing the Phase 6 record above to the last printed digit.
+
 ## Test inventory
 
 | suite | location | runs in CI | needs R |

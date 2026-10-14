@@ -67,6 +67,40 @@ impl DesignMatrix {
         })
     }
 
+    /// Build from named column slices of equal length with a single copy into the
+    /// column-major buffer (what a baked recipe hands over). Rejects non-finite values.
+    pub fn from_column_slices(columns: &[(&str, &[f64])]) -> Result<Self> {
+        let ncols = columns.len();
+        let nrows = columns.first().map(|c| c.1.len()).unwrap_or(0);
+        let mut data = Vec::with_capacity(nrows * ncols);
+        let mut names: Vec<String> = Vec::with_capacity(ncols);
+        for (name, col) in columns {
+            if col.len() != nrows {
+                return Err(Error::InvalidArgument(format!(
+                    "column `{name}` has {} rows, expected {nrows}",
+                    col.len()
+                )));
+            }
+            if let Some(i) = col.iter().position(|v| !v.is_finite()) {
+                return Err(Error::InvalidValue(format!(
+                    "design matrix column `{name}` has a non-finite value at row {i}"
+                )));
+            }
+            if names.iter().any(|n| n == name) {
+                return Err(Error::InvalidArgument(format!("duplicate feature name `{name}`")));
+            }
+            data.extend_from_slice(col);
+            names.push((*name).to_string());
+        }
+        Ok(DesignMatrix {
+            data,
+            nrows,
+            ncols,
+            names,
+            sparse: false,
+        })
+    }
+
     /// Build from a row-major buffer (`data[i * ncols + j]`).
     pub fn from_row_major(data: &[f64], nrows: usize, ncols: usize, names: Vec<String>) -> Result<Self> {
         if data.len() != nrows * ncols {

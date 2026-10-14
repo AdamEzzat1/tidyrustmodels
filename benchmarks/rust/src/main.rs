@@ -72,6 +72,19 @@ fn since(m: AllocMark) -> (u64, u64) {
     (now.0 - m.0, now.1 - m.1)
 }
 
+/// FNV-1a 64 over the JSON serialisation of a result (serde_json prints every f64 as
+/// its shortest round-trip form, so equal hashes mean bitwise-equal values): the
+/// drift fingerprints an A/B of two driver builds compares.
+fn fingerprint<T: serde::Serialize>(value: &T) -> Result<String> {
+    let bytes = serde_json::to_vec(value).map_err(|e| Error::Serialization(e.to_string()))?;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    Ok(format!("{h:016x}"))
+}
+
 fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter()
         .position(|a| a == name)
@@ -334,6 +347,8 @@ fn run() -> Result<()> {
     let pred = fitted.predict(&x_test)?;
     let predict_s = secs(t0);
     std::hint::black_box(&pred);
+    let fp_pred = fingerprint(&pred)?;
+    let fp_model = fingerprint(&fitted.state()?)?;
 
     // ---- workflow fit from the raw training table (prep + bake + fit), like R's fit(wf) ----
     let mut wf = Workflow::from_boxed(recipe.clone(), spec.clone_box());
@@ -346,6 +361,8 @@ fn run() -> Result<()> {
     let wf_fit_s = secs(t0);
     let wf_fit_alloc = since(m0);
     std::hint::black_box(&wf_fitted);
+    let fp_wf = fingerprint(&wf_fitted.to_json()?)?;
+    let fp_wf_pred = fingerprint(&wf_fitted.predict(&test)?)?;
 
     // ---- resampling ----
     let set = MetricSet::from_names(&metrics)?;
@@ -360,6 +377,7 @@ fn run() -> Result<()> {
     let cv = wf.fit_resamples(&data, &folds, &set, par)?;
     let cv_s = secs(t0);
     let cv_alloc = since(m0);
+    let fp_cv = fingerprint(&cv.per_fold)?;
     let cv_summary: Vec<serde_json::Value> = cv
         .summary
         .iter()
@@ -371,12 +389,15 @@ fn run() -> Result<()> {
     let mut tune_candidates = None;
     let mut select_s = None;
     let mut select_params = None;
+    let mut fp_tune = None;
+    let mut fp_select = None;
     if tune_mode == "grid" {
         if let Some(grid) = tune_grid_for(&model_name, tune_levels)? {
             let t0 = Instant::now();
             let res = tune_grid(&wf, &data, &folds, &grid, &set, par)?;
             tune_s = Some(secs(t0));
             tune_candidates = Some(res.candidates.len());
+            fp_tune = Some(fingerprint(&res.candidates)?);
             if do_select {
                 let metric = set.metrics()[0];
                 let t0 = Instant::now();
@@ -385,6 +406,7 @@ fn run() -> Result<()> {
                 select_s = Some(secs(t0));
                 std::hint::black_box(&lf);
                 select_params = Some(serde_json::json!(sel.params));
+                fp_select = Some(fingerprint(&(&sel.params, &lf.metrics, &lf.predictions))?);
             }
         }
     }
@@ -392,6 +414,7 @@ fn run() -> Result<()> {
     // ---- workflow set: base model, a tuned tree (3 cost_complexity values), xgboost ----
     let mut wfs_s = None;
     let mut wfs_best = None;
+    let mut fp_wfs = None;
     if do_wfs {
         let mut set_ws = workflow_set(
             vec![(Some("rec".into()), recipe.clone())],
@@ -424,6 +447,7 @@ fn run() -> Result<()> {
         wfs_s = Some(secs(t0));
         std::hint::black_box(&best);
         wfs_best = ranked.first().map(|r| r.wflow_id.clone());
+        fp_wfs = Some(fingerprint(&(&ranked, best.predict(&test)?))?);
     }
 
     // ---- warm repetitions (steady state, same process) ----
@@ -467,6 +491,10 @@ fn run() -> Result<()> {
             "cv": {"count": cv_alloc.0, "bytes": cv_alloc.1},
         },
         "cv_summary": cv_summary,
+        "fingerprints": {
+            "pred": fp_pred, "model": fp_model, "wf": fp_wf, "wf_pred": fp_wf_pred, "cv": fp_cv,
+            "tune": fp_tune, "select": fp_select, "wfs": fp_wfs,
+        },
         "tune_candidates": tune_candidates,
         "select_params": select_params,
         "wfs_best": wfs_best,
