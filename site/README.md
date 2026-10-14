@@ -13,6 +13,7 @@ cd site && npm ci && npm run typecheck && npm run build && npm test && cd ..
 python -I site/scripts/build_pages.py       # repository documents -> site/generated/, data/bench.json
 python -I site/scripts/check_examples.py    # every `source="..."` code block equals its file
 python -I site/scripts/check_claims.py      # every ×, %, 1e-N token on hand-written pages exists in the documents
+python -I site/scripts/check_ratios.py      # README's benchmark ranges recomputed from benchmarks/results/*/results.csv
 quarto render site                          # -> site/_site
 quarto preview site                         # local preview
 ```

@@ -14,20 +14,22 @@ wins, and on random forests it does not.
 
 ## Headline ranges
 
-The ranges the repository README quotes from the Phase 5 protocol runs (`BENCHMARKS.md`,
-runs G–K of 2026-10-13/14: 10 cold trials, 30 warm iterations, 10 folds, 20-point or 4 × 5
-grids), ratio = R time / native time:
+Computed at build time from the per-trial CSVs of the Phase 5 protocol runs
+(`benchmarks/results/<run>/results.csv`, runs G–K of 2026-10-13/14: 10 cold trials,
+30 warm iterations, 10 folds, 20-point or 4 × 5 grids), not copied from prose. Each
+cell is the range of R median / native median over the tasks of that family at **one
+thread**; the task behind each end of a range is named. The same script fails the
+build if the README's summary paragraph disagrees with these numbers.
 
-| | per workflow fit | 10-fold CV | tuning grid |
-|---|---|---|---|
-| linear / logistic (`lm` / `glm` vs the native ports) | 6–930× (930× at 342 rows, 12× at 100k, 6× at 1e6) | 3.7–2200× | 1.1–360× vs glmnet, a different algorithm; equal at 100k rows |
-| rpart-style trees | 13–450× | 13–470× | 13–425× |
-| xgboost-style boosting | 2–4.6× | 2.6–7.8× | 4× |
-| random forests vs ranger | **0.86–1.04×**: on par, not faster | 1.0–1.1× | – |
-| workflow sets | – | – | 14–270× end to end |
+{{< include generated/benchmarks-headline.md >}}
 
-R's peak memory is 3.5–70× the Rust binary's and 2.4–5× the Python wrapper's. The
-Python wrapper equals the Rust binary within ±5% on phases above 100 ms.
+The random-forest row is the one to read first: the port is **on par with ranger, not
+faster**, and R is faster on one of the two CV cells. The 1.1× lower end of the
+logistic tuning row is 100k rows against glmnet, a different algorithm. An earlier
+version of the README and of this page quoted 6–930× for linear and logistic fits
+(the 6× was OLS; logistic at 1e6 rows is 3.4×) and a Python wrapper "within ±5%" that
+the data does not support; both were corrected on 2026-10-14 after this recomputation
+(`LIMITATIONS.md`).
 
 Two categories are kept apart in every table: **framework-overhead**, where both sides
 run the same algorithm (`lm`, `glm`, rpart, xgboost against their ports) and a ratio

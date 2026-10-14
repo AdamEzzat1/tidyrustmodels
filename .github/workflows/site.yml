@@ -73,6 +73,8 @@ jobs:
         run: .venv/bin/python -I site/scripts/check_examples.py
       - name: Check every number on hand-written pages against the documents
         run: .venv/bin/python -I site/scripts/check_claims.py
+      - name: Check the README's benchmark ranges against the per-trial CSVs
+        run: .venv/bin/python -I site/scripts/check_ratios.py
 
       - name: Render
         run: quarto render site

@@ -370,10 +370,104 @@ def build_bench() -> None:
         ),
     )
     print(f"bench.json: {len(out)} cells from {len(PHASE5_RUNS)} runs")
+    return out
+
+
+# ---------- headline ranges, recomputed from the cells ----------
+
+FAMILIES = {
+    "linear / logistic (`lm` / `glm` vs the native ports)": {"linear_reg", "logistic_reg"},
+    "rpart-style trees": {"decision_tree"},
+    "xgboost-style boosting": {"boost_tree"},
+    "random forests vs ranger (different forests)": {"rand_forest"},
+}
+HEADLINE_PHASES = [
+    ("wf_fit_s", "workflow fit, cold"),
+    ("warm_wf_fit_s", "workflow fit, warm"),
+    ("cv_s", "10-fold CV"),
+    ("tune_s", "tuning grid"),
+]
+
+
+def ratio_cells(cells: list[dict], threads: int | None = 1) -> dict[tuple, dict]:
+    """(task, threads) -> {system: cell} for cells with both R and Rust present."""
+    by: dict[tuple, dict] = {}
+    for c in cells:
+        if threads is not None and c["threads"] != threads:
+            continue
+        by.setdefault((c["task"], c["threads"]), {})[c["system"]] = c
+    return {k: v for k, v in by.items() if "r" in v and "rust" in v}
+
+
+def ratio_range(cells: list[dict], models: set[str] | None, phase: str, num: str = "r", den: str = "rust", threads: int | None = 1):
+    """(min, min_task, max, max_task, n) of num-median / den-median over tasks."""
+    vals = []
+    for (task, thr), systems in ratio_cells(cells, threads).items():
+        c = systems["rust"]
+        if models is not None and c["model"] not in models:
+            continue
+        a, b = systems.get(num), systems.get(den)
+        if not a or not b or phase not in a["stats"] or phase not in b["stats"]:
+            continue
+        vals.append((a["stats"][phase]["median"] / b["stats"][phase]["median"], f"{task} @{thr}"))
+    if not vals:
+        return None
+    vals.sort()
+    return vals[0][0], vals[0][1], vals[-1][0], vals[-1][1], len(vals)
+
+
+def fmt_ratio(x: float) -> str:
+    if x >= 100:
+        return f"{x:.0f}"
+    if x >= 10:
+        return f"{x:.0f}"
+    return f"{x:.2f}"
+
+
+def headline(cells: list[dict]) -> dict:
+    """Every range the README paragraph quotes, from the data."""
+    h: dict = {}
+    for fam, models in FAMILIES.items():
+        for phase, label in HEADLINE_PHASES:
+            r = ratio_range(cells, models, phase)
+            if r:
+                h[(fam, label)] = r
+    h[("workflow sets", "workflow set, end to end")] = ratio_range(cells, None, "wfs_s")
+    h[("memory", "R / Rust peak working set, 1 thread")] = ratio_range(cells, None, "peak_wset_mb")
+    h[("memory", "R / Rust peak working set, all cells")] = ratio_range(cells, None, "peak_wset_mb", threads=None)
+    h[("memory", "R / Python peak working set, all cells")] = ratio_range(cells, None, "peak_wset_mb", den="python", threads=None)
+    # Python wrapper vs Rust binary on phases where the binary's median exceeds 0.1 s
+    big, rest = [], []
+    for (task, thr), systems in ratio_cells(cells, None).items():
+        py, ru = systems.get("python"), systems["rust"]
+        if not py:
+            continue
+        for phase in ("wf_fit_s", "warm_wf_fit_s", "cv_s", "tune_s", "wfs_s"):
+            if phase in ru["stats"] and phase in py["stats"] and ru["stats"][phase]["median"] > 0.1:
+                v = (py["stats"][phase]["median"] / ru["stats"][phase]["median"], f"{task} @{thr} {phase}")
+                (big if ru["n_rows"] >= 1_000_000 or ru["model"] == "rand_forest" else rest).append(v)
+    for name, vals in (("Python / Rust on the 1e6-row and forest phases", big), ("Python / Rust on the other phases above 0.1 s", rest)):
+        vals.sort()
+        h[("python wrapper", name)] = (vals[0][0], vals[0][1], vals[-1][0], vals[-1][1], len(vals))
+    return h
+
+
+def build_headline(cells: list[dict]) -> None:
+    h = headline(cells)
+    rows = ["| family | phase | R / native, min (task) | max (task) | tasks |", "|---|---|---|---|---|"]
+    for (fam, label), (lo, lo_t, hi, hi_t, n) in h.items():
+        rows.append(f"| {fam} | {label} | {fmt_ratio(lo)}× (`{lo_t}`) | {fmt_ratio(hi)}× (`{hi_t}`) | {n} |")
+    write(
+        GEN / "benchmarks-headline.md",
+        '<p class="provenance">Recomputed from <code>benchmarks/results/&lt;run&gt;/results.csv</code> '
+        "(runs G, K, I, J, H; medians over cold trials with status ok; invalid run-G cells excluded; "
+        "`@n` = thread count; the memory and Python rows span all thread counts where stated).</p>\n\n"
+        + "\n".join(rows),
+    )
 
 
 if __name__ == "__main__":
     GEN.mkdir(parents=True, exist_ok=True)
     build_docs()
-    build_bench()
+    build_headline(build_bench())
     print("generated:", sorted(p.relative_to(SITE).as_posix() for p in GEN.rglob("*.md"))[:8], "...")

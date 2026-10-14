@@ -18,14 +18,15 @@ first optimisation target instead of a claim.
 
 **Speed where R pays for orchestration.** On the framework-overhead tasks, where both
 sides run the same algorithm (`lm`, `glm`, rpart, xgboost versus their ports), the
-measured differences are large and fall with the number of rows: per workflow fit the
-native ports are 6–930× faster than R tidymodels for linear and logistic models (930×
-at 342 rows, 12× at 100k, 6× at 1e6), 13–450× for rpart-style trees, 2–4.6× for
-xgboost-style boosting; 10-fold cross-validation 3.7–2200× (linear / logistic),
-13–470× (trees), 2.6–7.8× (boosting); workflow sets 14–270×. R's peak memory is
-3.5–70× the Rust binary's. All of it on one Windows laptop with R single-threaded on
-reference BLAS; the ranges and their caveats are quoted from the repository's
-benchmark record on the [Benchmarks](benchmarks.qmd) page.
+measured differences are large and fall with the number of rows: per cold workflow fit
+the native ports are 3.4–930× faster than R tidymodels for linear and logistic models
+(OLS 930× at 342 rows, 12× at 100k, 6.1× at 1e6; logistic 3.4× at 1e6), 14–270× for
+rpart-style trees, 1.9–4.4× for xgboost-style boosting; 10-fold cross-validation
+3.7–2200× (linear / logistic), 13–470× (trees), 2.6–7.8× (boosting); workflow sets
+14–270×. R's peak memory is 3.1–70× the Rust binary's. All of it on one Windows laptop
+with R single-threaded on reference BLAS, at one thread unless stated; the ranges are
+recomputed from the per-trial CSVs on every site build and their caveats are on the
+[Benchmarks](benchmarks.qmd) page.
 
 **A port can be checked.** Because the semantics are ported from the installed R
 package sources rather than re-invented, every ported behaviour has an R reference to
