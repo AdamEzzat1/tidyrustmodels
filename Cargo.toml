@@ -18,7 +18,7 @@ version = "0.1.0-dev"
 edition = "2021"
 rust-version = "1.89"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/adamezzat/tidyrustmodels"
+repository = "https://github.com/AdamEzzat1/tidyrustmodels"
 authors = ["tidyrustmodels contributors"]
 
 [workspace.dependencies]

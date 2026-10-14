@@ -88,7 +88,7 @@ Rust, from the repository (the crates are not yet published to crates.io):
 
 ```toml
 [dependencies]
-tidyrustmodels = { git = "https://github.com/adamezzat/tidyrustmodels", package = "tidyrustmodels" }
+tidyrustmodels = { git = "https://github.com/AdamEzzat1/tidyrustmodels", package = "tidyrustmodels" }
 # features = ["arrow"] adds RecordBatch <-> Table conversion
 ```
 
@@ -144,4 +144,4 @@ benchmarks/        Rust/R drivers, orchestrator, results
 examples/          Rust and Python examples
 ```
 
-License: MIT OR Apache-2.0.
+License: MIT OR Apache-2.0, at your option (`LICENSE-MIT`, `LICENSE-APACHE`).
