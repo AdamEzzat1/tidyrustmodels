@@ -46,12 +46,12 @@ jobs:
       - name: Install the TypeScript toolchain (pinned in site/package-lock.json)
         working-directory: site
         run: npm ci
-      - name: Type-check, test and bundle the components
+      - name: Type-check, bundle and test the components (the tests read the bundles)
         working-directory: site
         run: |
           npm run typecheck
-          npm test
           npm run build
+          npm test
 
       - uses: actions/setup-python@v5
         with:
