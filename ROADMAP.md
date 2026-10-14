@@ -33,10 +33,10 @@ Gate:
 - [x] Examples run end to end: `cargo run --release --example penguins_workflow` and `python examples/penguins_workflow.py` (2026-10-12; both report identical coefficients, CV means and best penalty).
 - [ ] Independent reviewer sign-off recorded.
 
-## Phase 3 — Python API (2026-10-12) — complete on Windows, pending CI on Linux/macOS and review
+## Phase 3 — Python API (2026-10-12 → 2026-10-14) — complete on Windows, Linux and macOS (CI), pending review
 
 Gate:
-- [x] `maturin develop --release` builds on Windows (pyo3 0.29.3, abi3-py311); CI matrix for Linux/macOS added, not yet executed.
+- [x] `maturin develop --release` builds on Windows (pyo3 0.29.3, abi3-py311); CI matrix executed on Ubuntu, Windows and macOS arm64 on 2026-10-14 (run 38623282619 green: extension built with maturin, parity suite passes on each OS with the Rust reference built in the same release profile; VERIFICATION.md).
 - [x] NumPy (C and Fortran order), dict and pandas input paths tested; exception mapping tested (`python/tests/test_parity.py`, 35 tests across 8 tasks × 3 engines).
 - [x] Python vs Rust parity bitwise on shared inputs for all 6 tasks × 2 engines (coefficients, predictions, per-fold metrics).
 - [ ] Independent reviewer sign-off recorded.
@@ -77,7 +77,8 @@ Gate:
 - [x] Installation instructions: README.md (Rust from git, Python from source; no published artifacts yet).
 - [x] Release notes: `docs/releases/0.1.0.md` (candidate).
 - [x] Packaging workflow defined: `.github/workflows/release.yml` (wheels for Linux / Windows / macOS, sdist, crate packaging dry run, API docs).
-- [ ] Packaging workflow and CI matrix **executed** on Linux and macOS (never run yet; everything is verified on Windows only).
+- [x] CI matrix **executed** on Linux and macOS (2026-10-14, run 38623282619, all seven jobs green after five runs: two clippy lints from rustc 1.99.0, the smartcore-only build, RUSTSEC-2024-0436, the platform-specific xgboost tolerances of ADR-0017 and the release-profile parity reference; CHANGELOG.md).
+- [ ] Packaging workflow (`release.yml`: wheels, sdist, crate packaging dry run, API docs) **executed**: not yet; it runs on a `v*` tag or manual dispatch.
 - [ ] Independent reviewer sign-off recorded (the only review on file, phases 1–4, was written in the same session as the code).
 - [ ] Tag `v0.1.0` (after the two items above).
 
