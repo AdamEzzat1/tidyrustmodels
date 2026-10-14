@@ -9,7 +9,7 @@ band with every drift fingerprint bitwise identical.
 | | commit | branch / worktree |
 |---|---|---|
 | baseline | `29ba04af5305ca3e2b5c433798904eb3b8a365ec` | `baseline-before-rust-opts`, worktree `../tidyrustmodels-baseline` |
-| candidate | CANDIDATE_COMMIT | `candidate-rust-opts-ab` (merged into `main` after acceptance) |
+| candidate | `04e30c7` (code and report), `main` after the fast-forward merge | `candidate-rust-opts-ab` (merged into `main` after acceptance) |
 
 Both A/B binaries were built from the **same driver source** (`benchmarks/rust/src/main.rs`
 of the candidate, copied into the baseline worktree) against the two library versions,
